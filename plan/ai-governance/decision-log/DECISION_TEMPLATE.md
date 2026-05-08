@@ -1,0 +1,31 @@
+# Decision Entry Template
+
+## DEC-YYYYMMDD-###
+- Decision ID: `DEC-YYYYMMDD-###`
+- Model: `codex|claude-code|copilot-cli|gemini`
+- Branch/Commit: `<branch>@<short_sha>`
+- Task: `<short task>`
+- Decision: `<what was chosen>`
+- Rationale: `<why>`
+- Alternatives Considered:
+  - `<option A rejected because ...>`
+  - `<option B rejected because ...>`
+- Scope:
+  - `<file/module/route 1>`
+  - `<file/module/route 2>`
+- Status: `planned|in_progress|completed|partial|blocked|abandoned`
+- Completion Notes:
+  - Done: `<implemented pieces>`
+  - Not Done: `<missing pieces>`
+- Impact/Risk:
+  - `<risk 1>`
+  - `<risk 2>`
+- Cleanup Required:
+  - `<cleanup task 1>`
+  - `<cleanup task 2>`
+- Dead Paths Introduced: `<none|list>`
+- Conflicting Implementations: `<none|list>`
+- Next Cleanup Owner: `<name/model + due date>`
+- Owner Timestamp: `<model> @ <YYYY-MM-DDTHH:mm:ssZ>`
+- Follow-up Notes:
+  - `<optional update notes>`

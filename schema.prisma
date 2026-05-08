@@ -1,0 +1,608 @@
+// =============================================================================
+// Unified Operations Platform — Prisma Schema
+// Version: 3.1 | May 2026
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserType {
+  internal
+  outlet
+}
+
+enum OrderStatus {
+  pending_approval
+  approved
+  partially_dispatched
+  fully_dispatched
+  rejected
+  cancelled
+  on_hold
+}
+
+enum OrderPriority {
+  low
+  medium
+  high
+  critical
+}
+
+enum OrderLineStatus {
+  pending
+  partially_dispatched
+  fully_dispatched
+}
+
+enum NotificationChannel {
+  in_app
+  push
+  sms
+}
+
+enum GoodsReceiptSourceType {
+  manual
+  production_line_movement
+}
+
+// =============================================================================
+// AUTH + ROLES
+// =============================================================================
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  phone        String?
+  name         String
+  passwordHash String
+  userType     UserType
+  roleId       String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  role                   Role               @relation(fields: [roleId], references: [id])
+  outlet                 Outlet?
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  invitationsSent        UserInvitation[]   @relation("InvitedBy")
+  invitationsAccepted    UserInvitation[]   @relation("AcceptedUser")
+  attachmentsUploaded    Attachment[]
+  ordersCreated          SaleOrder[]        @relation("OrderCreatedBy")
+  ordersApproved         SaleOrder[]        @relation("OrderApprovedBy")
+  ordersHeld             SaleOrder[]        @relation("OrderHeldBy")
+  dispatchesCreated      Dispatch[]
+  stockAdjustments       StockAdjustment[]  @relation("StockAdjustedBy")
+  managedWarehouse       Warehouse?         @relation("WarehouseManager")
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  permissions String[] @default([])
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  users User[]
+
+  @@map("roles")
+}
+
+model UserInvitation {
+  id             String    @id @default(uuid())
+  email          String
+  name           String
+  role           String
+  token          String    @unique
+  status         String    @default("pending")
+  invitedById    String
+  acceptedUserId String?
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  invitedBy    User  @relation("InvitedBy", fields: [invitedById], references: [id])
+  acceptedUser User? @relation("AcceptedUser", fields: [acceptedUserId], references: [id])
+
+  @@index([email, status])
+  @@map("user_invitations")
+}
+
+// =============================================================================
+// OUTLETS
+// =============================================================================
+
+model Outlet {
+  id                 String   @id @default(uuid())
+  outletCode         String   @unique
+  userId             String   @unique
+  name               String
+  ownerName          String
+  phone              String
+  address            String
+  creditLimit        Decimal  @default(0)
+  outstandingBalance Decimal  @default(0)
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+
+  // Single warehouse that serves this outlet
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  user        User       @relation(fields: [userId], references: [id])
+
+  orders   SaleOrder[]
+  invoices Invoice[]
+  payments OutletPayment[]
+
+  @@map("outlets")
+}
+
+// =============================================================================
+// CATALOG  —  Brand → Category → Product
+// =============================================================================
+
+model Brand {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  categories Category[]
+  images     Image[]    @relation("BrandImages")
+
+  @@map("brands")
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  brandId     String
+  name        String
+  description String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  brand    Brand     @relation(fields: [brandId], references: [id])
+  products Product[]
+  images   Image[]   @relation("CategoryImages")
+
+  @@unique([brandId, name])
+  @@map("categories")
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  categoryId     String
+  name           String
+  displayName    String?
+  sku            String   @unique
+  description    String?
+  specs          Json?
+  warrantyMonths Int
+  basePrice      Decimal
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category          Category             @relation(fields: [categoryId], references: [id])
+  images            Image[]              @relation("ProductImages")
+  orderLines        SaleOrderLine[]
+  invoiceLines      InvoiceLine[]
+  dispatchLines     DispatchLine[]
+  warehouseStocks   WarehouseStock[]
+  goodsReceiptLines GoodsReceiptLine[]
+  stockAdjustments  StockAdjustment[]
+
+  @@index([categoryId, isActive])
+  @@map("products")
+}
+
+// One row per image. Exactly one of brandId / categoryId / productId is set.
+model Image {
+  id        String   @id @default(uuid())
+  uri       String
+  altText   String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  brandId    String?
+  categoryId String?
+  productId  String?
+
+  brand    Brand?    @relation("BrandImages",    fields: [brandId],    references: [id])
+  category Category? @relation("CategoryImages", fields: [categoryId], references: [id])
+  product  Product?  @relation("ProductImages",  fields: [productId],  references: [id])
+
+  @@index([brandId])
+  @@index([categoryId])
+  @@index([productId])
+  @@map("images")
+}
+
+// =============================================================================
+// WAREHOUSE + STOCK
+// =============================================================================
+
+model Warehouse {
+  id        String   @id @default(uuid())
+  name      String
+  location  String
+  address   String?
+  managerId String?  @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  manager       User?            @relation("WarehouseManager", fields: [managerId], references: [id])
+  outlets       Outlet[]
+  stock         WarehouseStock[]
+  receipts      GoodsReceipt[]
+  adjustments   StockAdjustment[]
+  dispatches    Dispatch[]
+
+  @@index([managerId])
+  @@map("warehouses")
+}
+
+model WarehouseStock {
+  id           String   @id @default(uuid())
+  warehouseId  String
+  productId    String
+  currentQty   Int      @default(0)
+  reservedQty  Int      @default(0)
+  inTransitQty Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@unique([warehouseId, productId])
+  @@index([productId])
+  @@map("warehouse_stocks")
+}
+
+
+model GoodsReceipt {
+  id            String   @id @default(uuid())
+  warehouseId   String
+  sourceType    GoodsReceiptSourceType
+  sourceBatchId String?
+  receiptDate   DateTime @default(now())
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
+  lines     GoodsReceiptLine[]
+
+  @@index([warehouseId, receiptDate])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptLine {
+  id          String @id @default(uuid())
+  grnId       String
+  productId   String
+  qtyReceived Int
+
+  grn     GoodsReceipt @relation(fields: [grnId], references: [id])
+  product Product      @relation(fields: [productId], references: [id])
+
+  @@map("goods_receipt_lines")
+}
+
+model StockAdjustment {
+  id            String   @id @default(uuid())
+  warehouseId   String
+  productId     String
+  adjustmentQty Int
+  reason        String
+  adjustedById  String
+  createdAt     DateTime @default(now())
+
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
+  product    Product   @relation(fields: [productId], references: [id])
+  adjustedBy User      @relation("StockAdjustedBy", fields: [adjustedById], references: [id])
+
+  @@index([warehouseId, productId, createdAt])
+  @@index([adjustedById])
+  @@map("stock_adjustments")
+}
+
+// =============================================================================
+// ORDERS
+// =============================================================================
+
+model SaleOrder {
+  id              String        @id @default(uuid())
+  orderNumber     String        @unique
+  outletId        String
+  createdById     String?
+  orderDate       DateTime      @default(now())
+  deliveryAddress String
+  status          OrderStatus   @default(pending_approval)
+  priority        OrderPriority @default(medium)
+  totalValue      Decimal       @default(0)
+
+  approvedById    String?
+  approvedAt      DateTime?
+  heldById        String?
+  heldAt          DateTime?
+  holdNote        String?
+  approvalNote    String?
+  rejectionReason String?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  outlet     Outlet  @relation(fields: [outletId],    references: [id])
+  createdBy  User?   @relation("OrderCreatedBy",  fields: [createdById],  references: [id])
+  approvedBy User?   @relation("OrderApprovedBy", fields: [approvedById], references: [id])
+  heldBy     User?   @relation("OrderHeldBy",     fields: [heldById],     references: [id])
+
+  lines   SaleOrderLine[]
+  invoice Invoice?        // 1:1 — auto-generated on approval
+
+  // Dispatches are resolved via DispatchLine → SaleOrderLine → SaleOrder
+  // Query: DispatchLine.findMany({ where: { orderLine: { orderId: id } } })
+
+  @@index([outletId, status])
+  @@index([status, priority, createdAt])
+  @@map("sale_orders")
+}
+
+model SaleOrderLine {
+  id            String          @id @default(uuid())
+  orderId       String
+  productId     String
+  sku           String
+  qtyOrdered    Int
+  qtyDispatched Int             @default(0)
+  unitPrice     Decimal
+  lineTotal     Decimal         @default(0)
+  status        OrderLineStatus @default(pending)
+
+  order         SaleOrder      @relation(fields: [orderId],    references: [id])
+  product       Product        @relation(fields: [productId],  references: [id])
+  dispatchLines DispatchLine[]
+
+  @@index([orderId])
+  @@map("sale_order_lines")
+}
+
+// =============================================================================
+// DISPATCH  —  one dispatch can cover lines from multiple orders
+// =============================================================================
+
+model Dispatch {
+  id          String   @id @default(uuid())
+  warehouseId String
+
+  // Required transport metadata
+  transporterName String
+  vehicleNumber   String
+  lrNumber        String?
+
+  dispatchDate      DateTime  @default(now())
+  estimatedDelivery DateTime?
+  deliveryStatus    String    @default("created") // created | in_transit | delivered
+  createdById       String
+  createdAt         DateTime  @default(now())
+
+  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+  createdBy User           @relation(fields: [createdById], references: [id])
+  lines     DispatchLine[]
+
+  @@index([warehouseId])
+  @@map("dispatches")
+}
+
+model DispatchLine {
+  id          String @id @default(uuid())
+  dispatchId  String
+  orderLineId String // order resolved through here: orderLine.orderId
+  productId   String
+  sku         String
+  qtyDispatched Int
+
+  // Flat JSON array — not normalised on DB, normalised at query layer
+  // e.g. ["SN-001", "SN-002"]
+  serialNumbers Json @default("[]")
+
+  dispatch  Dispatch      @relation(fields: [dispatchId],  references: [id])
+  orderLine SaleOrderLine @relation(fields: [orderLineId], references: [id])
+  product   Product       @relation(fields: [productId],   references: [id])
+
+  @@index([dispatchId])
+  @@index([orderLineId])
+  @@map("dispatch_lines")
+}
+
+// =============================================================================
+// FINANCIALS  —  Invoices + Outlet Payments (FIFO clearing)
+// =============================================================================
+
+// Auto-generated when order is approved. No createdBy — system action.
+model Invoice {
+  id            String   @id @default(uuid())
+  invoiceNumber String   @unique
+  orderId       String   @unique // 1:1 with SaleOrder
+  outletId      String
+  invoiceDate   DateTime @default(now())
+  subtotal      Decimal
+  total         Decimal
+  amountPaid    Decimal  @default(0)
+  amountDue     Decimal  // kept in sync: total - amountPaid
+  createdAt     DateTime @default(now())
+
+  order       SaleOrder                 @relation(fields: [orderId],  references: [id])
+  outlet      Outlet                    @relation(fields: [outletId], references: [id])
+  lines       InvoiceLine[]
+  allocations OutletPaymentAllocation[]
+
+  // Fast FIFO query: unpaid invoices per outlet ordered by invoiceDate ASC
+  @@index([outletId, amountDue])
+  @@index([outletId, invoiceDate])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id        String  @id @default(uuid())
+  invoiceId String
+  productId String
+  sku       String
+  qty       Int
+  unitPrice Decimal
+  lineTotal Decimal
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("invoice_lines")
+}
+
+// A single payment received from an outlet
+model OutletPayment {
+  id          String   @id @default(uuid())
+  outletId    String
+  amount      Decimal
+  paymentDate DateTime
+  reference   String?
+  description String?
+  createdAt   DateTime @default(now())
+
+  outlet      Outlet                    @relation(fields: [outletId], references: [id])
+  allocations OutletPaymentAllocation[]
+
+  @@index([outletId, paymentDate])
+  @@map("outlet_payments")
+}
+
+// Each row = how much of one payment was applied to one invoice (FIFO split)
+model OutletPaymentAllocation {
+  id          String   @id @default(uuid())
+  paymentId   String
+  invoiceId   String
+  amount      Decimal
+  allocatedAt DateTime @default(now())
+
+  payment OutletPayment @relation(fields: [paymentId], references: [id])
+  invoice Invoice       @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
+  @@index([paymentId])
+  @@map("outlet_payment_allocations")
+}
+
+
+
+// =============================================================================
+// NOTIFICATIONS
+// =============================================================================
+
+model Notification {
+  id          String              @id @default(uuid())
+  userId      String
+  title       String
+  body        String
+  entityType  String
+  entityId    String
+  channel     NotificationChannel
+  isRead      Boolean             @default(false)
+  deliveredAt DateTime?
+  readAt      DateTime?
+  createdAt   DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// =============================================================================
+// ATTACHMENTS — polymorphic via entityType + entityId (no typed FK relations)
+// =============================================================================
+
+model Attachment {
+  id           String   @id @default(uuid())
+  entityType   String   // "order" | "dispatch" | "invoice" etc.
+  entityId     String
+  fileName     String
+  mimeType     String
+  fileSize     Int
+  storageKey   String
+  uploadedById String
+  isConfirmed  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  uploader      User          @relation(fields: [uploadedById], references: [id])
+  pendingUpload PendingUpload?
+
+  @@index([entityType, entityId])
+  @@map("attachments")
+}
+
+model PendingUpload {
+  id           String   @id @default(uuid())
+  attachmentId String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id])
+
+  @@map("pending_uploads")
+}
+
+// =============================================================================
+// AUDIT LOG
+// =============================================================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  action     String
+  entityType String
+  entityId   String
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  actor User @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+// =============================================================================
+// SEQUENCES  —  human-readable numbering
+// =============================================================================
+
+model InvoiceSequence {
+  year         Int @id
+  lastSequence Int @default(0)
+
+  @@map("invoice_sequences")
+}
+
+model OrderSequence {
+  year         Int @id
+  lastSequence Int @default(0)
+
+  @@map("order_sequences")
+}
