@@ -205,3 +205,84 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Follow-up Notes:
   - `Will update same entry with final status and validation outcomes.`
   - `Validation output: health={"status":"ok"}, ready={"status":"ready"}, system.conventions returned frozen contract payload.`
+
+---
+
+## DEC-20260508-007
+- Decision ID: `DEC-20260508-007`
+- Model: `copilot-cli`
+- Branch/Commit: `master@1ff67d8`
+- Task: `Start Phase 1 implementation (identity + master data)`
+- Decision: `Implement Phase 1 using tRPC route modules with Prisma-backed CRUD/query flows and permissive protected middleware, keeping Phase 0 contracts (error/requestId/pagination) unchanged.`
+- Rationale: `Phase 1 requires deliverable APIs for auth/session, invitations/users/roles, and master data so frontend can begin live integration against stable routes.`
+- Alternatives Considered:
+  - `Implement all business logic first in service/repo layers before exposing routes` rejected because it delays frontend integration start and increases initial phase latency.
+  - `Ship only route stubs without DB wiring` rejected because Phase 1 gate expects real endpoint integration, not placeholder responses.
+- Scope:
+  - `backend/src/trpc/trpc.ts`
+  - `backend/src/trpc/router.ts`
+  - `backend/src/trpc/routes/_shared.ts`
+  - `backend/src/trpc/routes/auth.ts`
+  - `backend/src/trpc/routes/invitations.ts`
+  - `backend/src/trpc/routes/users.ts`
+  - `backend/src/trpc/routes/roles.ts`
+  - `backend/src/trpc/routes/brands.ts`
+  - `backend/src/trpc/routes/categories.ts`
+  - `backend/src/trpc/routes/products.ts`
+  - `backend/src/trpc/routes/images.ts`
+  - `backend/src/trpc/routes/outlets.ts`
+  - `backend/src/trpc/routes/warehouses.ts`
+  - `plan/phase-gates/PHASE_1_CONTRACT_FREEZE.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented Phase 1 route modules for auth, invitations, users, roles, brands, categories, products, images, outlets, and warehouses with Prisma-backed query/mutation flows and Zod input/output contracts. Wired all Phase 1 routers into appRouter. Added shared pagination helpers usage for list endpoints, preserved requestId error-shape contract, and created Phase 1 contract freeze artifact. Verified compile integrity via backend typecheck.`
+  - Not Done: `No live runtime smoke execution against a running database/API process in this pass; validation completed at compile/type contract level.`
+- Impact/Risk:
+  - `No persistent token/session table exists in current schema; initial auth session behavior may require hardening in later phase.`
+  - `Single-pass route-first implementation may require later extraction into service/repo layers for maintainability.`
+- Cleanup Required:
+  - `Add integration/runtime smoke coverage for all Phase 1 routes with seeded DB fixtures and include response snapshots under plan/phase-gates/snapshots/.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 2 kickoff`
+- Owner Timestamp: `codex @ 2026-05-08T11:02:00Z`
+- Follow-up Notes:
+  - `Phase 1 frozen procedure list documented in plan/phase-gates/PHASE_1_CONTRACT_FREEZE.md.`
+  - `Typecheck validation passed: cd backend && bun run typecheck.`
+
+---
+
+## DEC-20260508-008
+- Decision ID: `DEC-20260508-008`
+- Model: `codex`
+- Branch/Commit: `master@working`
+- Task: `Add live runtime/integration smoke coverage for Phase 1 routes with seeded fixtures and snapshots`
+- Decision: `Implement a reproducible Phase 1 smoke workflow using local Postgres + Prisma schema push + deterministic seed data + live tRPC calls, and persist response snapshots under plan/phase-gates/snapshots.`
+- Rationale: `Phase 1 cleanup requires runtime validation beyond typecheck and contract artifacts should include executable snapshot evidence for frontend/backend alignment.`
+- Alternatives Considered:
+  - `Unit-only or compile-only checks` rejected because they do not validate live route wiring and serialization behavior.
+  - `Manual ad-hoc API probing` rejected because it is not reproducible and not suitable as a phase-gate artifact.
+- Scope:
+  - `backend/scripts/phase1-seed.ts`
+  - `backend/scripts/phase1-smoke.sh`
+  - `backend/scripts/phase1-smoke-client.ts`
+  - `plan/phase-gates/snapshots/phase1_*.json`
+  - `plan/phase-gates/PHASE_1_CONTRACT_FREEZE.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added backend/scripts/phase1-seed.ts for deterministic Phase 1 fixture provisioning, added backend/scripts/phase1-smoke.sh for local Docker Postgres + Prisma generate/db push + seed + API boot orchestration, added backend/scripts/phase1-smoke-client.ts to execute live tRPC calls across all Phase 1 routes, and wrote response snapshots to plan/phase-gates/snapshots/phase1_*.json. Updated Phase 1 contract-freeze artifact with runtime smoke evidence. Executed full smoke flow successfully.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Smoke relies on Docker availability and local open ports.`
+  - `Snapshot stability depends on deterministic seed values and fixed headers.`
+- Cleanup Required:
+  - `Keep seed fixtures and snapshot expectations aligned when Phase 1 route contracts change.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 2 kickoff`
+- Owner Timestamp: `codex @ 2026-05-08T11:22:00Z`
+- Follow-up Notes:
+  - `Runtime validation command: bash backend/scripts/phase1-smoke.sh`
+  - `Snapshot artifacts generated: plan/phase-gates/snapshots/phase1_*.json`

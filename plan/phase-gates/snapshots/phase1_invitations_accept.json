@@ -1,0 +1,21 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "90000000-0000-4000-8000-000000000001",
+        "email": "invitee.phase1@syrex.dev",
+        "name": "Phase1 Invitee",
+        "role": "Sales",
+        "token": "phase1-invite-token",
+        "status": "accepted",
+        "invitedById": "20000000-0000-4000-8000-000000000001",
+        "acceptedUserId": "20000000-0000-4000-8000-000000000002",
+        "expiresAt": "2030-01-01T00:00:00.000Z",
+        "acceptedAt": "2026-05-08T11:03:41.934Z",
+        "revokedAt": null,
+        "createdAt": "2026-05-08T11:02:54.622Z",
+        "updatedAt": "2026-05-08T11:03:41.935Z"
+      }
+    }
+  }
+}

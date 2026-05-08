@@ -1,0 +1,14 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "b81d6788-97f9-4b35-91d0-d8a465c7d982",
+        "name": "Phase1 New Brand",
+        "description": "Updated in smoke",
+        "isActive": true,
+        "createdAt": "2026-05-08T11:03:41.938Z",
+        "updatedAt": "2026-05-08T11:03:41.941Z"
+      }
+    }
+  }
+}

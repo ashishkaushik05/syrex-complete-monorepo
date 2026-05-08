@@ -1,0 +1,16 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "41b852ca-b44c-4e56-963b-390b7e01772a",
+        "uri": "https://example.com/phase1-smoke-product.png",
+        "altText": "Smoke image",
+        "sortOrder": 2,
+        "brandId": null,
+        "categoryId": null,
+        "productId": "96027966-c2d9-4e89-86a9-8c20fd9f61f7",
+        "createdAt": "2026-05-08T11:03:41.959Z"
+      }
+    }
+  }
+}

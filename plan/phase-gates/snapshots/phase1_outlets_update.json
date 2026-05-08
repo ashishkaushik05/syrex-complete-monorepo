@@ -1,0 +1,20 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "f86a404d-a449-4383-81d0-99fe01188712",
+        "outletCode": "OUT-SMOKE-1778238221972",
+        "userId": "9680473d-e868-4cca-a3dd-773d7dd61e7a",
+        "warehouseId": "7d013740-0cfd-414e-9754-8c4ff521169a",
+        "name": "Smoke Outlet Updated",
+        "ownerName": "Smoke Owner",
+        "phone": "+91-9000000002",
+        "address": "Smoke address",
+        "creditLimit": "35000",
+        "outstandingBalance": "0",
+        "isActive": true,
+        "createdAt": "2026-05-08T11:03:41.974Z"
+      }
+    }
+  }
+}

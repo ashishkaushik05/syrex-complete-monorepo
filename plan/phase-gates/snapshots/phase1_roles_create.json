@@ -1,0 +1,15 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "9cfc09fa-90dd-453d-b3bd-544d18e0e2da",
+        "name": "Phase1 Temp Role",
+        "permissions": [
+          "catalog.read"
+        ],
+        "isSystem": false,
+        "createdAt": "2026-05-08T11:03:41.907Z"
+      }
+    }
+  }
+}

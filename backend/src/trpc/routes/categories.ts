@@ -1,0 +1,138 @@
+import { z } from "zod";
+import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { apiError } from "../error";
+import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+
+const categorySchema = z.object({
+  id: z.string(),
+  brandId: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  sortOrder: z.number().int(),
+  isActive: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+const createCategorySchema = z.object({
+  brandId: z.string().uuid(),
+  name: z.string().min(1),
+  description: z.string().nullable().optional(),
+  sortOrder: z.number().int().default(0),
+  isActive: z.boolean().default(true)
+});
+
+const updateCategorySchema = z.object({
+  id: z.string().uuid(),
+  brandId: z.string().uuid().optional(),
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  sortOrder: z.number().int().optional(),
+  isActive: z.boolean().optional()
+});
+
+const listCategoriesInputSchema = paginationInputSchema.extend({
+  brandId: z.string().uuid().optional(),
+  isActive: z.boolean().optional(),
+  q: z.string().min(1).optional()
+});
+
+function toCategory(category: {
+  id: string;
+  brandId: string;
+  name: string;
+  description: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    ...category,
+    createdAt: category.createdAt.toISOString(),
+    updatedAt: category.updatedAt.toISOString()
+  };
+}
+
+export const categoriesRouter = createTRPCRouter({
+  list: protectedProcedure
+    .input(listCategoriesInputSchema)
+    .output(z.object({ items: z.array(categorySchema), nextCursor: z.string().nullable() }))
+    .query(async ({ ctx, input }) => {
+      const offset = decodeCursor(input.cursor) ?? 0;
+      const categories = await ctx.prisma.category.findMany({
+        where: {
+          brandId: input.brandId,
+          isActive: input.isActive,
+          OR: input.q ? [{ name: { contains: input.q, mode: "insensitive" } }] : undefined
+        },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }, { id: "desc" }],
+        skip: offset,
+        take: input.limit + 1
+      });
+      const hasMore = categories.length > input.limit;
+      const pageItems = hasMore ? categories.slice(0, input.limit) : categories;
+      return {
+        items: pageItems.map(toCategory),
+        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+      };
+    }),
+
+  getById: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .output(categorySchema)
+    .query(async ({ ctx, input }) => {
+      const category = await ctx.prisma.category.findUnique({ where: { id: input.id } });
+      if (!category) {
+        throw apiError("NOT_FOUND", "Category not found");
+      }
+      return toCategory(category);
+    }),
+
+  create: protectedProcedure
+    .input(createCategorySchema)
+    .output(categorySchema)
+    .mutation(async ({ ctx, input }) => {
+      const brand = await ctx.prisma.brand.findUnique({ where: { id: input.brandId } });
+      if (!brand) {
+        throw apiError("BAD_REQUEST", "Invalid brandId");
+      }
+      const category = await ctx.prisma.category.create({
+        data: {
+          brandId: input.brandId,
+          name: input.name,
+          description: input.description,
+          sortOrder: input.sortOrder,
+          isActive: input.isActive
+        }
+      });
+      return toCategory(category);
+    }),
+
+  update: protectedProcedure
+    .input(updateCategorySchema)
+    .output(categorySchema)
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.category.findUnique({ where: { id: input.id } });
+      if (!existing) {
+        throw apiError("NOT_FOUND", "Category not found");
+      }
+      if (input.brandId) {
+        const brand = await ctx.prisma.brand.findUnique({ where: { id: input.brandId } });
+        if (!brand) {
+          throw apiError("BAD_REQUEST", "Invalid brandId");
+        }
+      }
+      const category = await ctx.prisma.category.update({
+        where: { id: input.id },
+        data: {
+          brandId: input.brandId,
+          name: input.name,
+          description: input.description,
+          sortOrder: input.sortOrder,
+          isActive: input.isActive
+        }
+      });
+      return toCategory(category);
+    })
+});

@@ -1,0 +1,18 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "accessToken": "access_52420732c21949218695fcc988a42f79",
+        "refreshToken": "refresh_d7840ceff43442208568628ac22d825d",
+        "expiresIn": 900,
+        "user": {
+          "id": "20000000-0000-4000-8000-000000000001",
+          "email": "admin.phase1@syrex.dev",
+          "name": "Phase1 Admin",
+          "userType": "internal",
+          "roleId": "10000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  }
+}

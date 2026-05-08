@@ -1,0 +1,21 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "149d5a1b-a7cc-4fd4-857d-ad79ad41ef8e",
+        "email": "phase1.created.invite@syrex.dev",
+        "name": "Created Invite",
+        "role": "Sales",
+        "token": "98d20ec4f7aa475888c0f23d63676bef",
+        "status": "revoked",
+        "invitedById": "20000000-0000-4000-8000-000000000001",
+        "acceptedUserId": null,
+        "expiresAt": "2030-01-02T00:00:00.000Z",
+        "acceptedAt": null,
+        "revokedAt": "2026-05-08T11:03:41.931Z",
+        "createdAt": "2026-05-08T11:03:41.928Z",
+        "updatedAt": "2026-05-08T11:03:41.932Z"
+      }
+    }
+  }
+}

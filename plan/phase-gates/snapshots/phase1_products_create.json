@@ -1,0 +1,24 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "96027966-c2d9-4e89-86a9-8c20fd9f61f7",
+        "categoryId": "107c9bd2-4db7-4e85-87d9-0d238a43a24e",
+        "name": "Phase1 New Product",
+        "displayName": "Smoke Product",
+        "sku": "PHASE1-SMOKE-1778238221951",
+        "description": "Created in smoke",
+        "specs": {
+          "color": "black",
+          "voltage": "220V"
+        },
+        "warrantyMonths": 18,
+        "basePrice": "2499",
+        "sortOrder": 10,
+        "isActive": true,
+        "createdAt": "2026-05-08T11:03:41.953Z",
+        "updatedAt": "2026-05-08T11:03:41.953Z"
+      }
+    }
+  }
+}
