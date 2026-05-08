@@ -372,3 +372,83 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Follow-up Notes:
   - `Validation passed: cd backend && bun run typecheck`
   - `Validation passed: bash backend/scripts/phase1-smoke.sh`
+
+---
+
+## DEC-20260508-010
+- Decision ID: `DEC-20260508-010`
+- Model: `codex`
+- Branch/Commit: `master@39dde5d`
+- Task: `Start Phase 2 implementation (inventory + orders core APIs)`
+- Decision: `Implement dedicated tRPC routers for inventory and orders, with Prisma-backed stock mutations and order lifecycle transitions, then freeze Phase 2 contract artifact.`
+- Rationale: `Phase 2 requires live inventory/order APIs for frontend migration and a single primary implementation path for stock/order behavior.`
+- Alternatives Considered:
+  - `Fold Phase 2 into existing warehouses/products routers` rejected because it blurs boundaries and complicates lifecycle rules.
+  - `Ship read-only routes first` rejected because phase gate requires mutation workflows (goods receipt, stock adjustment, transitions).
+- Scope:
+  - `backend/src/trpc/routes/inventory.ts`
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/router.ts`
+  - `backend/scripts/phase2-seed.ts`
+  - `backend/scripts/phase2-smoke-client.ts`
+  - `backend/scripts/phase2-smoke.sh`
+  - `plan/phase-gates/PHASE_2_CONTRACT_FREEZE.md`
+  - `plan/phase-gates/snapshots/phase2_*.json`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before implementation.`
+  - Not Done: `Phase 2 routes, runtime smoke artifacts, and contract freeze outputs not implemented yet.`
+- Impact/Risk:
+  - `Order/stock mutation logic risks invariant regressions if transitions and quantity guards are incomplete.`
+  - `Concurrent stock/order writes may still require later hardening beyond initial transactional guarantees.`
+- Cleanup Required:
+  - `If implementation is partial, explicitly list incomplete routes, dead paths, and cleanup owner in this same decision entry.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex before handoff`
+- Owner Timestamp: `codex @ 2026-05-08T12:00:00Z`
+- Follow-up Notes:
+  - `Will update this same entry to completed/partial/blocked after implementation and validation.`
+
+### DEC-20260508-010 Status Update
+- Decision ID: `DEC-20260508-010`
+- Model: `codex`
+- Branch/Commit: `master@39dde5d`
+- Task: `Start Phase 2 implementation (inventory + orders core APIs)`
+- Status: `partial`
+- Completion Notes:
+  - Done: `Implemented Phase 2 tRPC routers for inventory and orders, including warehouse stock read API, goods receipt mutation with stock increment, stock adjustment mutation with non-negative guard, sales order create/list/getById, order totals computation from lines, order number sequencing via OrderSequence, lifecycle transitions (approve/hold/reject/cancel), and route wiring in appRouter.`
+  - Not Done: `Phase 2 contract freeze artifact, Phase 2 runtime smoke scripts/snapshots, and full transition reconciliation coverage (including dispatch-driven status propagation in later phase boundaries) are not yet implemented in this pass.`
+- Impact/Risk:
+  - `Inventory mutations currently rely on transactional correctness but do not yet add explicit locking strategy documentation for high-contention paths.`
+  - `Order transitions are enforced for core approval states, but downstream phase integration (dispatch/finance coupling) still needs validation at phase-gate level.`
+- Cleanup Required:
+  - `Add Phase 2 smoke workflow and snapshots under plan/phase-gates/snapshots/phase2_*.json.`
+  - `Create plan/phase-gates/PHASE_2_CONTRACT_FREEZE.md with frozen procedures and payload examples.`
+  - `Run live runtime validation and update this decision entry to completed when remaining scoped artifacts are done.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex (next Phase 2 completion pass)`
+- Owner Timestamp: `codex @ 2026-05-08T12:00:00Z`
+
+### DEC-20260508-010 Final Update
+- Decision ID: `DEC-20260508-010`
+- Model: `codex`
+- Branch/Commit: `master@39dde5d`
+- Task: `Start Phase 2 implementation (inventory + orders core APIs)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented Phase 2 inventory and orders routers, wired them into appRouter, added deterministic phase2 seed and live smoke workflows, generated runtime snapshots for Phase 2 procedures, and created Phase 2 contract freeze artifact.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `High-contention concurrency patterns (e.g., explicit row-lock strategy) are still a future hardening concern but not a Phase 2 contract blocker.`
+- Cleanup Required:
+  - `Keep phase2 seed and snapshots aligned whenever Phase 2 route contracts change.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 3 kickoff`
+- Owner Timestamp: `codex @ 2026-05-08T12:00:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck`
+  - `Validation passed: bash backend/scripts/phase2-smoke.sh`

@@ -3,7 +3,9 @@ import { authRouter } from "./routes/auth";
 import { brandsRouter } from "./routes/brands";
 import { categoriesRouter } from "./routes/categories";
 import { imagesRouter } from "./routes/images";
+import { inventoryRouter } from "./routes/inventory";
 import { invitationsRouter } from "./routes/invitations";
+import { ordersRouter } from "./routes/orders";
 import { outletsRouter } from "./routes/outlets";
 import { productsRouter } from "./routes/products";
 import { rolesRouter } from "./routes/roles";
@@ -21,8 +23,10 @@ export const appRouter = createTRPCRouter({
   categories: categoriesRouter,
   products: productsRouter,
   images: imagesRouter,
+  inventory: inventoryRouter,
   outlets: outletsRouter,
-  warehouses: warehousesRouter
+  warehouses: warehousesRouter,
+  orders: ordersRouter
 });
 
 export type AppRouter = typeof appRouter;
