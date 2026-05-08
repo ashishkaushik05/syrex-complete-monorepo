@@ -2,13 +2,13 @@
   "result": {
     "data": {
       "json": {
-        "id": "7d013740-0cfd-414e-9754-8c4ff521169a",
+        "id": "ad90e226-e192-4c95-9522-3cc070c93330",
         "name": "Phase1 New Warehouse",
         "location": "Mysuru",
         "address": "Smoke warehouse",
-        "managerId": "9680473d-e868-4cca-a3dd-773d7dd61e7a",
+        "managerId": "86a55b27-7e26-446a-9e57-fa1997981cbd",
         "isActive": true,
-        "createdAt": "2026-05-08T11:03:41.967Z"
+        "createdAt": "2026-05-08T11:12:26.991Z"
       }
     }
   }

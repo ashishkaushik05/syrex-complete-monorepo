@@ -59,6 +59,10 @@ function toUser(user: {
   };
 }
 
+async function hashPassword(password: string) {
+  return Bun.password.hash(password);
+}
+
 export const usersRouter = createTRPCRouter({
   list: protectedProcedure
     .input(listUsersInputSchema)
@@ -143,7 +147,7 @@ export const usersRouter = createTRPCRouter({
         email: input.email,
         phone: input.phone,
         name: input.name,
-        passwordHash: input.password,
+        passwordHash: await hashPassword(input.password),
         userType: input.userType,
         roleId: input.roleId,
         isActive: input.isActive

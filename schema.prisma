@@ -84,6 +84,7 @@ model User {
   dispatchesCreated      Dispatch[]
   stockAdjustments       StockAdjustment[]  @relation("StockAdjustedBy")
   managedWarehouse       Warehouse?         @relation("WarehouseManager")
+  authSessions           AuthSession[]
 
   @@map("users")
 }
@@ -120,6 +121,22 @@ model UserInvitation {
 
   @@index([email, status])
   @@map("user_invitations")
+}
+
+model AuthSession {
+  id           String    @id @default(uuid())
+  userId       String
+  refreshToken String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
 }
 
 // =============================================================================

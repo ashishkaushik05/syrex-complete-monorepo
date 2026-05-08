@@ -2,14 +2,14 @@
   "result": {
     "data": {
       "json": {
-        "id": "107c9bd2-4db7-4e85-87d9-0d238a43a24e",
-        "brandId": "b81d6788-97f9-4b35-91d0-d8a465c7d982",
+        "id": "c87563af-dfb0-4101-a38f-11bca733a841",
+        "brandId": "88101869-9e97-475e-be7b-5720de58102c",
         "name": "Phase1 New Category",
         "description": "Created in smoke",
         "sortOrder": 2,
         "isActive": true,
-        "createdAt": "2026-05-08T11:03:41.945Z",
-        "updatedAt": "2026-05-08T11:03:41.945Z"
+        "createdAt": "2026-05-08T11:12:26.952Z",
+        "updatedAt": "2026-05-08T11:12:26.952Z"
       }
     }
   }

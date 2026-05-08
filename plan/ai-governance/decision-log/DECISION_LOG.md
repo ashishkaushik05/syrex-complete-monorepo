@@ -256,7 +256,7 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 ## DEC-20260508-008
 - Decision ID: `DEC-20260508-008`
 - Model: `codex`
-- Branch/Commit: `master@working`
+- Branch/Commit: `master@6fa3e37`
 - Task: `Add live runtime/integration smoke coverage for Phase 1 routes with seeded fixtures and snapshots`
 - Decision: `Implement a reproducible Phase 1 smoke workflow using local Postgres + Prisma schema push + deterministic seed data + live tRPC calls, and persist response snapshots under plan/phase-gates/snapshots.`
 - Rationale: `Phase 1 cleanup requires runtime validation beyond typecheck and contract artifacts should include executable snapshot evidence for frontend/backend alignment.`
@@ -286,3 +286,89 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Follow-up Notes:
   - `Runtime validation command: bash backend/scripts/phase1-smoke.sh`
   - `Snapshot artifacts generated: plan/phase-gates/snapshots/phase1_*.json`
+
+---
+
+## DEC-20260508-009
+- Decision ID: `DEC-20260508-009`
+- Model: `codex`
+- Branch/Commit: `master@working`
+- Task: `Complete web integration with Phase 1 backend APIs for priority screens`
+- Decision: `Integrate existing Vite/React UI with Phase 1 tRPC procedures using a dedicated web tRPC client adapter and migrate auth + Phase 1 admin/master-data pages without redesigning UI components.`
+- Rationale: `Current UI design is already mature and should be preserved while replacing REST coupling for Phase 1 routes.`
+- Alternatives Considered:
+  - `Rebuild frontend from scratch` rejected due to high rework and loss of existing validated UX.
+  - `Keep REST mocks and defer integration` rejected because Phase 1 backend is complete and ready.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `web/src/hooks/useAuth.ts`
+  - `web/src/pages/LoginPage.tsx`
+  - `web/src/pages/InvitationAcceptPage.tsx`
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `web/src/pages/dashboard/RolesPage.tsx`
+  - `web/src/pages/dashboard/CatalogBrandsPage.tsx`
+  - `web/src/pages/dashboard/CatalogCategoriesPage.tsx`
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `web/src/pages/dashboard/OutletsPage.tsx`
+  - `web/src/pages/dashboard/WarehousesPage.tsx`
+  - `web/src/App.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `partial`
+- Completion Notes:
+  - Done: `Completed priority-screen migration to Phase 1 tRPC contract behavior for Login, Users, Roles, Catalog Brands, Catalog Categories, Catalog SKUs (products), Outlets, and Warehouses using web/src/lib/api.ts Phase 1 mappings. Added response normalization for role/category/product/user mappings (including decimal/date conversion and list-shape adaptation), added users.getById and roles.permission-catalog adapter mappings, and removed unsupported interactive actions by disabling/hiding with explicit Phase 1 messages (invitation password accept flow, user delete/reset-password, role delete, SKU import/template, outlet/warehouse detail navigation, category/brand image upload). Preserved existing UI structure and completed strict web build validation.`
+  - Not Done: `Global retirement of fallback legacy REST path is not complete for non-priority screens. Mixed api.ts behavior still exists intentionally for out-of-scope modules that have not yet migrated to Phase 1/next-phase contracts.`
+- Impact/Risk:
+  - `Some existing pages use fields/endpoints not present in Phase 1 backend and require temporary narrowing or adapters.`
+- Cleanup Required:
+  - `Migrate remaining non-priority dashboard modules to direct tRPC mappings and then remove legacy REST fallback branches from web/src/lib/api.ts.`
+  - `Implement backend support in later phases for currently disabled actions (invitation self-accept/password setup, role delete, user delete/password reset, SKU CSV import/template, warehouse/outlet rich detail endpoints) or keep feature-flagged off.`
+- Dead Paths Introduced: `none in migrated priority screens; unsupported actions were gated/disabled with explicit messaging instead of leaving active dead calls.`
+- Conflicting Implementations: `Single behavior path per migrated priority action is now active through Phase 1 mappings; repository-level mixed path still exists only for out-of-scope screens via fallback REST passthrough.`
+- Next Cleanup Owner: `next frontend migration model (codex/claude/copilot) during remaining dashboard module migration`
+- Owner Timestamp: `codex @ 2026-05-08T12:41:00Z`
+- Follow-up Notes:
+  - `Validation: cd web && bun run build passed after integration changes.`
+  - `Bridge scope intentionally preserves current design/UI while starting backend contract convergence.`
+  - `2026-05-08T12:20:00Z: Re-opened same decision for completion pass. This pass removes unsupported Phase-1 UI actions/paths, narrows priority pages to strict Phase-1 contracts, and keeps only one active implementation path per migrated behavior.`
+  - `2026-05-08T12:41:00Z: Validation rerun passed with strict TypeScript and production build: cd web && bun run build.`
+
+---
+
+## DEC-20260508-010
+- Decision ID: `DEC-20260508-010`
+- Model: `codex`
+- Branch/Commit: `master@6fa3e37`
+- Task: `Phase 1.1 hardening for smoke repeatability, auth baseline, protected middleware, and image target validation`
+- Decision: `Harden Phase 1 by making smoke workflow idempotent, introducing password hashing + refresh-session persistence, enforcing actor presence in protectedProcedure, and validating image target existence before writes.`
+- Rationale: `Current Phase 1 verification is flaky on rerun and auth/protection behavior is placeholder-level for ongoing integration usage.`
+- Alternatives Considered:
+  - `Patch only smoke scripts` rejected because auth/protected/image gaps are already identified and should be corrected together.
+  - `Defer hardening to later phase` rejected because these issues now affect immediate verification confidence.
+- Scope:
+  - `schema.prisma`
+  - `backend/package.json`
+  - `backend/src/trpc/trpc.ts`
+  - `backend/src/trpc/routes/auth.ts`
+  - `backend/src/trpc/routes/users.ts`
+  - `backend/src/trpc/routes/images.ts`
+  - `backend/scripts/phase1-seed.ts`
+  - `backend/scripts/phase1-smoke.sh`
+  - `backend/scripts/phase1-smoke-client.ts`
+  - `plan/phase-gates/PHASE_1_CONTRACT_FREEZE.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added AuthSession model in schema and generated runtime schema via smoke workflow; hardened auth.login/auth.refresh/auth.logout to use hashed-password verification and persisted/rotated refresh sessions; enforced actor presence in protectedProcedure; hashed password storage in users.create and Phase 1 seed users; added image target entity existence checks before writes; made smoke DB setup idempotent with force-reset; updated contract freeze notes; reran Phase 1 smoke snapshots.`
+  - Not Done: `backend/package.json was listed in scope but required no changes.`
+- Impact/Risk:
+  - `Auth contract behavior may shift slightly due to session validation.`
+  - `Smoke snapshots may change where dynamic values are now stabilized/cleaned.`
+- Cleanup Required:
+  - `If not completed, record exact unfinished hardening paths and any mixed behavior.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T11:12:47Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck`
+  - `Validation passed: bash backend/scripts/phase1-smoke.sh`

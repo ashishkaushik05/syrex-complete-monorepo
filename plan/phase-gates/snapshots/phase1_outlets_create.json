@@ -2,10 +2,10 @@
   "result": {
     "data": {
       "json": {
-        "id": "f86a404d-a449-4383-81d0-99fe01188712",
-        "outletCode": "OUT-SMOKE-1778238221972",
-        "userId": "9680473d-e868-4cca-a3dd-773d7dd61e7a",
-        "warehouseId": "7d013740-0cfd-414e-9754-8c4ff521169a",
+        "id": "4636226b-4c36-4f86-a699-8cd28eaf330b",
+        "outletCode": "OUT-SMOKE-1778238747000",
+        "userId": "86a55b27-7e26-446a-9e57-fa1997981cbd",
+        "warehouseId": "ad90e226-e192-4c95-9522-3cc070c93330",
         "name": "Smoke Outlet",
         "ownerName": "Smoke Owner",
         "phone": "+91-9000000002",
@@ -13,7 +13,7 @@
         "creditLimit": "30000",
         "outstandingBalance": "0",
         "isActive": true,
-        "createdAt": "2026-05-08T11:03:41.974Z"
+        "createdAt": "2026-05-08T11:12:27.003Z"
       }
     }
   }

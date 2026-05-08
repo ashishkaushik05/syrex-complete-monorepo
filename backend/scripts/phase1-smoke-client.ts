@@ -56,8 +56,7 @@ async function main() {
 
   const authRefresh = await trpcMutation(
     "auth.refresh",
-    { refreshToken: getData(authLogin).refreshToken },
-    { "x-actor-id": ACTOR_ADMIN }
+    { refreshToken: getData(authLogin).refreshToken }
   );
   await saveSnapshot("phase1_auth_refresh.json", authRefresh);
 

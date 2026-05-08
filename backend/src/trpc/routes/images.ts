@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import type { TrpcContext } from "../context";
 
 const imageSchema = z.object({
   id: z.string(),
@@ -43,6 +44,30 @@ function validateOneTarget(input: { brandId?: string | null; categoryId?: string
   const links = [input.brandId, input.categoryId, input.productId].filter(Boolean);
   if (links.length !== 1) {
     throw apiError("BAD_REQUEST", "Exactly one of brandId/categoryId/productId is required");
+  }
+}
+
+async function validateTargetExists(
+  ctx: TrpcContext,
+  input: { brandId?: string | null; categoryId?: string | null; productId?: string | null }
+) {
+  if (input.brandId) {
+    const brand = await ctx.prisma.brand.findUnique({ where: { id: input.brandId } });
+    if (!brand) {
+      throw apiError("BAD_REQUEST", "Invalid brandId");
+    }
+  }
+  if (input.categoryId) {
+    const category = await ctx.prisma.category.findUnique({ where: { id: input.categoryId } });
+    if (!category) {
+      throw apiError("BAD_REQUEST", "Invalid categoryId");
+    }
+  }
+  if (input.productId) {
+    const product = await ctx.prisma.product.findUnique({ where: { id: input.productId } });
+    if (!product) {
+      throw apiError("BAD_REQUEST", "Invalid productId");
+    }
   }
 }
 
@@ -99,6 +124,7 @@ export const imagesRouter = createTRPCRouter({
 
   create: protectedProcedure.input(createImageSchema).output(imageSchema).mutation(async ({ ctx, input }) => {
     validateOneTarget(input);
+    await validateTargetExists(ctx, input);
     const image = await ctx.prisma.image.create({
       data: {
         uri: input.uri,
@@ -124,6 +150,7 @@ export const imagesRouter = createTRPCRouter({
       productId: input.productId !== undefined ? input.productId : existing.productId
     };
     validateOneTarget(nextRef);
+    await validateTargetExists(ctx, nextRef);
 
     const image = await ctx.prisma.image.update({
       where: { id: input.id },

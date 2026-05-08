@@ -17,6 +17,9 @@ const IDS = {
 } as const;
 
 async function main() {
+  const adminPasswordHash = await Bun.password.hash("admin123");
+  const outletPasswordHash = await Bun.password.hash("outlet123");
+
   await prisma.role.upsert({
     where: { id: IDS.adminRole },
     update: { name: "Admin", permissions: ["*"], isSystem: true },
@@ -39,7 +42,7 @@ async function main() {
     update: {
       email: "admin.phase1@syrex.dev",
       name: "Phase1 Admin",
-      passwordHash: "admin123",
+      passwordHash: adminPasswordHash,
       userType: UserType.internal,
       roleId: IDS.adminRole,
       isActive: true
@@ -48,7 +51,7 @@ async function main() {
       id: IDS.adminUser,
       email: "admin.phase1@syrex.dev",
       name: "Phase1 Admin",
-      passwordHash: "admin123",
+      passwordHash: adminPasswordHash,
       userType: UserType.internal,
       roleId: IDS.adminRole,
       isActive: true
@@ -60,7 +63,7 @@ async function main() {
     update: {
       email: "outlet.phase1@syrex.dev",
       name: "Phase1 Outlet User",
-      passwordHash: "outlet123",
+      passwordHash: outletPasswordHash,
       userType: UserType.outlet,
       roleId: IDS.salesRole,
       isActive: true
@@ -69,7 +72,7 @@ async function main() {
       id: IDS.outletUser,
       email: "outlet.phase1@syrex.dev",
       name: "Phase1 Outlet User",
-      passwordHash: "outlet123",
+      passwordHash: outletPasswordHash,
       userType: UserType.outlet,
       roleId: IDS.salesRole,
       isActive: true

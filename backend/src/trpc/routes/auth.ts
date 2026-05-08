@@ -28,6 +28,17 @@ function tokenPrefix() {
   return crypto.randomUUID().replaceAll("-", "");
 }
 
+function tokenExpiryDate() {
+  return new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+}
+
+async function verifyPassword(storedHash: string, inputPassword: string) {
+  if (storedHash.startsWith("$2") || storedHash.startsWith("$argon2")) {
+    return Bun.password.verify(inputPassword, storedHash);
+  }
+  return storedHash === inputPassword;
+}
+
 export const authRouter = createTRPCRouter({
   login: publicProcedure.input(loginSchema).output(sessionTokenSchema).mutation(async ({ ctx, input }) => {
     const user = await ctx.prisma.user.findUnique({
@@ -47,13 +58,23 @@ export const authRouter = createTRPCRouter({
       throw apiError("UNAUTHORIZED", "Invalid credentials");
     }
 
-    if (user.passwordHash !== input.password) {
+    const isValidPassword = await verifyPassword(user.passwordHash, input.password);
+    if (!isValidPassword) {
       throw apiError("UNAUTHORIZED", "Invalid credentials");
     }
 
+    const refreshToken = `refresh_${tokenPrefix()}`;
+    await ctx.prisma.authSession.create({
+      data: {
+        userId: user.id,
+        refreshToken,
+        expiresAt: tokenExpiryDate()
+      }
+    });
+
     return {
       accessToken: `access_${tokenPrefix()}`,
-      refreshToken: `refresh_${tokenPrefix()}`,
+      refreshToken,
       expiresIn: 900,
       user: {
         id: user.id,
@@ -69,26 +90,48 @@ export const authRouter = createTRPCRouter({
     if (!input.refreshToken.startsWith("refresh_")) {
       throw apiError("UNAUTHORIZED", "Invalid refresh token");
     }
-    const actorId = ctx.actor.id;
-    if (!actorId) {
-      throw apiError("UNAUTHORIZED", "Missing actor context");
+    const session = await ctx.prisma.authSession.findUnique({
+      where: { refreshToken: input.refreshToken },
+      select: { id: true, userId: true, expiresAt: true, revokedAt: true }
+    });
+    if (!session || session.revokedAt || session.expiresAt.getTime() <= Date.now()) {
+      throw apiError("UNAUTHORIZED", "Invalid refresh token");
     }
+
     const user = await ctx.prisma.user.findUnique({
-      where: { id: actorId },
+      where: { id: session.userId },
       select: { id: true, email: true, name: true, userType: true, roleId: true, isActive: true }
     });
     if (!user || !user.isActive) {
       throw apiError("UNAUTHORIZED", "Invalid refresh context");
     }
+
+    const rotatedRefreshToken = `refresh_${tokenPrefix()}`;
+    await ctx.prisma.authSession.update({
+      where: { id: session.id },
+      data: {
+        refreshToken: rotatedRefreshToken,
+        expiresAt: tokenExpiryDate(),
+        revokedAt: null
+      }
+    });
+
     return {
       accessToken: `access_${tokenPrefix()}`,
-      refreshToken: `refresh_${tokenPrefix()}`,
+      refreshToken: rotatedRefreshToken,
       expiresIn: 900,
       user
     };
   }),
 
-  logout: protectedProcedure.mutation(async () => {
+  logout: protectedProcedure.mutation(async ({ ctx }) => {
+    await ctx.prisma.authSession.updateMany({
+      where: {
+        userId: ctx.actor.id!,
+        revokedAt: null
+      },
+      data: { revokedAt: new Date() }
+    });
     return { ok: true };
   }),
 

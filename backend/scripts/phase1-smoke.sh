@@ -50,7 +50,7 @@ fi
 cd "$BACKEND_DIR"
 cp "$ROOT_DIR/schema.prisma" "$TMP_SCHEMA"
 PRISMA_GENERATE_SKIP_AUTOINSTALL=1 DATABASE_URL="$DB_URL" bunx prisma generate --schema "$TMP_SCHEMA" >/dev/null
-DATABASE_URL="$DB_URL" bunx prisma db push --schema "$TMP_SCHEMA" --accept-data-loss >/dev/null
+DATABASE_URL="$DB_URL" bunx prisma db push --schema "$TMP_SCHEMA" --force-reset --accept-data-loss >/dev/null
 DATABASE_URL="$DB_URL" bun run scripts/phase1-seed.ts >/tmp/syrex_phase1_seed.log 2>&1
 
 DATABASE_URL="$DB_URL" PORT="$API_PORT" bun run src/index.ts >/tmp/syrex_phase1_api.log 2>&1 &

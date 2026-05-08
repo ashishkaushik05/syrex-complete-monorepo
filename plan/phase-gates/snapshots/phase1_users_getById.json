@@ -8,7 +8,7 @@
         "httpStatus": 400,
         "stack": "TRPCError: [\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"undefined\",\n    \"path\": [],\n    \"message\": \"Required\"\n  }\n]\n    at inputValidatorMiddleware (/home/ashish/Documents/code/syrex-new-api/backend/node_modules/@trpc/server/dist/initTRPC-BRf4imah.mjs:44:14)\n    at async callRecursive (/home/ashish/Documents/code/syrex-new-api/backend/node_modules/@trpc/server/dist/initTRPC-BRf4imah.mjs:256:24)\n    at processTicksAndRejections (native:7:39)",
         "path": "users.getById",
-        "requestId": "7ce0fc4a-eff6-416f-add8-60175c4af580"
+        "requestId": "89f970d5-557f-4ed3-9f97-0291d2751d69"
       }
     }
   }

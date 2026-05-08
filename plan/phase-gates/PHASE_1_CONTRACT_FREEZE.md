@@ -50,6 +50,7 @@ Decision Entry: `DEC-20260508-007`
 
 - Error taxonomy remains: `BAD_REQUEST`, `CONFLICT`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `INTERNAL`.
 - tRPC error formatter includes `data.requestId` in all responses.
+- `protectedProcedure` now enforces presence of `x-actor-id` for protected routes.
 - Pagination contract for list endpoints:
   - input: `{ cursor?: string | null, limit?: number }`
   - output: `{ items: T[], nextCursor: string | null }`
@@ -58,11 +59,12 @@ Decision Entry: `DEC-20260508-007`
   - `outlets.creditLimit`
   - `outlets.outstandingBalance`
 - Date/time fields are emitted as ISO-8601 UTC strings.
+- Auth refresh tokens are now persisted in `auth_sessions` and validated/rotated on `auth.refresh`.
 
 ## Validation Executed
 
 - `cd backend && bun run typecheck` passed on 2026-05-08.
-- `bash backend/scripts/phase1-smoke.sh` passed on 2026-05-08 (live Postgres + seed + API + tRPC route sweep).
+- `bash backend/scripts/phase1-smoke.sh` passed on 2026-05-08 (live Postgres force-reset + seed + API + tRPC route sweep).
 - Response snapshots captured under `plan/phase-gates/snapshots/phase1_*.json` for all frozen Phase 1 procedures.
 
 ## Frontend Alignment Notes
