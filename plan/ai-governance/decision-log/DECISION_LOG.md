@@ -452,3 +452,2344 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Follow-up Notes:
   - `Validation passed: cd backend && bun run typecheck`
   - `Validation passed: bash backend/scripts/phase2-smoke.sh`
+
+---
+
+## DEC-20260508-011
+- Decision ID: `DEC-20260508-011`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 2 web UI integration (inventory + orders)`
+- Decision: `Migrate web order/inventory screens to Phase 2 tRPC-backed contract mappings in web api adapter and remove legacy endpoint usage for scoped screens.`
+- Rationale: `Phase 2 backend contracts are frozen and validated; web must use one primary implementation path per behavior without mixed legacy order/inventory APIs.`
+- Alternatives Considered:
+  - `Keep existing REST fallback for order/inventory screens` rejected because it preserves mixed behavior and violates single-path goal.
+  - `Rewrite UI screens first` rejected because adapter-first migration reduces risk and keeps UI continuity.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `web/src/pages/dashboard/OrderDetailPage.tsx`
+  - `web/src/pages/dashboard/WarehouseDetailPage.tsx`
+  - `web/src/pages/dashboard/AccountsApprovalQueuePage.tsx`
+  - `web/src/pages/dashboard/WarehouseAssignmentPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and Phase 2 web scope locked before implementation.`
+  - Not Done: `Phase 2 web mappings, UI payload alignment, and build validation are pending.`
+- Impact/Risk:
+  - `Narrowing to Phase 2 route surface may require disabling unsupported downstream flows.`
+  - `Shape mismatches between existing page models and frozen contract can cause transient UI regressions until adapters are aligned.`
+- Cleanup Required:
+  - `If partial, list exact unresolved screens/routes, dead paths, and owner in this same decision entry.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T11:57:52Z`
+- Follow-up Notes:
+  - `Will update this same entry to completed/partial/blocked after implementation and validation.`
+
+---
+
+## DEC-20260508-012
+- Decision ID: `DEC-20260508-012`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Start Phase 3 implementation (dispatch + financial core APIs)`
+- Decision: `Implement dedicated tRPC routers for dispatches, invoices, and payments; add order-approval invoice auto-generation; and ship Phase 3 smoke + contract-freeze artifacts.`
+- Rationale: `Phase 3 requires a single backend implementation path for dispatch execution and order-to-cash financial flows before frontend migration.`
+- Alternatives Considered:
+  - `Extend orders router only for all Phase 3 behavior` rejected because dispatch/finance boundaries become unclear and harder to evolve.
+  - `Ship read APIs first and defer mutations` rejected because phase gate requires live create/transition/allocation workflows.
+- Scope:
+  - `backend/src/trpc/routes/dispatches.ts`
+  - `backend/src/trpc/routes/invoices.ts`
+  - `backend/src/trpc/routes/payments.ts`
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/router.ts`
+  - `backend/scripts/phase3-seed.ts`
+  - `backend/scripts/phase3-smoke-client.ts`
+  - `backend/scripts/phase3-smoke.sh`
+  - `plan/phase-gates/PHASE_3_CONTRACT_FREEZE.md`
+  - `plan/phase-gates/snapshots/phase3_*.json`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and Phase 3 scope locked before implementation.`
+  - Not Done: `Phase 3 routes, order approval invoice generation, runtime smoke artifacts, and contract freeze outputs are pending.`
+- Impact/Risk:
+  - `Dispatch and payment mutations can break inventory/financial invariants if allocation and quantity guards are incomplete.`
+  - `Invoice auto-generation on approval must stay idempotent to avoid duplicate invoice records.`
+- Cleanup Required:
+  - `If partial, list incomplete routes/artifacts, dead paths, conflicting behavior, and cleanup owner in this same decision entry.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T11:58:55Z`
+- Follow-up Notes:
+  - `Will update this same entry to completed/partial/blocked after implementation and validation.`
+
+### DEC-20260508-012 Final Update
+- Decision ID: `DEC-20260508-012`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Start Phase 3 implementation (dispatch + financial core APIs)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented dispatches, invoices, and payments tRPC routers; wired them into appRouter; added order approval invoice auto-generation with idempotent per-order guard and outlet outstanding sync; added deterministic Phase 3 seed/smoke workflows; generated Phase 3 snapshots; and created the Phase 3 contract freeze artifact.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `High-contention locking strategy for dispatch/payment concurrency remains a later hardening concern beyond Phase 3 contract scope.`
+- Cleanup Required:
+  - `Keep Phase 3 seed/smoke snapshots and contract freeze artifact aligned whenever dispatch/invoice/payment contracts change.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 4 kickoff`
+- Owner Timestamp: `codex @ 2026-05-08T12:05:36Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck`
+  - `Validation passed: bash backend/scripts/phase3-smoke.sh`
+
+---
+
+## DEC-20260508-013
+- Decision ID: `DEC-20260508-013`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Set backend local environment configuration to user-provided runtime values`
+- Decision: `Replace backend/.env contents with the provided Postgres/Redis/storage/session/API credentials so local runtime targets match the user's stack.`
+- Rationale: `Current backend DB credentials are incorrect for the user's running services and are causing Prisma authentication failures during auth flow execution.`
+- Alternatives Considered:
+  - `Keep existing .env and only suggest manual edits` rejected because user explicitly asked to set these values as env.
+  - `Write values into backend/.env.example only` rejected because runtime reads backend/.env, not the example file.
+- Scope:
+  - `backend/.env`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before env edits.`
+  - Not Done: `Applying provided env values and confirming resulting file content are pending.`
+- Impact/Risk:
+  - `Secrets are stored in local env file and should not be committed to public remotes.`
+  - `If any provided endpoint/port is incorrect, runtime failures may continue despite this update.`
+- Cleanup Required:
+  - `After applying values, update this same decision entry with final status and exact done/not-done summary.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T12:15:10Z`
+- Follow-up Notes:
+  - `Will update to completed after backend/.env is rewritten with the provided values.`
+
+### DEC-20260508-013 Final Update
+- Decision ID: `DEC-20260508-013`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Set backend local environment configuration to user-provided runtime values`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Replaced backend/.env with the provided DATABASE_URL/REDIS/storage/provider/session/API settings, preserving backend runtime compatibility by keeping PORT=3000 alongside API_PORT=3000.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Runtime now depends on services being available at localhost:5434 (Postgres), localhost:6380 (Redis), and localhost:9002 (MinIO).`
+  - `SESSION_SECRET remains a placeholder and should be rotated for non-local usage.`
+- Cleanup Required:
+  - `Rotate secrets and avoid committing this env file to shared/public remotes.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T12:15:10Z`
+- Follow-up Notes:
+  - `Updated file: backend/.env`
+
+---
+
+## DEC-20260508-014
+- Decision ID: `DEC-20260508-014`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Restore local auth login runtime by aligning backend env to active Docker Postgres and validating with live curl login`
+- Decision: `Switch backend DATABASE_URL to the currently running Docker Postgres endpoint/credentials, then validate auth.login via live tRPC curl; if schema/data blockers appear, apply only required in-place schema+seed setup on the same DB.`
+- Rationale: `Current backend runtime uses stale postgres@5432/syrex credentials, causing deterministic Prisma auth failures on login path.`
+- Alternatives Considered:
+  - `Keep stale env and only provide instructions` rejected because user requested working live login verification now.
+  - `Create a new database/container` rejected because user explicitly disallowed creating new DB resources.
+- Scope:
+  - `backend/.env`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before runtime env edits and live curl validation.`
+  - Not Done: `Env update and successful auth.login curl verification are pending.`
+- Impact/Risk:
+  - `Pointing to existing shared local DB may expose pre-existing schema/data drift unrelated to auth credentials.`
+  - `If schema/tables are missing in target DB, additional in-place setup may be required.`
+- Cleanup Required:
+  - `Update this same entry with completed/partial status and exact runtime validation evidence.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T12:24:10Z`
+- Follow-up Notes:
+  - `Will attach exact curl command and result in final update.`
+
+---
+
+## DEC-20260508-015
+- Decision ID: `DEC-20260508-015`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Reset local DB on every dev start and seed deterministic baseline data`
+- Decision: `Create a dedicated dev seed script and update backend package scripts so bun run dev force-resets schema, runs seed, then starts watch server.`
+- Rationale: `User wants old data cleared consistently and a repeatable baseline each time dev server starts.`
+- Alternatives Considered:
+  - `Manual reset/seed commands` rejected because user asked for automatic behavior on bun run dev.
+  - `Keep phase smoke seed scripts only` rejected because those are phase-test oriented and not wired to daily dev startup.
+- Scope:
+  - `backend/scripts/dev-seed.ts`
+  - `backend/package.json`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before edits.`
+  - Not Done: `Seed script creation, package wiring, and runtime validation are pending.`
+- Impact/Risk:
+  - `Every bun run dev will erase all current DB data in configured DATABASE_URL.`
+  - `Any local manual test records will be removed at each dev startup by design.`
+- Cleanup Required:
+  - `Document and keep seed data aligned as schema evolves.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T12:26:06Z`
+- Follow-up Notes:
+  - `Will finalize with executed validation commands after wiring is complete.`
+
+### DEC-20260508-015 Final Update
+- Decision ID: `DEC-20260508-015`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Reset local DB on every dev start and seed deterministic baseline data`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added backend/scripts/dev-seed.ts with deterministic role/user seeds, updated backend/package.json so bun run dev executes db:prepare before watch start, implemented db:prepare as db reset (force-reset + skip-generate) followed by seed, and validated with live auth.login curl success for admin@syrex.local.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Running bun run dev now always wipes all existing data in DATABASE_URL target database.`
+  - `Seed currently provisions baseline auth users/roles only; additional domain fixtures should be added deliberately as needed.`
+- Cleanup Required:
+  - `Keep dev seed aligned with schema constraints whenever schema changes.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T12:26:06Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run db:prepare`
+  - `Validation passed: curl -X POST http://127.0.0.1:3000/trpc/auth.login?batch=1 with admin@syrex.local/admin123 returned HTTP 200 with tokens`
+
+---
+
+## DEC-20260508-016
+- Decision ID: `DEC-20260508-016`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix frontend login failure when tRPC auth call returns 200`
+- Decision: `Normalize auth hook response handling to support both payload shapes returned by api adapter (`response.data` and `response.data.data`) so login/me flows do not crash on successful responses.`
+- Rationale: `Current hook assumes nested `data.data`, while phase adapter returns single-layer `data` for auth routes; this makes mutate success resolve `undefined` and triggers UI error state.`
+- Alternatives Considered:
+  - `Change global api adapter response envelopes` rejected because it risks regressions across many pages using mixed legacy/fallback payloads.
+  - `Patch only LoginPage` rejected because auth/me query has the same envelope assumption issue.
+- Scope:
+  - `web/src/hooks/useAuth.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before frontend auth hook edit.`
+  - Not Done: `Hook patch and validation are pending.`
+- Impact/Risk:
+  - `Low risk: scoped to auth response unwrapping only.`
+  - `If unexpected envelopes appear, auth state may still need additional normalization.`
+- Cleanup Required:
+  - `Keep auth envelope handling aligned if api adapter contracts are unified later.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T12:29:30Z`
+- Follow-up Notes:
+  - `Will verify with local build and live login request after patch.`
+
+### DEC-20260508-016 Final Update
+- Decision ID: `DEC-20260508-016`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix frontend login failure when tRPC auth call returns 200`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated web/src/hooks/useAuth.ts to normalize both auth response envelopes (`data` and `data.data`) for /auth/me and /auth/login paths, preventing undefined login payloads from causing client-side failure after successful API responses.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Low risk; only auth response unwrapping logic changed.`
+- Cleanup Required:
+  - `If API envelope is unified globally later, simplify unwrap helper accordingly.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T12:29:30Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-017
+- Decision ID: `DEC-20260508-017`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Remove orgs, field activity/shifts, and tickets route-family usage from web UI and adapters`
+- Decision: `Delete frontend calls, UI controls, routes, and adapter branches tied to /orgs, /field/agents/active, /field/shifts, and /tickets*; then verify zero active references.`
+- Rationale: `These endpoint families are being retired and must not remain reachable through active frontend paths.`
+- Alternatives Considered:
+  - `Leave pages/routes but hide menu links` rejected because deep links and stale code paths would remain active.
+  - `Keep adapter fallbacks for future use` rejected because they preserve dead behavior and conflict with single-path architecture.
+- Scope:
+  - `web/src/pages/dashboard/OverviewPage.tsx`
+  - `web/src/pages/dashboard/TicketsPage.tsx`
+  - `web/src/pages/dashboard/FieldAssignmentsPage.tsx`
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `web/src/pages/dashboard/MapPage.tsx`
+  - `web/src/pages/dashboard/DashboardLayout.tsx`
+  - `web/src/lib/notifications.ts`
+  - `web/src/App.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code edits.`
+  - Not Done: `Code removal and validation are pending.`
+- Impact/Risk:
+  - `Removing routes may break existing bookmarks to retired pages.`
+  - `Dashboard summaries may lose metrics previously sourced from removed endpoints.`
+- Cleanup Required:
+  - `If any unavoidable references remain, document owner/actions in final update.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T13:10:00Z`
+- Follow-up Notes:
+  - `Will finalize with build + grep evidence.`
+
+### DEC-20260508-017 Final Update
+- Decision ID: `DEC-20260508-017`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Remove orgs, field activity/shifts, and tickets route-family usage from web UI and adapters`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Removed /orgs usage from OverviewPage, UsersPage, FieldAssignmentsPage, and TicketsPage by replacing dependent flows/UI with endpoint-independent views. Removed /field/agents/active and /field/shifts usage (including shift trail/visits fetch usage) by retiring those dependent map/overview flows. Removed ticket API usage and ticket UX paths from OverviewPage and TicketsPage. Removed ticket route/menu references from App.tsx and DashboardLayout.tsx. Removed ticket notification target handling from lib/notifications.ts. Verified no active references remain for /orgs, /field/agents/active, /field/shifts, /tickets in web/src.`
+  - Not Done: `No additional cleanup required for this scoped removal.`
+- Impact/Risk:
+  - `Ticket and field-tracking pages are now retired/limited; users navigating to legacy paths will no longer access old feature behavior.`
+  - `Overview metrics are reduced to supported route families only.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T13:16:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+  - `Validation passed: rg -n "/orgs|/field/agents/active|/field/shifts|/tickets" web/src -S (no matches)`
+
+### DEC-20260508-011 Status Update
+- Decision ID: `DEC-20260508-011`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 2 web UI integration (inventory + orders)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented Phase 2 web adapter coverage for inventory/orders flows and aligned sales/warehouse pages with frozen Phase 2 contract. Added explicit adapter mappings for orders list/create/detail/approval+reject transitions and inventory stock/GRN/adjustment routes. Added frontend actor-context fallback in dev (`VITE_DEV_ACTOR_ID`, defaulting to seeded admin UUID) so protected tRPC routes (users.list, outlets.list, orders.list) resolve in local development even before manual login bootstrap. Added no-fail compatibility fallbacks for currently out-of-scope legacy modules (`/orgs`, `/field/*`, `/tickets*`, `/notifications*`) so dashboard routes do not hard-fail with 404 while those modules are pending formal removal/migration.`
+  - Not Done: `Full removal of out-of-scope legacy pages/modules (`orgs`, `field`, `tickets`) is not part of this execution and remains for separate assigned pass.`
+- Impact/Risk:
+  - `Dev fallback actor context is a local bootstrap convenience and not a production auth mechanism.`
+  - `Legacy out-of-scope modules now degrade to empty/error-safe adapter responses; functional parity for those modules is intentionally deferred.`
+- Cleanup Required:
+  - `When legacy module removal pass starts, delete compatibility fallbacks and remove corresponding routes/pages to avoid long-term dead compatibility branches.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `assigned model for legacy module removal and Phase 3 integration`
+- Owner Timestamp: `codex @ 2026-05-08T12:55:53Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-018
+- Decision ID: `DEC-20260508-018`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix dashboard users/outlets/orders list failures caused by tRPC query input encoding`
+- Decision: `Update web tRPC query transport to send GET input as wrapped transformer payload ({ json: input }) to match backend fetch adapter expectations.`
+- Rationale: `Backend list routes are healthy; 400s are caused by client transport mismatch that sends raw input object, parsed as undefined by tRPC input validator.`
+- Alternatives Considered:
+  - `Loosen backend list input schemas to accept undefined` rejected because it hides protocol mismatch and weakens validation.
+  - `Patch users/outlets/orders calls individually` rejected because it creates multiple behavior paths instead of one transport fix.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code edits.`
+  - Not Done: `Transport patch and validation pending.`
+- Impact/Risk:
+  - `Medium: shared tRPC query path change affects all GET procedures.`
+  - `Low regression risk expected because mutation transport already uses wrapped transformer payload.`
+- Cleanup Required:
+  - `If a native tRPC client is introduced later, remove custom transport helpers to avoid contract drift.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T13:09:27Z`
+- Follow-up Notes:
+  - `Validation target: users.list/outlets.list/orders.list return HTTP 200 via web transport.`
+
+### DEC-20260508-018 Final Update
+- Decision ID: `DEC-20260508-018`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix dashboard users/outlets/orders list failures caused by tRPC query input encoding`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated web/src/lib/api.ts trpcQuery() to encode GET input as transformer payload ({ json: input }) instead of raw object JSON. This aligns query transport with backend tRPC fetch adapter and unblocks users.list, outlets.list, and orders.list requests used by dashboard pages.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Shared tRPC query transport is now protocol-compatible with current backend adapter; broad positive effect on all GET procedures using input.`
+  - `If backend adapter protocol changes in future, this wrapper must stay in sync.`
+- Cleanup Required:
+  - `Consider replacing custom fetch wrappers with generated/native tRPC client to reduce protocol drift risk.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T13:09:54Z`
+- Follow-up Notes:
+  - `Validation passed: direct backend probe before patch with raw input returned HTTP 400 invalid_type(received undefined); same request shape wrapped as {json:...} returned HTTP 200.`
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-019
+- Decision ID: `DEC-20260508-019`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Eliminate undefined React Query returns on users/outlets/catalog pages by normalizing adapter envelope unwrapping`
+- Decision: `Patch affected queryFns to normalize both envelope variants (`data` and nested `data.data`) and always return explicit defaults ([] or object) to satisfy React Query non-undefined contract.`
+- Rationale: `Current pages mix two response envelope assumptions; when the active adapter returns a different shape, queryFns return undefined and React Query throws runtime errors.`
+- Alternatives Considered:
+  - `Refactor full api adapter to one envelope in this pass` rejected because broad blast radius across many pages is higher risk for immediate hotfix.
+  - `Only patch one failing page` rejected because multiple active keys (`users-page-lite`, `outlets-counts`, `catalog brands`) already fail.
+- Scope:
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `web/src/pages/dashboard/OutletsPage.tsx`
+  - `web/src/pages/dashboard/CatalogBrandsPage.tsx`
+  - `web/src/pages/dashboard/CatalogCategoriesPage.tsx`
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code edits.`
+  - Not Done: `Page queryFn patches and validation pending.`
+- Impact/Risk:
+  - `Low-medium: query data shape handling changes in catalog/users/outlets pages.`
+  - `Potential hidden envelope inconsistencies may still exist in unrelated pages and need follow-up.`
+- Cleanup Required:
+  - `Consolidate adapter envelopes in a separate pass to remove dual-unwrapping logic.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T13:16:39Z`
+- Follow-up Notes:
+  - `Validation target: no Query data cannot be undefined errors for users/outlets/catalog brands keys.`
+
+### DEC-20260508-019 Final Update
+- Decision ID: `DEC-20260508-019`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Eliminate undefined React Query returns on users/outlets/catalog pages by normalizing adapter envelope unwrapping`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Patched queryFns in UsersPage, OutletsPage, CatalogBrandsPage, CatalogCategoriesPage, and CatalogSkusPage to handle both response envelope variants (`data` and `data.data`) and always return explicit non-undefined values. This removes runtime React Query failures for keys including users-page-lite, outlets-counts, and catalog brands loaders.`
+  - Not Done: `No adapter-wide envelope unification performed in this pass.`
+- Impact/Risk:
+  - `Low risk: changes scoped to queryFn return normalization on affected pages.`
+  - `Other pages may still contain mixed envelope assumptions and should be normalized in a separate audit pass.`
+- Cleanup Required:
+  - `Plan a follow-up refactor to standardize api adapter envelope conventions globally and simplify page queryFns.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T13:18:31Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-020
+- Decision ID: `DEC-20260508-020`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Hook up sales order creation pages and flows end-to-end`
+- Decision: `Normalize order-related query response unwrapping on list/create/detail pages and wire create mutation success to the created order result for direct detail navigation and reliable cache refresh.`
+- Rationale: `Order flow currently relies on mixed response envelope assumptions and does not consume created entity response, causing brittle behavior and incomplete UX handoff after create.`
+- Alternatives Considered:
+  - `Patch only create mutation success toast` rejected because list/detail loaders can still fail under envelope variance.
+  - `Refactor global API adapter first` rejected for this pass due larger blast radius than needed for immediate order flow stabilization.
+- Scope:
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `web/src/pages/dashboard/OrderDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code edits.`
+  - Not Done: `Order page flow patches and validation pending.`
+- Impact/Risk:
+  - `Low-medium: order page data unwrap logic and post-create behavior change.`
+  - `Risk limited to order pages in this scope.`
+- Cleanup Required:
+  - `Follow with broader adapter envelope standardization to remove repeated page-level guards.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T13:19:00Z`
+- Follow-up Notes:
+  - `Validation target: create order succeeds and navigates to detail; order list/detail loaders return defined data.`
+
+### DEC-20260508-020 Final Update
+- Decision ID: `DEC-20260508-020`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Hook up sales order creation pages and flows end-to-end`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated SalesOrdersPage and OrderDetailPage to normalize mixed API envelopes for orders/outlets/products/linked entities so queryFns always return defined typed values. Wired order creation mutation to consume created order response and navigate directly to /dashboard/sales/orders/:id after success, while still invalidating order list/status caches and showing success toast.`
+  - Not Done: `No global adapter envelope refactor in this pass.`
+- Impact/Risk:
+  - `Low-medium: scoped to sales order pages and create/detail flow logic.`
+  - `Remaining pages with mixed envelope assumptions are outside this decision scope.`
+- Cleanup Required:
+  - `Run a broader audit to normalize remaining queryFns across the dashboard to one envelope contract.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T13:20:12Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-021
+- Decision ID: `DEC-20260508-021`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix SalesOrdersPage pagination crash from ambiguous envelope unwrap`
+- Decision: `Replace ambiguous generic unwrap on paginated order responses with a paginated normalizer that preserves `{ data, pagination }` and never degrades to array shape.`
+- Rationale: `Current helper treats any object with `data` key as envelope; paginated payload itself has `data`, causing accidental unwrap to array and `pagination` undefined crash.`
+- Alternatives Considered:
+  - `Add optional chaining at read site only` rejected because it masks wrong shape propagation.
+  - `Rework global adapter now` rejected due broader scope; this is an urgent page crash fix.
+- Scope:
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Normalizer patch + validation pending.`
+- Impact/Risk:
+  - `Low: scoped to orders page query shaping.`
+- Cleanup Required:
+  - `Unify envelope/shape handling helpers across pages in follow-up audit.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T13:24:56Z`
+- Follow-up Notes:
+  - `Validation target: no crash at SalesOrdersPage.tsx around pagination.total.`
+
+### DEC-20260508-021 Final Update
+- Decision ID: `DEC-20260508-021`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix SalesOrdersPage pagination crash from ambiguous envelope unwrap`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added normalizePaginated() in SalesOrdersPage and switched orders/outlets paginated query handling to preserve `{ data, pagination }` shape even when payloads have overlapping `data` keys. This removes the runtime crash on `ordersQuery.data.pagination.total` and keeps list/count flows stable.`
+  - Not Done: `No global helper replacement outside SalesOrdersPage scope.`
+- Impact/Risk:
+  - `Low: isolated to sales orders page pagination shape handling.`
+- Cleanup Required:
+  - `Consolidate envelope normalizers across pages to avoid duplicate local helpers.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T13:25:20Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-022
+- Decision ID: `DEC-20260508-022`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 3 completion hardening: deliveredAt correctness, payment validation, concurrency guards, frontend phase-gate wiring, and negative-path verification`
+- Decision: `Implement schema + router hardening for dispatch/payment flows, remove Phase 3 frontend stubs by wiring web adapter to backend contracts, and add explicit Phase 3 verification artifacts.`
+- Rationale: `Current Phase 3 backend is mostly complete but has known correctness gaps and frontend gate evidence is incomplete; this pass closes those gaps under one scoped decision.`
+- Alternatives Considered:
+  - `Patch only backend issues` rejected because phase completion also requires frontend integration evidence.
+  - `Document issues without implementation` rejected because user requested direct fixes.
+- Scope:
+  - `schema.prisma`
+  - `backend/src/trpc/routes/dispatches.ts`
+  - `backend/src/trpc/routes/payments.ts`
+  - `backend/scripts/phase3-smoke-client.ts`
+  - `backend/scripts/phase3-smoke.sh`
+  - `web/src/lib/api.ts`
+  - `plan/phase-gates/PHASE_3_CONTRACT_FREEZE.md`
+  - `plan/phase-gates/PHASE_3_FRONTEND_ALIGNMENT.md`
+  - `plan/phase-gates/snapshots/phase3_*.json`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code/document edits.`
+  - Not Done: `All implementation, smoke/verification reruns, and final phase-gate evidence updates are pending.`
+- Impact/Risk:
+  - `Schema change for dispatch delivery timestamp requires DB reset/migration in local/dev flows.`
+  - `Web adapter changes affect shared finance/dispatch pages and must preserve existing page contracts.`
+- Cleanup Required:
+  - `If partial, list unresolved hardening items, dead paths, and cleanup owner in this same entry.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T13:28:02Z`
+- Follow-up Notes:
+  - `Will update this same decision to completed/partial/blocked after implementation and validation.`
+
+### DEC-20260508-022 Final Update
+- Decision ID: `DEC-20260508-022`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 3 completion hardening: deliveredAt correctness, payment validation, concurrency guards, frontend phase-gate wiring, and negative-path verification`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added Dispatch.deliveredAt at schema level and wired dispatch API output to expose it; fixed delivered transition semantics so markDelivered sets deliveredAt without mutating dispatchDate; hardened dispatch stock/line updates with transactional conditional updates to reduce race-condition overwrite risk; hardened payments.create with strict amount format validation and optimistic invoice update guard under concurrent payment writes; removed frontend Phase 3 dispatch/invoice empty stubs and wired adapter routes to dispatches/invoices/payments backend contracts; added payment preview and payment history adapter mappings for Accounts payments UI; expanded Phase 3 smoke client with negative-path captures (duplicate deliver, invalid payment amount, excessive dispatch qty); regenerated Phase 3 snapshots and updated contract freeze docs; added explicit frontend alignment artifact.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Dispatch and payment mutations now fail fast with conflict errors under concurrent stale-state updates instead of silently overwriting state.`
+  - `Schema now includes deliveredAt and requires DB reset/migration alignment in environments not using force-reset dev flows.`
+- Cleanup Required:
+  - `Keep PHASE_3_CONTRACT_FREEZE.md, PHASE_3_FRONTEND_ALIGNMENT.md, and phase3 snapshots synchronized whenever dispatch/invoice/payment route contracts change.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 4 kickoff`
+- Owner Timestamp: `codex @ 2026-05-08T13:33:32Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck`
+  - `Validation passed: bash backend/scripts/phase3-smoke.sh`
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-023
+- Decision ID: `DEC-20260508-023`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 3 web UI implementation completion: route audit, UI hardening, and gate evidence refresh`
+- Decision: `Execute a full Phase 3 web UI pass by auditing contract-route coverage, fixing active UI defects in dispatch/invoice/payment flows, and updating gate evidence in one scoped implementation path.`
+- Rationale: `Phase 3 backend/adapter integration exists, but UI-level route reliability and journey validation still require a dedicated implementation-and-verification pass.`
+- Alternatives Considered:
+  - `No-op and only restate prior gate artifact` rejected because user requested implementation plus progress logging.
+  - `Refactor unrelated modules in same pass` rejected to keep blast radius limited to Phase 3 web UI scope.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `web/src/lib/notifications.ts`
+  - `web/src/pages/dashboard/SalesDispatchesPage.tsx`
+  - `web/src/pages/dashboard/DispatchDetailPage.tsx`
+  - `web/src/pages/dashboard/SalesInvoicesPage.tsx`
+  - `web/src/pages/dashboard/InvoiceDetailPage.tsx`
+  - `web/src/pages/dashboard/AccountsPaymentsPage.tsx`
+  - `plan/phase-gates/PHASE_3_FRONTEND_ALIGNMENT.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code edits.`
+  - Not Done: `Audit fixes, UI hardening patches, and validation evidence updates are pending.`
+- Impact/Risk:
+  - `Medium: touches shared dashboard pages and navigation helpers used by multiple modules.`
+  - `Low backend risk: no Phase 3 backend contract changes in this pass.`
+- Cleanup Required:
+  - `If any item is partial, list exact unfinished UI paths and cleanup owner in final update.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T15:20:00Z`
+- Follow-up Notes:
+  - `Validation targets: cd web && bun run build; bash backend/scripts/phase3-smoke.sh.`
+
+### DEC-20260508-023 Final Update
+- Decision ID: `DEC-20260508-023`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 3 web UI implementation completion: route audit, UI hardening, and gate evidence refresh`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Executed a full contract-to-UI audit for Phase 3 dispatch/invoice/payment flows and captured explicit mapping evidence in PHASE_3_FRONTEND_ALIGNMENT.md. Hardened SalesDispatchesPage and SalesInvoicesPage against mixed list payload shapes. Hardened DispatchDetailPage and InvoiceDetailPage with null-safe record normalization and API error message surfacing. Fixed active notification deep-link defects by routing order and dispatch entity notifications to existing dashboard paths (/dashboard/sales/orders/:id and /dashboard/sales/dispatches/:id). Revalidated with frontend production build and phase3 smoke script.`
+  - Not Done: `No backend Phase 3 contract changes were made in this UI-focused pass.`
+- Impact/Risk:
+  - `Improves Phase 3 route reliability and reduces runtime shape/error regressions in list/detail pages.`
+  - `Notification route fix changes navigation target for order/dispatch entities; dependent tests (if any) must align.`
+- Cleanup Required:
+  - `Keep PHASE_3_FRONTEND_ALIGNMENT.md synchronized with future dispatch/invoice/payment UI contract changes.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 4/frontend UAT kickoff`
+- Owner Timestamp: `codex @ 2026-05-08T15:24:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+  - `Validation passed: bash backend/scripts/phase3-smoke.sh`
+
+---
+
+## DEC-20260508-024
+- Decision ID: `DEC-20260508-024`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Add dedicated warehouse pages for GRN and stock adjustment`
+- Decision: `Create two route-based pages for warehouse GRN and stock adjustment, reuse existing warehouse/inventory adapter contracts, and link them from warehouse detail.`
+- Rationale: `Current GRN/adjustment flows exist only as modals; user requires explicit pages for these operations.`
+- Alternatives Considered:
+  - `Keep modal-only implementation` rejected because it does not satisfy the requested navigation model.
+  - `Create brand-new backend routes` rejected because existing Phase 2 inventory routes already support required behavior.
+- Scope:
+  - `web/src/pages/dashboard/WarehouseDetailPage.tsx`
+  - `web/src/pages/dashboard/WarehouseGrnPage.tsx`
+  - `web/src/pages/dashboard/WarehouseStockAdjustmentPage.tsx`
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/DashboardLayout.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened and scope locked before code edits.`
+  - Not Done: `Page creation, route wiring, and validation are pending.`
+- Impact/Risk:
+  - `Low-medium: dashboard route additions and warehouse UI flow changes.`
+  - `Form logic duplication risk if old modal code remains active; must keep one primary path.`
+- Cleanup Required:
+  - `If partial, document unresolved paths and owner in final update.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T15:32:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build.`
+
+### DEC-20260508-024 Final Update
+- Decision ID: `DEC-20260508-024`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Add dedicated warehouse pages for GRN and stock adjustment`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created dedicated route pages for GRN and stock adjustment: /dashboard/dispatch/warehouses/:id/grn and /dashboard/dispatch/warehouses/:id/adjustment. Reused existing warehouse inventory adapter contracts (/warehouses/:id/stock/grn and /warehouses/:id/stock/adjust) with same validation and mutation payloads. Simplified WarehouseDetailPage by removing modal-driven GRN/adjustment implementation and linking to the new pages as the single primary path. Added breadcrumb support for both new routes.`
+  - Not Done: `No backend endpoint/schema changes were required in this task scope.`
+- Impact/Risk:
+  - `Warehouse stock operations now use route-based forms, improving direct navigation and page-level workflows.`
+  - `Any tests or user guides expecting modal-based GRN/adjustment entry need update to the new routes.`
+- Cleanup Required:
+  - `If product options/line-edit logic diverges between GRN and adjustment pages in future, extract shared warehouse stock-form utilities.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during warehouse UX refinements`
+- Owner Timestamp: `codex @ 2026-05-08T15:38:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-025
+- Decision ID: `DEC-20260508-025`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Close verification gap by restoring reproducible green validation for Phase 3 UI gate`
+- Decision: `Run targeted verification and apply only minimal UI fixes required to make both web build and Phase 3 smoke reproducibly pass; then update governance/gate evidence in this same decision.`
+- Rationale: `A prior verification showed smoke passing but web build failing, which blocks claiming end-to-end completion.`
+- Alternatives Considered:
+  - `Treat earlier pass note as sufficient` rejected because current workspace state must be reproducibly green.
+  - `Do broad refactor` rejected because this is a closure/verification task with minimal-change intent.
+- Scope:
+  - `web/src/pages/dashboard/WarehouseDetailPage.tsx`
+  - `web/src/pages/dashboard/WarehouseGrnPage.tsx`
+  - `web/src/pages/dashboard/WarehouseStockAdjustmentPage.tsx`
+  - `plan/phase-gates/PHASE_3_FRONTEND_ALIGNMENT.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before additional edits/validation.`
+  - Not Done: `Revalidation and any required fixes pending.`
+- Impact/Risk:
+  - `Low: intended as minimal closure fix + evidence refresh.`
+- Cleanup Required:
+  - `If partial, document exact failing path and owner in final update.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T15:47:27Z`
+- Follow-up Notes:
+  - `Validation targets: cd web && bun run build; bash backend/scripts/phase3-smoke.sh`
+
+### DEC-20260508-025 Final Update
+- Decision ID: `DEC-20260508-025`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Close verification gap by restoring reproducible green validation for Phase 3 UI gate`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Re-ran both gate validations in current workspace and confirmed green: cd web && bun run build passed; bash backend/scripts/phase3-smoke.sh passed. Verified no remaining asChild usage in warehouse dashboard pages that were previously associated with build errors.`
+  - Not Done: `No additional UI behavior changes were required in this closure pass.`
+- Impact/Risk:
+  - `Phase 3 closure evidence is now reproducible in current tree for required build + smoke commands.`
+  - `No backend/API contract changes in this pass.`
+- Cleanup Required:
+  - `Keep decision/gate evidence aligned with any future warehouse UI edits that could affect build stability.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model if new regressions appear`
+- Owner Timestamp: `codex @ 2026-05-08T15:48:10Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+  - `Validation passed: bash backend/scripts/phase3-smoke.sh`
+
+---
+
+## DEC-20260508-026
+- Decision ID: `DEC-20260508-026`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Ensure all created dashboard screens are reachable from dashboard routes/navigation`
+- Decision: `Mount all existing unmounted dashboard page components in App routes and expose entry points through sidebar sections/breadcrumbs without introducing parallel behavior paths.`
+- Rationale: `Several created screens exist as files but are not reachable in current dashboard routing/navigation, causing hidden functionality and dead UX paths.`
+- Alternatives Considered:
+  - `Keep file-only screens and require manual URL` rejected because user requested dashboard visibility.
+  - `Delete unused screens` rejected because request is to surface, not remove.
+- Scope:
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/DashboardLayout.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Route/nav/breadcrumb wiring and validation pending.`
+- Impact/Risk:
+  - `Medium: dashboard nav growth and route table expansion.`
+- Cleanup Required:
+  - `If partial, list unmounted pages and owner in final update.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T15:52:21Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-026 Final Update
+- Decision ID: `DEC-20260508-026`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Ensure all created dashboard screens are reachable from dashboard routes/navigation`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Mounted previously unexposed dashboard screens in App routing: planning/distribution screens, production screens, service assets/tickets, and org page. Replaced service assets redirect with real screen route. Added sidebar entries for Distribution, Production, Service Assets/Tickets, and Administration Organisation. Added breadcrumb mappings for newly mounted route families.`
+  - Not Done: `No backend/API contract changes were part of this task.`
+- Impact/Risk:
+  - `Improves discoverability and removes dead UI pages that previously existed only as source files.`
+  - `Sidebar size increased; permission model for some newly exposed pages remains unchanged (no new requiredPermission gates added in this pass).`
+- Cleanup Required:
+  - `If product wants stricter access control, add explicit permission keys for the newly surfaced nav items in a follow-up decision.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during dashboard IA/permissions refinement`
+- Owner Timestamp: `codex @ 2026-05-08T15:55:10Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-027
+- Decision ID: `DEC-20260508-027`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Remove legacy reused dashboard routes unsupported by new API adapter`
+- Decision: `Delete route exposure and dashboard navigation for legacy distribution/production/service/org screens that are not mapped in the new API adapter.`
+- Rationale: `These screens were reused from another frontend and currently point to endpoints absent from web/src/lib/api.ts, creating unsupported active paths.`
+- Alternatives Considered:
+  - `Keep routes hidden but mounted` rejected because unsupported paths would remain accessible via URL.
+  - `Implement missing adapter endpoints` rejected because user requested removal, not support expansion.
+- Scope:
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/DashboardLayout.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Route/nav removal and validation pending.`
+- Impact/Risk:
+  - `Medium: removes user-accessible screens and links from dashboard IA.`
+- Cleanup Required:
+  - `If partial, list remaining legacy routes and owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T15:57:30Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-027 Final Update
+- Decision ID: `DEC-20260508-027`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Remove legacy reused dashboard routes unsupported by new API adapter`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Generated pre-removal report confirming all requested paths were actively mounted in App routes and listed in dashboard navigation/breadcrumb logic. Confirmed these screens call legacy endpoints absent from web/src/lib/api.ts adapter routing. Removed all requested route mounts from App.tsx and removed corresponding sidebar/breadcrumb path entries from DashboardLayout.tsx.`
+  - Not Done: `Did not delete legacy page component files from disk in this pass; only removed active dashboard exposure paths per request.`
+- Impact/Risk:
+  - `Unsupported legacy screens are no longer reachable through dashboard routes/navigation.`
+  - `Legacy source files remain and can be deleted in a separate cleanup if desired.`
+- Cleanup Required:
+  - `Optional cleanup: delete unused dashboard page files (distribution/production/service-assets/tickets/org legacy pages) after confirming no future reuse plan.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during frontend cleanup pass`
+- Owner Timestamp: `codex @ 2026-05-08T16:00:10Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-028
+- Decision ID: `DEC-20260508-028`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Map DispatchPlanPage (/dashboard/dispatch/queue/:warehouseId) to supported new API contracts`
+- Decision: `Implement adapter-side compatibility endpoints for /planning/dispatch/:warehouseId/queue, /queue/refresh, and /queue/execute-selected using existing backend procedures instead of introducing new backend routes.`
+- Rationale: `DispatchPlanPage is still active, but it currently calls legacy planning endpoints that are absent in the new API router.`
+- Alternatives Considered:
+  - `Delete page/route` rejected because user asked to map this active page.
+  - `Add new backend planning routes` rejected because this request is frontend-adapter mapping and existing procedures are sufficient for now.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Adapter mapping patch + validation pending.`
+- Impact/Risk:
+  - `Medium: queue scoring/classification is adapter-derived and may differ from legacy planning semantics.`
+- Cleanup Required:
+  - `If partial, list unsupported queue behaviors and owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:06:40Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-028 Final Update
+- Decision ID: `DEC-20260508-028`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Map DispatchPlanPage (/dashboard/dispatch/queue/:warehouseId) to supported new API contracts`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added adapter mappings in web/src/lib/api.ts for legacy DispatchPlanPage endpoints using supported procedures: GET /planning/dispatch/:warehouseId/queue (derived from warehouses.getById + orders.list[approved/partially_dispatched] + inventory.stockList + products.list), POST /planning/dispatch/:warehouseId/queue/refresh (no-op refresh acknowledgement), POST /planning/dispatch/:warehouseId/queue/execute-selected (dispatches.create fan-out), and POST /dispatches/serials/usage (derived from dispatches.list serial scans).`
+  - Not Done: `Did not add new backend planning routes; kept scope in adapter compatibility layer only.`
+- Impact/Risk:
+  - `Dispatch queue behavior is now operational on new contracts, but queue ranking/scoring remains adapter-derived and may differ from legacy planning engine semantics.`
+- Cleanup Required:
+  - `If exact planning-scoring parity is required, implement dedicated backend planning endpoints in a future phase and retire this compatibility mapping.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during planning-module reintroduction`
+- Owner Timestamp: `codex @ 2026-05-08T16:09:40Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-029
+- Decision ID: `DEC-20260508-029`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Strengthen warehouse detail page as operational hub (GRN, stock adjustment, warehouse context)`
+- Decision: `Enhance WarehouseDetailPage with richer warehouse context and recent warehouse dispatch activity, and ensure /dispatches adapter honors warehouse filters used by this screen.`
+- Rationale: `User expects the warehouse page to cover core warehouse operations and context, not only a basic stock table.`
+- Alternatives Considered:
+  - `Keep current minimal page` rejected because it does not satisfy requested operational completeness.
+  - `Add new backend endpoints for GRN/adjustment history` rejected for this pass due scope/time; adapter-driven enrichment is sufficient now.
+- Scope:
+  - `web/src/pages/dashboard/WarehouseDetailPage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Warehouse detail enhancement + adapter filter fix + validation pending.`
+- Impact/Risk:
+  - `Low-medium: UI enhancement and adapter list filtering behavior change for dispatch list API path.`
+- Cleanup Required:
+  - `If partial, list missing warehouse operational sections and owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:08:20Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-029 Final Update
+- Decision ID: `DEC-20260508-029`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Strengthen warehouse detail page as operational hub (GRN, stock adjustment, warehouse context)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Enhanced WarehouseDetailPage to act as warehouse operations hub: retained direct GRN and stock-adjustment actions, expanded warehouse context (location/address/id/status/manager/createdAt), added KPI summary cards from stock aggregates, added stock search/filter, and added recent warehouse dispatch activity table linked to dispatch details. Updated adapter GET /dispatches mapping to honor warehouseId/deliveryStatus query filters so warehouse-scoped activity loads correctly.`
+  - Not Done: `No dedicated GRN/stock-adjustment history feed endpoint exists; recent activity section currently uses dispatch history only.`
+- Impact/Risk:
+  - `Improves operational usability of warehouse page without introducing new backend contracts.`
+  - `Queue/activity semantics remain adapter-derived where backend does not expose dedicated planning/history APIs.`
+- Cleanup Required:
+  - `If product requires GRN/adjustment history timeline on this page, add backend list endpoints for goods receipts and stock adjustments in a future scoped decision.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during inventory-history expansion`
+- Owner Timestamp: `codex @ 2026-05-08T16:12:20Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-030
+- Decision ID: `DEC-20260508-030`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make warehouse list items fully clickable to warehouse detail route`
+- Decision: `Use row-level click navigation on WarehousesPage table rows to route to /dashboard/dispatch/warehouses/:id.`
+- Rationale: `User requested full-list-item click behavior for faster navigation.`
+- Alternatives Considered:
+  - `Add separate View button only` rejected because request is full item clickability.
+- Scope:
+  - `web/src/pages/dashboard/WarehousesPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Navigation patch + validation pending.`
+- Impact/Risk:
+  - `Low: UI interaction-only change on warehouse list.`
+- Cleanup Required:
+  - `If partial, list remaining non-clickable rows and owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:10:58Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-030 Final Update
+- Decision ID: `DEC-20260508-030`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make warehouse list items fully clickable to warehouse detail route`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated WarehousesPage table rows to be fully clickable and navigate to /dashboard/dispatch/warehouses/:id. Added pointer/hover row affordance and row onClick navigation using useNavigate.`
+  - Not Done: `No changes to backend contracts or warehouse detail behavior in this task.`
+- Impact/Risk:
+  - `Low: interaction/navigation enhancement only.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T16:13:30Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-031
+- Decision ID: `DEC-20260508-031`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Convert warehouse GRN and stock adjustment from dedicated pages to popup workflows`
+- Decision: `Implement GRN and stock-adjustment dialogs inside WarehouseDetailPage and remove dedicated-page routing as primary behavior path.`
+- Rationale: `User requested popup-based interaction instead of full-page flows; architecture guardrail requires one primary implementation path.`
+- Alternatives Considered:
+  - `Keep both modal and page flows active` rejected to avoid conflicting behavior paths.
+- Scope:
+  - `web/src/pages/dashboard/WarehouseDetailPage.tsx`
+  - `web/src/App.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Modal implementation, route adjustment, and validation pending.`
+- Impact/Risk:
+  - `Medium: warehouse operations UX flow changes and moderate component complexity increase.`
+- Cleanup Required:
+  - `If partial, list residual dedicated-page behavior and owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:15:40Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-031 Final Update
+- Decision ID: `DEC-20260508-031`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Convert warehouse GRN and stock adjustment from dedicated pages to popup workflows`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented GRN and stock-adjustment dialogs directly in WarehouseDetailPage using existing adapter endpoints (/warehouses/:id/stock/grn and /warehouses/:id/stock/adjust), including product search/selection, input validation, submit flows, error display, and cache invalidation. Replaced header action navigation with modal triggers. Removed dedicated-page behavior by routing /dashboard/dispatch/warehouses/:id/grn and /dashboard/dispatch/warehouses/:id/adjustment to dashboard warehouses landing route. Removed now-unused page imports from App.tsx.`
+  - Not Done: `Legacy standalone page files remain in repository but are no longer active route paths.`
+- Impact/Risk:
+  - `Single primary warehouse operation path is now popup-based on detail screen, reducing context switching.`
+  - `Direct deep links to old GRN/adjustment routes now redirect to warehouses list.`
+- Cleanup Required:
+  - `Optional cleanup: delete unused WarehouseGrnPage.tsx and WarehouseStockAdjustmentPage.tsx files in a dedicated cleanup pass.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during web cleanup`
+- Owner Timestamp: `codex @ 2026-05-08T16:18:20Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-032
+- Decision ID: `DEC-20260508-032`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Remove dispatch assignment page and enforce outlet->warehouse queue routing`
+- Decision: `Delete assignment route/screen/nav path, add outlet warehouse assignment in active outlet management UI, and filter dispatch queue to include only orders whose outlet is assigned to the selected warehouse.`
+- Rationale: `User requested removal of assignment page and explicit outlet-bound queue routing behavior.`
+- Alternatives Considered:
+  - `Keep assignment page and patch endpoint` rejected by user request.
+  - `Allow unassigned outlets to appear in all queues` rejected because requirement is outlet-specific routing.
+- Scope:
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/DashboardLayout.tsx`
+  - `web/src/pages/dashboard/WarehouseAssignmentPage.tsx`
+  - `web/src/pages/dashboard/DispatchPlanPage.tsx`
+  - `web/src/pages/dashboard/OutletDetailPage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Route/screen removal, outlet assignment UI, queue filtering, and validation pending.`
+- Impact/Risk:
+  - `Medium: changes dispatch workflow entrypoints and queue inclusion semantics.`
+- Cleanup Required:
+  - `If partial, list remaining assignment paths and owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:29:40Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-032 Final Update
+- Decision ID: `DEC-20260508-032`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Remove dispatch assignment page and enforce outlet->warehouse queue routing`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Removed assignment path from active UI: deleted WarehouseAssignmentPage screen file, removed dispatch/assignment route from App.tsx, removed Dispatch sidebar Assignment nav item and breadcrumbs branch, updated distribution/warehouse-assignment redirect to /dashboard/dispatch/queue, and removed assignment action button from DispatchPlanPage. Implemented outlet assignment in active outlet management flow (OutletDetailPage) via Assigned Warehouse selector backed by /warehouses list and persisted through outlet profile save. Updated adapter patch mapping for /outlets/:id to pass warehouseId to outlets.update. Enforced queue routing by filtering /planning/dispatch/:warehouseId/queue items to orders whose outlet.warehouseId equals selected warehouse.`
+  - Not Done: `No backend schema/route additions were required; behavior implemented via existing outlet field + adapter queue filter.`
+- Impact/Risk:
+  - `Dispatch queue now excludes orders from outlets not assigned to that warehouse (including unassigned outlets).`
+  - `Removed assignment page means outlet assignment must be managed from outlet detail/profile flow.`
+- Cleanup Required:
+  - `If required, add dedicated handling/reporting for unassigned outlets so operations team can quickly identify orphaned orders.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during operations UX refinement`
+- Owner Timestamp: `codex @ 2026-05-08T16:32:40Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+  - `Incidental compile fix applied in App.tsx: removed imports/routes for missing MapPage and AttendancePage modules present as stale references in current tree.`
+
+---
+
+## DEC-20260508-033
+- Decision ID: `DEC-20260508-033`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make outlets list items open outlet detail page`
+- Decision: `Enable full row click navigation in OutletsPage table to /dashboard/outlets/:id and remove stale non-clickable placeholder cell text.`
+- Rationale: `User requested direct list-item navigation to outlet detail.`
+- Alternatives Considered:
+  - `Add separate View button only` rejected because request is list-item opening behavior.
+- Scope:
+  - `web/src/pages/dashboard/OutletsPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edit.`
+  - Not Done: `UI patch + validation pending.`
+- Impact/Risk:
+  - `Low: UI interaction behavior only.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:34:10Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-033 Final Update
+- Decision ID: `DEC-20260508-033`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make outlets list items open outlet detail page`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated OutletsPage table rows to be fully clickable with row-level navigation to /dashboard/outlets/:id. Removed stale extra table header/cell that claimed detail view was unavailable.`
+  - Not Done: `No backend changes required.`
+- Impact/Risk:
+  - `Low: navigation UX improvement only.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T16:35:10Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-034
+- Decision ID: `DEC-20260508-034`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix OutletDetailPage runtime crash from malformed adapter response shape`
+- Decision: `Add explicit adapter handlers for outlet sub-routes before generic /outlets/:id handler so list endpoints return arrays and do not get shadowed by object detail payloads.`
+- Rationale: `Current broad /outlets/* GET handler intercepts /outlets/:id/users (and similar subpaths), causing UI `.map` calls to execute on non-array objects.`
+- Alternatives Considered:
+  - `Guard every map call in UI` rejected as symptom-masking; adapter route matching is the root cause.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edit.`
+  - Not Done: `Adapter patch + validation pending.`
+- Impact/Risk:
+  - `Low: response-shape correctness for outlet detail sub-resources.`
+- Cleanup Required:
+  - `Review other broad prefix route handlers for similar shadowing risk.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:37:20Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-034 Final Update
+- Decision ID: `DEC-20260508-034`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix OutletDetailPage runtime crash from malformed adapter response shape`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added explicit GET adapter handlers for /outlets/:id/users, /outlets/:id/points/history, and /outlets/:id/points before the generic /outlets/:id catch-all. This prevents outlet sub-resource routes from being shadowed by object detail payload and restores array response shapes expected by OutletDetailPage list rendering.`
+  - Not Done: `No backend contract changes; this is adapter-layer shape/routing fix only.`
+- Impact/Risk:
+  - `Eliminates OutletDetailPage users-tab crash ((...).map is not a function) caused by incorrect response shape.`
+- Cleanup Required:
+  - `Audit other prefix-matched adapter routes for potential subpath shadowing.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during adapter hardening pass`
+- Owner Timestamp: `codex @ 2026-05-08T16:38:20Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-009
+- Decision ID: `DEC-20260508-009`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Hook accounts AR aging/outstanding/payments dashboard routes to backend-backed data`
+- Decision: `Implement missing `/accounts/ar-aging` and `/accounts/outstanding` API adapters in web API bridge using tRPC invoices/outlets data, preserving existing payment preview/create/list path behavior.`
+- Rationale: `The three dashboard routes depend on these account aggregate endpoints; without adapter handlers they fall back to unavailable REST routes and fail.`
+- Alternatives Considered:
+  - `Add new backend tRPC aggregate procedures first` rejected because existing frontend bridge pattern already computes aggregates locally from current tRPC routes.
+  - `Point pages directly to invoices/outlets calls` rejected because it duplicates transformation logic across pages instead of preserving single API adapter contract.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented `/accounts/outstanding` and `/accounts/ar-aging` adapter handlers in `web/src/lib/api.ts` using live `outlets.list` + `invoices.list` tRPC data. Kept existing `/accounts/outlets/:id/payments`, preview, and create paths unchanged so Outstanding and Payments routes remain consistent. Added age-bucket computation and totals shaping to match page contracts.`
+  - Not Done: `No backend route additions were made because current frontend adapter pattern already provides these aggregate responses.`
+- Impact/Risk:
+  - `Aging bucket logic depends on invoice date because due-date fields are not currently exposed.`
+  - `Large invoice volumes may increase adapter compute time due to list aggregation.`
+- Cleanup Required:
+  - `If backend later exposes dedicated aggregate endpoints, migrate adapter logic to direct passthrough and remove duplicate computation.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T16:48:00Z`
+- Follow-up Notes:
+  - `Validation: `cd web && npx tsc --noEmit` succeeded (no `typecheck` script exists).`
+
+---
+
+## DEC-20260508-035
+- Decision ID: `DEC-20260508-035`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix orders/invoice/dispatch linkage visibility on Sales Orders surfaces`
+- Decision: `Apply order-aware filtering in API adapter for invoices/dispatches and add invoice/dispatch visibility columns in SalesOrdersPage list.`
+- Rationale: `Orders surfaces request linked invoices/dispatches by orderId, but adapter currently ignores that filter in list handlers; list UI also lacks direct visibility for linked invoice/dispatched progress.`
+- Alternatives Considered:
+  - `Patch only OrderDetailPage` rejected because root cause is adapter filtering and it affects all callers.
+  - `Add new backend endpoints` rejected because current adapter can derive this with existing tRPC routes.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Adapter and orders-page rendering updates pending.`
+- Impact/Risk:
+  - `Low to medium: adapter list filtering and additional list queries can impact page load time.`
+- Cleanup Required:
+  - `If performance degrades, move linked invoice/dispatch summaries into backend order list projection.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T16:50:42Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-035 Final Update
+- Decision ID: `DEC-20260508-035`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix orders/invoice/dispatch linkage visibility on Sales Orders surfaces`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated adapter `/invoices` handler to honor `orderId`/`outletId`/`q` filters and `/dispatches` handler to honor `orderId` filtering. Enhanced `/orders` adapter mapping with linked invoice numbers and dispatch summary (`dispatchCount`, `dispatchedQty`). Updated SalesOrdersPage table to render Invoices and Dispatched columns with per-order linked invoice numbers and dispatched qty summary.`
+  - Not Done: `No backend tRPC contract changes were made; summary fields are adapter-derived.`
+- Impact/Risk:
+  - `Orders list now performs additional adapter-side list joins (orders + invoices + dispatches), which may increase load time with very large datasets.`
+- Cleanup Required:
+  - `If scaling issues appear, move linked summary projection into backend order list API.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T16:52:58Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-036
+- Decision ID: `DEC-20260508-036`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix outlet detail user-creation endpoint 404 and normalize outlet user role enums`
+- Decision: `Implement explicit adapter support for POST /outlets/:id/users and normalize owner/staff role enum mapping to backend roleId + userType payloads.`
+- Rationale: `Outlet detail UI currently posts to /outlets/:id/users but adapter has no POST handler, causing 404; enum values from UI ('owner'|'staff') also need stable translation to backend roles.`
+- Alternatives Considered:
+  - `Change OutletDetailPage to call /users directly` rejected because it bypasses existing outlet-scoped API contract used by this page.
+  - `Add new backend tRPC outlet-user procedures first` rejected as out-of-scope for immediate 404/enums fix and unnecessary for adapter compatibility patch.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Adapter POST/GET outlet-user mapping and enum normalization patch pending.`
+- Impact/Risk:
+  - `Low to medium: role-name inference may mis-map if deployments use custom role naming.`
+- Cleanup Required:
+  - `If outlet staff/owner needs strict backend modeling, add dedicated outlet-user linkage in backend schema/routes and remove adapter inference.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T17:05:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-036 Final Update
+- Decision ID: `DEC-20260508-036`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix outlet detail user-creation endpoint 404 and normalize outlet user role enums`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added explicit adapter POST handler for `/outlets/:id/users` in `web/src/lib/api.ts` so outlet user creation no longer falls through to 404. Added enum normalization for outlet role (`owner`/`staff`) and deterministic mapping to backend roleId + `userType: 'outlet'` for `users.create`. Updated GET `/outlets/:id/users` adapter response to return mapped outlet-user shape (including `outletRole`) from linked outlet user instead of hardcoded empty response.`
+  - Not Done: `No backend schema/routing change for true multi-user-per-outlet linkage; current backend model still has one direct outlet->user link.`
+- Impact/Risk:
+  - `Role inference depends on role names present in DB (owner/staff/admin/sales candidates).`
+- Cleanup Required:
+  - `For full multi-user outlet management, introduce explicit outlet-user relation table and dedicated backend routes; then remove adapter-level role inference.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `backend model owner in next schema iteration`
+- Owner Timestamp: `codex @ 2026-05-08T17:11:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-037
+- Decision ID: `DEC-20260508-037`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Block order creation when outlet has no assigned warehouse or assigned warehouse is inactive`
+- Decision: `Enforce validation in backend orders.create mutation and mirror it in frontend order-create flow for early UX feedback.`
+- Rationale: `Business rule must be guaranteed server-side and surfaced client-side before submit.`
+- Alternatives Considered:
+  - `Frontend-only checks` rejected because clients can bypass UI.
+  - `Backend-only checks` rejected because user experience degrades with late failure.
+- Scope:
+  - `backend/src/trpc/routes/orders.ts`
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Backend and frontend enforcement patch pending.`
+- Impact/Risk:
+  - `Low: this only blocks invalid order creation paths.`
+- Cleanup Required:
+  - `Keep rule mirrored if order-create flow is split into dedicated page/components later.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T17:22:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-037 Final Update
+- Decision ID: `DEC-20260508-037`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Block order creation when outlet has no assigned warehouse or assigned warehouse is inactive`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added backend enforcement in `backend/src/trpc/routes/orders.ts` create mutation: reject when outlet has no `warehouseId`, when assigned warehouse does not exist, or when assigned warehouse is inactive. Added frontend pre-checks in `web/src/pages/dashboard/SalesOrdersPage.tsx` order-create flow to block progression/submit with clear messages for unassigned/inactive warehouse states.`
+  - Not Done: `No additional backend API contracts were introduced; validation is implemented in existing create paths.`
+- Impact/Risk:
+  - `Low: invalid order creation paths are now explicitly rejected.`
+- Cleanup Required:
+  - `If order creation is moved to a new page/component, keep the same frontend pre-checks there for consistent UX.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T17:27:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+  - `Validation passed: cd backend && npx tsc --noEmit`
+
+---
+
+## DEC-20260508-038
+- Decision ID: `DEC-20260508-038`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Add warehouse selection to outlet creation and fix outlets.create 500 path`
+- Decision: `Extend outlet create UI payload with optional warehouseId and update adapter `/outlets` create mapping to pass warehouseId and avoid unique userId collisions by creating a dedicated outlet user when needed.`
+- Rationale: `Outlet creation currently lacks warehouse input and API mapping hardcodes `warehouseId: null`; it also reuses actorId as userId, which can violate unique outlet-user linkage and produce 500 errors.`
+- Alternatives Considered:
+  - `Frontend-only warehouse field` rejected because adapter currently discards warehouseId.
+  - `Keep actorId as userId` rejected because it is not safe for multiple outlets.
+- Scope:
+  - `web/src/pages/dashboard/OutletsPage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `UI + adapter fixes pending.`
+- Impact/Risk:
+  - `Medium: adapter-created outlet user credentials are system-generated unless dedicated onboarding flow exists.`
+- Cleanup Required:
+  - `Introduce explicit outlet owner user onboarding flow to replace generated user bootstrap in adapter.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T17:35:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-038 Final Update
+- Decision ID: `DEC-20260508-038`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Add warehouse selection to outlet creation and fix outlets.create 500 path`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added warehouse selection to outlet create modal in `web/src/pages/dashboard/OutletsPage.tsx`, loaded active warehouses for selection, and sent `warehouseId` in create payload. Updated adapter `/outlets` create handling in `web/src/lib/api.ts` to pass selected `warehouseId`, validate warehouse existence, and avoid unique outlet.userId collisions by creating a dedicated outlet user when current actor is already linked to an outlet.`
+  - Not Done: `Dedicated onboarding/reset flow for auto-created outlet user credentials was not introduced.`
+- Impact/Risk:
+  - `Auto-created outlet users use generated credentials until a full onboarding flow is added.`
+- Cleanup Required:
+  - `Add explicit outlet owner user provisioning UX and remove adapter-level generated credentials.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `backend/frontend auth owner`
+- Owner Timestamp: `codex @ 2026-05-08T17:41:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-039
+- Decision ID: `DEC-20260508-039`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Delete dashboard field assignments page and associated route wiring`
+- Decision: `Remove the Field Assignments page component file and delete all active route/navigation/breadcrumb references for /dashboard/field-assignments.`
+- Rationale: `User requested full removal of the page and associated file; keeping route wiring would leave a dead path and violate single-path guardrails.`
+- Alternatives Considered:
+  - `Hide nav item only` rejected because direct route access would remain active.
+  - `Redirect route to another page` rejected because request is explicit deletion, not remapping.
+- Scope:
+  - `web/src/pages/dashboard/FieldAssignmentsPage.tsx`
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/DashboardLayout.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Route/nav/breadcrumb removal and page file deletion pending.`
+- Impact/Risk:
+  - `Low: only removes an explicitly requested page path.`
+- Cleanup Required:
+  - `If external docs still reference /dashboard/field-assignments, update them in a separate cleanup task.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T17:39:10Z`
+- Follow-up Notes:
+  - `Validation target: rg -n "field-assignments|FieldAssignmentsPage" -S web/src`
+
+---
+
+## DEC-20260508-036
+- Decision ID: `DEC-20260508-036`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make order detail show linked invoices and dispatches from a single API path`
+- Decision: `Extend orders.getById response to include linked invoices and dispatch summaries, then consume those fields in OrderDetailPage instead of separate /invoices and /dispatches calls.`
+- Rationale: `Centralizing related records under order detail improves reliability and makes authorization easier to control in one endpoint.`
+- Alternatives Considered:
+  - `Keep separate frontend queries to /invoices and /dispatches` rejected due missing-data risk and split permission surface.
+  - `Add a brand-new /orders/:id/related endpoint` rejected as extra API surface when getById can include this data cleanly.
+- Scope:
+  - `backend/src/trpc/routes/orders.ts`
+  - `web/src/pages/dashboard/OrderDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Backend + frontend integration pending.`
+- Impact/Risk:
+  - `Low to medium: larger order detail payload due to linked data inclusion.`
+- Cleanup Required:
+  - `If response size becomes an issue, split to a dedicated related-records procedure with same auth policy.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T17:39:15Z`
+- Follow-up Notes:
+  - `Validation target: backend typecheck + web build`
+
+### DEC-20260508-039 Final Update
+- Decision ID: `DEC-20260508-039`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Delete dashboard field assignments page and associated route wiring`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Deleted `web/src/pages/dashboard/FieldAssignmentsPage.tsx`. Removed `FieldAssignmentsPage` import and `/dashboard/field-assignments` route from `web/src/App.tsx`. Removed "Visit Assignments" nav entry and its breadcrumb branch from `web/src/pages/dashboard/DashboardLayout.tsx`. Verified no active `field-assignments` or `FieldAssignmentsPage` references remain in `web/src`.`
+  - Not Done: `Planning/report documents containing historical references were not edited in this task.`
+- Impact/Risk:
+  - `Low: route and UI entrypoint are removed as requested.`
+- Cleanup Required:
+  - `Optional documentation cleanup for historical references in `plan/` files if desired.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `none`
+- Owner Timestamp: `codex @ 2026-05-08T17:39:42Z`
+- Follow-up Notes:
+  - `Validation passed: rg -n "field-assignments|FieldAssignmentsPage" -S web/src (no matches).`
+
+### DEC-20260508-036 Final Update
+- Decision ID: `DEC-20260508-036`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make order detail show linked invoices and dispatches from a single API path`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Extended backend `orders.getById` output to include `linkedInvoices` and `linkedDispatches`, derived from `Invoice` and `DispatchLine -> Dispatch` relations for the same order. Updated OrderDetailPage to render related invoice/dispatch lists directly from order detail payload instead of separate `/invoices` and `/dispatches` queries.`
+  - Not Done: `No new standalone related endpoint was added because getById extension covered scope with simpler permission path.`
+- Impact/Risk:
+  - `Order detail payload is larger, but avoids extra round trips and cross-endpoint consistency issues.`
+- Cleanup Required:
+  - `If payload growth becomes a concern, split related records into `orders.getRelated` with identical auth checks.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T17:40:41Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck; cd web && bun run build`
+
+---
+
+## DEC-20260508-037
+- Decision ID: `DEC-20260508-037`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Hook /dashboard overview page to richer real backend data`
+- Decision: `Replace the minimal overview query with a live aggregate query across existing endpoints (orders, invoices, dispatches, outlets, users) and render recent activity from live records.`
+- Rationale: `Current page is technically connected but too shallow; dashboard should reflect operational state from real records.`
+- Alternatives Considered:
+  - `Add a dedicated backend dashboard endpoint first` rejected for now to keep changes fast and use existing stable contracts.
+  - `Keep only current 3 counters` rejected because user requested full real-data hookup.
+- Scope:
+  - `web/src/pages/dashboard/OverviewPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edit.`
+  - Not Done: `Overview data/query/render updates pending.`
+- Impact/Risk:
+  - `Moderate: overview query fan-out can increase load time.`
+- Cleanup Required:
+  - `If load becomes slow, consolidate with a single backend summary endpoint.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T17:56:08Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-037 Final Update
+- Decision ID: `DEC-20260508-037`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Hook /dashboard overview page to richer real backend data`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Upgraded OverviewPage query to aggregate live data from `/outlets`, `/users`, `/orders`, `/invoices`, and `/dispatches`. Added real metrics for order pipeline and outstanding amount; added recent orders and recent dispatches sections linked to detail pages.`
+  - Not Done: `Did not add a dedicated backend summary endpoint in this change.`
+- Impact/Risk:
+  - `Higher query fan-out on dashboard load; may need backend aggregation endpoint for scale.`
+- Cleanup Required:
+  - `Introduce one backend dashboard summary endpoint if frontend load time regresses with data growth.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T17:57:21Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-040
+- Decision ID: `DEC-20260508-040`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Start Phase 4 API development for asset management only (exclude notifications)`
+- Decision: `Implement a new protected attachments router for pending upload creation, confirmation, and attachment retrieval/list flows; defer all notification APIs/events.`
+- Rationale: `User requested Phase 4 kickoff with notifications explicitly postponed, so scope is constrained to attachment asset lifecycle only.`
+- Alternatives Considered:
+  - `Implement attachments + notifications together` rejected because user explicitly asked to drop notifications for now.
+  - `Add attachment fields to existing module routers` rejected because a dedicated router keeps one implementation path and clearer ownership.
+- Scope:
+  - `backend/src/trpc/routes/attachments.ts`
+  - `backend/src/trpc/router.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Attachment router implementation and wiring pending.`
+- Impact/Risk:
+  - `Attachment upload URL generation will be mock/presigned-placeholder until storage provider integration is added.`
+  - `Entity validation will be limited to initial supported entity types in this phase slice.`
+- Cleanup Required:
+  - `Integrate real storage signing service and replace placeholder upload URL generation.`
+  - `Implement notification APIs/event emitters in a later Phase 4 decision.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T18:05:02Z`
+- Follow-up Notes:
+  - `Validation target: cd backend && bun run typecheck`
+
+### DEC-20260508-040 Final Update
+- Decision ID: `DEC-20260508-040`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Start Phase 4 API development for asset management only (exclude notifications)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented `attachments` backend router in `backend/src/trpc/routes/attachments.ts` and wired it into `backend/src/trpc/router.ts`. Added protected APIs for attachment asset lifecycle: `attachments.createPending` (pending upload + upload metadata), `attachments.confirm` (confirm pending upload), `attachments.list`, `attachments.getById`, and `attachments.remove`. Added entity validation for `order|dispatch|invoice|payment` attachment binding.`
+  - Not Done: `Notifications APIs/event emitters were intentionally not implemented in this task, per user instruction. Real storage-provider presigned URL signing is also deferred; current upload URL is placeholder-formatted for contract flow only.`
+- Impact/Risk:
+  - `Upload URL is placeholder (`uploads.local`) until storage integration is added; clients should treat it as contract scaffolding in this slice.`
+  - `Attachment entityType support is currently limited to order/dispatch/invoice/payment for controlled rollout.`
+- Cleanup Required:
+  - `Replace placeholder upload URL generation with real storage signing integration and verification callback.`
+  - `Implement deferred notifications module in separate Phase 4 decision when requested.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `next implementing model during Phase 4 storage/notifications continuation`
+- Owner Timestamp: `codex @ 2026-05-08T18:10:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck`
+
+---
+
+## DEC-20260508-038
+- Decision ID: `DEC-20260508-038`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix RolesPage query undefined crash for permissions catalog`
+- Decision: `Normalize `/roles` and `/roles/permissions` query payload handling in RolesPage and return explicit defaults to avoid undefined query results.`
+- Rationale: `Bridge responses are not consistently nested as `data.data`; defensive unwrapping in the page prevents runtime query-contract violations.`
+- Alternatives Considered:
+  - `Refactor all API bridge responses to a single shape` rejected for this hotfix because it has broader blast radius.
+  - `Disable query when response malformed` rejected because it hides data instead of recovering safely.
+- Scope:
+  - `web/src/pages/dashboard/RolesPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edit.`
+  - Not Done: `RolesPage query normalization pending.`
+- Impact/Risk:
+  - `Low: defensive read-path change only.`
+- Cleanup Required:
+  - `Later unify API bridge response envelope contracts across all endpoints.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T18:08:25Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260508-038 Final Update
+- Decision ID: `DEC-20260508-038`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix RolesPage query undefined crash for permissions catalog`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added payload unwrapping helper in RolesPage and updated `/roles` + `/roles/permissions` query functions to handle both direct and nested response shapes, with explicit fallbacks (`[]` and `{ permissions: [], meta: [] }`) so query functions never return undefined.`
+  - Not Done: `Did not normalize all API bridge endpoints to one envelope shape in this hotfix.`
+- Impact/Risk:
+  - `Eliminates TanStack Query undefined-data runtime error for roles permissions catalog loading.`
+- Cleanup Required:
+  - `Perform a broader API response-envelope consistency pass across the web bridge.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T18:09:07Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260508-039
+- Decision ID: `DEC-20260508-039`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Implement asset module coverage for catalog images (brands, categories, SKUs)`
+- Decision: `Extend attachment entity support to brand/category/sku and wire catalog API bridge to persist and read real images via images router for brand/category/product records.`
+- Rationale: `Catalog pages currently show image upload disabled and image fields are stubbed; implementing real image persistence path is required for asset module completion.`
+- Alternatives Considered:
+  - `Only extend attachments entity enum` rejected because UI/catalog image flows would remain non-functional.
+  - `Add separate new storage tables` rejected because schema already has `Image` model suitable for catalog assets.
+- Scope:
+  - `backend/src/trpc/routes/attachments.ts`
+  - `backend/src/trpc/routes/images.ts`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Router and bridge implementation pending.`
+- Impact/Risk:
+  - `Moderate: catalog image writes now mutate image rows and replace existing lists.`
+- Cleanup Required:
+  - `Replace placeholder uploads.local signing/public URLs with real object storage integration when storage module is implemented.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T18:12:10Z`
+- Follow-up Notes:
+  - `Validation target: backend typecheck + web build`
+
+### DEC-20260508-039 Final Update
+- Decision ID: `DEC-20260508-039`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Implement asset module coverage for catalog images (brands, categories, SKUs)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Extended attachments entity coverage with `brand`, `category`, and `sku` validation in attachments router. Added `images.remove` mutation to support image list replacement flows. Wired catalog bridge to read real image rows for brands/categories/SKUs and to persist image changes on create/update (`logoImage`, `icon`, `images[]`) by replacing target image sets through images router.`
+  - Not Done: `No real object-storage signing/public URL service was added; placeholder storage domain flow remains for pending upload contracts.`
+- Impact/Risk:
+  - `Catalog image updates now replace existing image sets for the target entity; concurrent edits may overwrite prior image ordering.`
+- Cleanup Required:
+  - `Add transactional batch image upsert API and real storage service integration to harden concurrent writes and upload lifecycle.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T18:14:37Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck; cd web && bun run build`
+
+---
+
+## DEC-20260509-001
+- Decision ID: `DEC-20260509-001`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Enable image upload on brand/category/SKU forms`
+- Decision: `Replace UI-level upload-disabled guards with active file upload handling on catalog pages by converting uploaded files to URI payloads consumed by existing catalog create/update flows.`
+- Rationale: `Pages currently block uploads despite backend image persistence support; enabling file handling unblocks asset creation flows immediately.`
+- Alternatives Considered:
+  - `Use attachments pending-upload flow directly` rejected for now because storage signing URL remains placeholder and not end-user reachable.
+  - `Require external image URL only` rejected because user requested upload on creation pages.
+- Scope:
+  - `web/src/pages/dashboard/CatalogBrandsPage.tsx`
+  - `web/src/pages/dashboard/CatalogCategoriesPage.tsx`
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `UI upload and submit payload updates pending.`
+- Impact/Risk:
+  - `Moderate: storing large data-URI images can increase payload size and page weight.`
+- Cleanup Required:
+  - `Switch to real object-storage upload flow once signing/public URL service is available.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-09T00:00:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260509-001 Final Update
+- Decision ID: `DEC-20260509-001`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Enable image upload on brand/category/SKU forms`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Enabled image upload controls and removed Phase-1 disabled guards on Brand and Category forms. Implemented file-to-data-URI conversion at submit so selected logo/icon files are persisted through existing catalog payloads. Added upload support on SKU form (multi-file picker), with preview/removal and automatic merge into SKU images payload.`
+  - Not Done: `Did not implement object-storage direct upload/signing flow in UI; current flow stores file content as URI string in image records.`
+- Impact/Risk:
+  - `Large images increase request payload size and can affect performance.`
+- Cleanup Required:
+  - `Move to signed object storage upload + CDN URLs; optionally add client-side resize/compression before submit.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T18:40:59Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260509-002
+- Decision ID: `DEC-20260509-002`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make SKU image upload UX identical to brand/category`
+- Decision: `Refactor SKU form image section to mirror brand/category upload pattern (preview tile + upload/change CTA + remove), while preserving SKU multi-image payload support.`
+- Rationale: `User confirmed brand/category flow works and requested identical SKU behavior.`
+- Alternatives Considered:
+  - `Keep current SKU textarea-first flow` rejected due UX inconsistency.
+- Scope:
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `SKU UI alignment patch pending.`
+- Impact/Risk:
+  - `Low: UI-only behavior alignment for image input.`
+- Cleanup Required:
+  - `None beyond planned storage-service migration already tracked.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-08T18:43:20Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260509-002 Final Update
+- Decision ID: `DEC-20260509-002`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Make SKU image upload UX identical to brand/category`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated SKU form image block to match brand/category UX with single preview tile, upload/change button, accepted-format hint, and remove action. Upload handler now reads selected file into URI and updates SKU image payload source accordingly.`
+  - Not Done: `Did not redesign SKU to fully remove legacy multi-image data model; UI now follows single-image interaction pattern.`
+- Impact/Risk:
+  - `Changing image on SKU form now replaces current image-input content with selected image URI.`
+- Cleanup Required:
+  - `If strict multi-image editing is required later, add dedicated gallery editor with ordered list controls.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-08T19:02:20Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260509-003
+- Decision ID: `DEC-20260509-003`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix SKU edit image upload failure and align behavior with brand/category`
+- Decision: `Stop parsing SKU image input by comma so data-URI uploads remain intact; parse by newline-only to match the brand/category single-image upload flow behavior.`
+- Rationale: `SKU upload converts files to data-URI (`data:image/...;base64,...`); comma-based splitting corrupts the URI and causes save failures, while brand/category pass a single unsplit URI string.`
+- Alternatives Considered:
+  - `Switch SKU UI to direct image URL only` rejected because user requested upload flow parity with brand/category.
+  - `Add base64-specific parser exceptions` rejected as unnecessary complexity for current single-image UX.
+- Scope:
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `SKU image parsing fix and validation pending.`
+- Impact/Risk:
+  - `Low: existing comma-separated manual image input for SKUs will no longer split into multiple entries automatically.`
+- Cleanup Required:
+  - `If multi-image manual input is still required, introduce explicit multi-image UI controls instead of overloaded free-text parsing.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-09T00:20:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260509-003 Final Update
+- Decision ID: `DEC-20260509-003`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix SKU edit image upload failure and align behavior with brand/category`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated SKU image parsing to newline-only in CatalogSkusPage so data-URI uploads are preserved end-to-end (no comma-splitting corruption). This makes SKU upload behavior consistent with brand/category single-image flow during edit/save.`
+  - Not Done: `Did not implement dedicated multi-image editor for SKU; current UX remains single-image oriented.`
+- Impact/Risk:
+  - `Manual comma-separated image entry in SKU form is no longer supported as implicit multi-image input.`
+- Cleanup Required:
+  - `If multi-image authoring is needed, add explicit gallery controls and ordered image editing UI.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-09T00:24:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260509-004
+- Decision ID: `DEC-20260509-004`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix Catalog SKUs page list handling for attached image values`
+- Decision: `Normalize SKU image arrays on the page to safely support attached image URIs, including recovery of legacy split data-URI fragments produced by prior comma-splitting behavior.`
+- Rationale: `The SKU list/view path can receive malformed image arrays from earlier writes where data URIs were split at commas; normalizing at read time keeps the page stable and displays attached images correctly.`
+- Alternatives Considered:
+  - `Run data migration only` rejected because UI still needs defensive handling for mixed/legacy records.
+  - `Ignore malformed entries` rejected because it hides valid attached images that can be recovered deterministically.
+- Scope:
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `SKU image normalization patch and validation pending.`
+- Impact/Risk:
+  - `Low: image list handling becomes stricter and may drop clearly invalid URL fragments.`
+- Cleanup Required:
+  - `Consider one-time backend cleanup/migration for malformed image rows created before parser fix.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-09T00:32:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260509-004 Final Update
+- Decision ID: `DEC-20260509-004`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix Catalog SKUs page list handling for attached image values`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added SKU image normalization on list fetch in CatalogSkusPage. The page now defensively normalizes image inputs and reconstructs legacy split data-URI pairs (`data:...;base64` + payload chunk) into valid single image URIs before render/edit flows.`
+  - Not Done: `No backend data migration was performed for malformed historical image rows.`
+- Impact/Risk:
+  - `Low: malformed fragments that cannot be safely reconstructed are left as-is and deduplicated by value.`
+- Cleanup Required:
+  - `Optionally run a one-time data cleanup to rewrite malformed SKU image rows in storage.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-09T00:35:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260509-005
+- Decision ID: `DEC-20260509-005`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix SKU page name/description rendering and edit prefill regressions`
+- Decision: `Add defensive SKU row normalization for list payloads and restore description prefill in edit flow.`
+- Rationale: `User reports SKU name/description still not showing; edit handler currently clears description, and list rows should tolerate partial/legacy payloads.`
+- Alternatives Considered:
+  - `Backend-only fix` rejected because immediate issue is in page binding and edit prefill behavior.
+- Scope:
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Normalization + edit prefill patch pending.`
+- Impact/Risk:
+  - `Low: presentation-layer defaults for existing SKU data.`
+- Cleanup Required:
+  - `None.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-09T00:44:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+### DEC-20260509-005 Final Update
+- Decision ID: `DEC-20260509-005`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Fix SKU page name/description rendering and edit prefill regressions`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added `normalizeSkuRow` in CatalogSkusPage query mapping to ensure stable fallback values for `name`, `displayName`, `skuCode`, and normalized `images`. Fixed edit flow to prefill existing description (`setDescription(sku.description ?? '')`) instead of clearing it.`
+  - Not Done: `No backend data mutation/migration was performed.`
+- Impact/Risk:
+  - `Low: fallback display values may show inferred text for malformed records rather than blanks.`
+- Cleanup Required:
+  - `None.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex`
+- Owner Timestamp: `codex @ 2026-05-09T00:47:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+
+---
+
+## DEC-20260509-005
+- Decision ID: `DEC-20260509-005`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Render attached SKU images properly in catalog SKU list and detail view`
+- Decision: `Add explicit thumbnail rendering for SKU images in the list table and image preview tiles in the SKU detail dialog, using normalized image values already computed on fetch.`
+- Rationale: `Attached images can be valid but appear missing because the list UI has no image column and detail UI shows URL text links only.`
+- Alternatives Considered:
+  - `Keep URL-only image presentation` rejected because it does not satisfy "showing up properly" for image attachments.
+- Scope:
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before edits.`
+  - Not Done: `Thumbnail and detail image rendering patch pending.`
+- Impact/Risk:
+  - `Low: UI-only display change for existing SKU image data.`
+- Cleanup Required:
+  - `None.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-09T00:42:00Z`
+- Follow-up Notes:
+  - `Validation target: cd web && bun run build`
+
+---
+
+## DEC-20260509-004
+- Decision ID: `DEC-20260509-004`
+- Model: `claude-code`
+- Branch/Commit: `master@b11298b`
+- Task: `Formalize BatteryOS architecture — add manufacturing, transfer, and optimizer modules to syrex-new-api`
+- Decision: `Add BatteryOS as three new module groups within the existing monorepo: (1) Manufacturing Core (RM, SKU/BOM builder, production logging), (2) Inter-Warehouse Transfers, (3) Optimizer Worker (separate Python/Fastify service on same VPS communicating via Redis). Full architecture locked in plan/BATTERYOS_ARCHITECTURE.md.`
+- Rationale: `Customer runs manufacturing and distribution in same company. Unified platform, shared auth/roles, single Postgres DB. Work order execution deferred — production side is a logging system in MVP. Optimizer outputs advisory SKU % distribution, not auto-released production plans.`
+- Alternatives Considered:
+  - `Separate BatteryOS application` rejected — same company, same login, unified roles; splitting creates auth duplication.
+  - `Full work order execution (stage tracking) in MVP` rejected — too complex for MVP; production logging is sufficient and immediately useful.
+  - `Auto-release production plans from optimizer` rejected — optimizer output is advisory only; humans approve and act on it.
+  - `In-process LP solver` rejected — CPU-intensive; separate worker from the start to avoid blocking the main API.
+  - `ML forecasting first` rejected — needs 6+ months of live data; LP/rules-based optimizer (Mode A) runs from day 1.
+- Scope:
+  - `plan/BATTERYOS_ARCHITECTURE.md` (new — locked architecture doc)
+  - `schema.prisma` (new models: MfgRmMaster, MfgRmStockLedger, MfgSku, MfgStageDefinition, MfgStageCapacity, MfgStageInput, MfgProductionLog, MfgProductionLogRm, WarehouseTransfer, WarehouseTransferLine, OptimizerRun, OptimizerRecommendation, MfgLogSequence, MfgTransferSequence)
+  - `backend/src/trpc/routes/mfg-rm.ts` (new)
+  - `backend/src/trpc/routes/mfg-skus.ts` (new)
+  - `backend/src/trpc/routes/mfg-production-log.ts` (new)
+  - `backend/src/trpc/routes/mfg-dashboard.ts` (new)
+  - `backend/src/trpc/routes/transfers.ts` (new)
+  - `backend/src/trpc/routes/optimizer.ts` (new — proxy to worker)
+  - `backend/src/trpc/router.ts` (add new namespaces)
+  - `backend/src/domain/manufacturing/backwardCalc.ts` (new — BOM traversal)
+  - `optimizer-worker/` (new service — Python FastAPI or Fastify, same VPS)
+- Status: `planned`
+- Completion Notes:
+  - Done: `Architecture document written and locked. Decision log entry created.`
+  - Not Done: `All implementation — Phases 4–10 pending.`
+- Impact/Risk:
+  - `14 new Prisma models — migration will be additive, no existing model changes.`
+  - `Optimizer worker adds Redis dependency to the stack.`
+  - `WarehouseTransfer touches WarehouseStock updates — must be transactional.`
+- Cleanup Required: `none at this stage`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `claude-code @ 2026-05-09T00:00:00Z`
+- Follow-up Notes:
+  - `Full architecture reference: plan/BATTERYOS_ARCHITECTURE.md`
+  - `Phase 4 (Manufacturing Catalogue) is the next implementation step.`
+  - `ML forecasting (Phase 10) is a stub interface only until 6+ months of live data exists.`
+
+---
+
+## DEC-20260509-006
+- Decision ID: `DEC-20260509-006`
+- Model: `claude-code`
+- Branch/Commit: `master@b11298b`
+- Task: `Phase 5 — RBAC enforcement, idempotency hardening, and phase gate`
+- Decision: `Convert all protected procedures from permissive (actor-only) to enforced RBAC using a perm() factory; add idempotency keys to dispatches.create and payments.create; harden dispatch qty and inventory stock guards; ship Phase 5 contract-freeze artifact and smoke coverage.`
+- Rationale: `All 16 domain routers currently allow any authenticated user to call any procedure. Phase 5 is the planned enforcement point per api_development_plan.md. Idempotency on dispatch/payment is explicitly called out in the plan decision checklist.`
+- Alternatives Considered:
+  - `Row-level security (RLS) in Postgres` rejected — application-layer RBAC is sufficient for this scale and keeps enforcement visible in code.
+  - `Per-route permission middleware (no factory)` rejected — creates inconsistent patterns and more boilerplate.
+  - `Eager permission loading in context.ts` rejected — adds DB cost to public procedures (auth.login etc.); lazy load in protectedProcedure is cleaner.
+- Scope:
+  - `backend/src/trpc/context.ts` (add permissions: string[] to TrpcContext)
+  - `backend/src/trpc/trpc.ts` (authMiddleware + perm() factory)
+  - `schema.prisma` (idempotencyKey on Dispatch + Payment)
+  - `backend/src/trpc/routes/brands.ts`
+  - `backend/src/trpc/routes/categories.ts`
+  - `backend/src/trpc/routes/products.ts`
+  - `backend/src/trpc/routes/images.ts`
+  - `backend/src/trpc/routes/users.ts`
+  - `backend/src/trpc/routes/invitations.ts`
+  - `backend/src/trpc/routes/roles.ts`
+  - `backend/src/trpc/routes/outlets.ts`
+  - `backend/src/trpc/routes/warehouses.ts`
+  - `backend/src/trpc/routes/inventory.ts`
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/routes/dispatches.ts`
+  - `backend/src/trpc/routes/invoices.ts`
+  - `backend/src/trpc/routes/payments.ts`
+  - `backend/src/trpc/routes/attachments.ts`
+  - `backend/scripts/dev-seed.ts`
+  - `plan/phase-gates/PHASE_5_CONTRACT_FREEZE.md`
+  - `plan/phase-gates/snapshots/phase5_*.json`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented authMiddleware in trpc.ts that loads user.role.permissions from DB on each protected request; added perm() factory that gates any procedure behind a specific permission string with wildcard "*" support for Admin; added permissions: string[] to TrpcContext; updated all 15 domain route files to use perm() instead of protectedProcedure; added idempotencyKey to Dispatch and OutletPayment schema models; added idempotencyKey to dispatch.create and payment.create input schemas with early-return deduplication logic; fixed inventory.createStockAdjustment negative-stock error code from CONFLICT to BAD_REQUEST; updated dev-seed.ts with canonical colon-format permissions and added Warehouse Manager role + user; wrote PHASE_5_CONTRACT_FREEZE.md with full permission matrix; wrote phase5-smoke.sh and phase5-smoke-client.ts with RBAC and idempotency assertions; regenerated Prisma client; verified typecheck 0 errors.`
+  - Not Done: `Live smoke execution against running DB requires bun run phase5-smoke.sh after environment is provisioned.`
+- Impact/Risk:
+  - `Breaking change for any caller that lacks permission strings — callers previously accessing any route now receive FORBIDDEN if role.permissions is insufficient.`
+  - `Dev-seed role permissions are updated to colon-format; existing seeded data will need db:prepare re-run.`
+- Cleanup Required:
+  - `If partial, list exact incomplete procedures, dead paths, and cleanup owner.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `claude-code during current execution`
+- Owner Timestamp: `claude-code @ 2026-05-09T00:00:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck (0 errors)`
+  - `Smoke script: bash backend/scripts/phase5-smoke.sh`
+  - `Contract freeze: plan/phase-gates/PHASE_5_CONTRACT_FREEZE.md`
+  - `Temp schema file backend/.tmp.phase5.schema.prisma can be cleaned up after next db:prepare run`
+
+---
+
+## DEC-20260509-007
+- Decision ID: `DEC-20260509-007`
+- Model: `claude-code`
+- Branch/Commit: `master`
+- Task: `Phase 5 — Web UI permission string migration (dot → colon format) + in-page RBAC guards`
+- Decision: `Migrate all frontend permission checks from dot-format (catalog.read) to colon-format (catalog:read) to match the Phase 5 backend; add in-page write-action guards to 7 key pages following the RolesPage pattern.`
+- Rationale: `The Phase 5 backend now stores and returns permissions as colon-separated strings. Every can() call in the frontend uses dot-format, which never matches the colon-format array returned by auth/me, making all non-admin guards silently broken. Admin still works because isAdmin bypasses can() via the * wildcard.`
+- Alternatives Considered:
+  - `Normalise format in useAuth.ts (convert colons to dots at read time)` rejected — creates a dual-format divergence; backend is the source of truth, UI must align.
+  - `Keep dot-format and add a format adapter` rejected — adds complexity for no benefit; one canonical format is cleaner.
+- Scope:
+  - `web/src/pages/dashboard/DashboardLayout.tsx` (22 nav requiredPermission values)
+  - `web/src/pages/dashboard/RolesPage.tsx` (3 can() calls + buildPermissionTree split char)
+  - `web/src/pages/dashboard/CatalogSkusPage.tsx` (2 can() calls)
+  - `web/src/pages/dashboard/CatalogBrandsPage.tsx` (add catalog:write guard)
+  - `web/src/pages/dashboard/CatalogCategoriesPage.tsx` (add catalog:write guard)
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx` (add orders:write guard)
+  - `web/src/pages/dashboard/OrderDetailPage.tsx` (add orders:manage / orders:approve guards)
+  - `web/src/pages/dashboard/WarehouseGrnPage.tsx` (add inventory:write guard)
+  - `web/src/pages/dashboard/WarehouseStockAdjustmentPage.tsx` (add inventory:write guard)
+  - `web/src/pages/dashboard/OutletsPage.tsx` (add outlets:write guard)
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Replaced all 22 dot-format requiredPermission strings in DashboardLayout.tsx navItems with colon-format equivalents; fixed can() calls in RolesPage.tsx (3 calls) and CatalogSkusPage.tsx (2 calls); fixed buildPermissionTree to split on ':' instead of '.'; added catalog:write guards to CatalogBrandsPage and CatalogCategoriesPage; added orders:write guard to SalesOrdersPage; added orders:approve guard to AccountsApprovalQueuePage; added inventory:write guards to WarehouseGrnPage and WarehouseStockAdjustmentPage; added outlets:write guard to OutletsPage. Build: 0 TypeScript errors.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Non-admin users whose permissions were silently broken will now see the correct nav items — this is a fix, not a regression.`
+  - `Pages that previously showed write buttons to all authenticated users will now hide them for roles lacking the permission.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `claude-code during current execution`
+- Owner Timestamp: `claude-code @ 2026-05-09T00:00:00Z`
+- Follow-up Notes:
+  - `field:read and field:write are future permission strings not yet enforced by the backend; these act as forward-compatible placeholders.`
+
+---
+
+## DEC-20260509-008
+- Decision ID: `DEC-20260509-008`
+- Model: `claude-code`
+- Branch/Commit: `master`
+- Task: `Phase 6 — Warehouse Manager Scoping: per-warehouse isolation for dispatches, inventory, and orders`
+- Decision: `Extend authMiddleware to load managedWarehouseId alongside permissions; enforce warehouse ownership in dispatches.create/list/markDelivered, inventory.createGoodsReceipt/createStockAdjustment/stockList, orders.list, and warehouses.list; expose managedWarehouseId in auth/me + login responses; add manager assignment UI to WarehouseDetailPage.`
+- Rationale: `Phase 5 RBAC grants dispatches:write at the resource level but gives no warehouse-level isolation. A Warehouse Manager must only dispatch from, receive goods into, and adjust stock in their assigned warehouse. The schema already supports this via Warehouse.managerId (unique FK). Enforcement belongs in the backend handlers, not the frontend.`
+- Alternatives Considered:
+  - `Row-level security (Postgres RLS)` rejected — application-layer checks are simpler and visible in code; RLS adds DB-level complexity.
+  - `Separate permission string per warehouse (e.g. dispatches:write:warehouseId)` rejected — dynamic permission strings are fragile and can't be stored in a role's flat permissions array cleanly.
+  - `Frontend-only scoping` rejected — backend must be the enforcement point; frontend filtering alone is not secure.
+- Scope:
+  - `backend/src/trpc/context.ts`
+  - `backend/src/trpc/trpc.ts`
+  - `backend/src/trpc/routes/dispatches.ts`
+  - `backend/src/trpc/routes/inventory.ts`
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/routes/warehouses.ts`
+  - `backend/src/trpc/routes/auth.ts`
+  - `web/src/hooks/useAuth.ts`
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/WarehouseDetailPage.tsx`
+  - `web/src/pages/dashboard/WarehousesPage.tsx`
+  - `web/src/pages/dashboard/SalesDispatchesPage.tsx`
+- Status: `completed`
+- Completion Notes:
+  - Done: `context.ts managedWarehouseId field; trpc.ts authMiddleware loads managedWarehouse.id; dispatches.ts create/list/markDelivered guards; inventory.ts createGoodsReceipt/createStockAdjustment/stockList guards; orders.ts outlet.warehouseId filter; warehouses.ts scoped list + manager include; auth.ts managedWarehouseId in me+login; useAuth.ts exposes managedWarehouseId; api.ts /auth/me and /auth/login threading + /warehouses/:id PATCH handler; WarehousesPage.tsx manager column + scoped banner + gated New Warehouse button; WarehouseDetailPage.tsx manager name/email + Assign/Remove manager UI (admin-only); bun run build passes (0 TS errors).`
+  - Not Done: `SalesDispatchesPage had no warehouse filter dropdown to remove — backend scoping alone is sufficient.`
+- Impact/Risk:
+  - `Breaking for any existing warehouse manager users who previously had unrestricted dispatch access — now scoped to their assigned warehouse.`
+  - `Admin users (wildcard *) are unaffected.`
+  - `A warehouse manager with no assigned warehouse gets FORBIDDEN on all write operations — intentional.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `claude-code @ 2026-05-09T00:00:00Z`
+- Follow-up Notes:
+  - `managedWarehouseId flows through: authMiddleware → TrpcContext → handler guards → auth/me response → useAuth hook → frontend UI decisions.`
+  - `Assign Manager modal in WarehouseDetailPage fetches users with role name "Warehouse Manager" and calls PATCH /warehouses/:id.`
+
+---
+
+## DEC-20260509-009
+- Decision ID: `DEC-20260509-009`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Plan reusable Flutter outlet-owner template with shared auth and query client foundations`
+- Decision: `Define a template-first Flutter architecture under plan/mobile with a strict single-path auth flow and centralized network/query layers that future Sales, Accounts, and Dispatch apps can reuse.`
+- Rationale: `Building one hardened template first reduces repeated auth/network bugs and keeps future app variants aligned to a single backend integration contract.`
+- Alternatives Considered:
+  - `Build Sales app directly first` rejected because it would couple foundational decisions to one module and increase rewrite cost for Accounts/Dispatch.
+  - `Create separate app foundations per module` rejected because it duplicates auth and API client behavior and causes drift.
+- Scope:
+  - `plan/mobile/OUTLET_OWNER_FLUTTER_TEMPLATE_PLAN.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created the Flutter template plan covering stack, module boundaries, auth lifecycle, query standards, and phased build order focused on template-first delivery.`
+  - Not Done: `Flutter project scaffolding and implementation are not started in this decision scope.`
+- Impact/Risk:
+  - `If backend auth contracts change, the plan must be updated before scaffold implementation starts.`
+  - `Package choices (Riverpod/go_router/dio) should be confirmed before code scaffold to avoid migration churn.`
+- Cleanup Required:
+  - `At implementation kickoff, create a new decision entry for scaffold creation and update it through final status.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during Flutter scaffold kickoff`
+- Owner Timestamp: `codex @ 2026-05-09T09:40:00Z`
+- Follow-up Notes:
+  - `This entry is planning-only and intentionally excludes runtime code changes.`
+
+---
+
+## DEC-20260509-010
+- Decision ID: `DEC-20260509-010`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Expand Flutter template planning docs with full architecture and mobile execution plans`
+- Decision: `Add detailed planning documentation split into (1) foundation architecture spec under plan/ and (2) phased mobile implementation plan under plan/mobile/.`
+- Rationale: `A short high-level note is insufficient for implementation handoff. The team needs explicit module contracts, sequencing, acceptance criteria, and risk controls before scaffold coding starts.`
+- Alternatives Considered:
+  - `Keep only the existing single brief plan doc` rejected because it does not define enough implementation detail.
+  - `Document only in decision log` rejected because execution artifacts should be discoverable as standalone plan documents.
+- Scope:
+  - `plan/FLUTTER_OUTLET_OWNER_TEMPLATE_ARCHITECTURE.md`
+  - `plan/mobile/MOBILE_IMPLEMENTATION_PLAN.md`
+  - `plan/mobile/OUTLET_OWNER_FLUTTER_TEMPLATE_PLAN.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision scope opened.`
+  - Not Done: `Detailed planning documents not yet added.`
+- Impact/Risk:
+  - `If package choices or backend contract assumptions are wrong, docs may require revision before implementation.`
+- Cleanup Required:
+  - `Update this decision entry to final status after docs are completed.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T09:52:00Z`
+- Follow-up Notes:
+  - `none`

@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "baseUrl": "http://127.0.0.1:3003",
+  "orderId": "60da0a38-78d1-4968-99c8-cadbaddd37a5",
+  "invoiceId": "3cbc8da8-7421-42ee-97f0-4dd9e07a7a34",
+  "dispatchId": "9a182578-2894-4f73-bbfb-85854464b41a",
+  "paymentId": "eb60ae24-2e61-43ef-997a-792b094f676e",
+  "generatedAt": "2026-05-08T16:23:08.586Z"
+}

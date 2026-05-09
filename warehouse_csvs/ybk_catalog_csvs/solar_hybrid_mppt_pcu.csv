@@ -1,0 +1,4 @@
+model,capacity_va,voltage_v,warranty_months,basic_price_inr,gst_percent,including_gst_inr,mrp_inr,points
+NER 3850,3500,24,36,17965,18,21199,36199,80
+NER 5500,5250,48,36,38304,18,45199,77199,80
+NER 11000,10000,96,36,75592,5,79372,152299,100

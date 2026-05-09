@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -73,7 +73,7 @@ function toInvitationView(invitation: {
 }
 
 export const invitationsRouter = createTRPCRouter({
-  create: protectedProcedure
+  create: perm("users:invite")
     .input(createInvitationSchema)
     .output(invitationViewSchema)
     .mutation(async ({ ctx, input }) => {
@@ -96,7 +96,7 @@ export const invitationsRouter = createTRPCRouter({
       return toInvitationView(invitation);
     }),
 
-  list: protectedProcedure
+  list: perm("users:invite")
     .input(listInvitationsInputSchema)
     .output(
       z.object({
@@ -124,7 +124,7 @@ export const invitationsRouter = createTRPCRouter({
       };
     }),
 
-  revoke: protectedProcedure
+  revoke: perm("users:invite")
     .input(z.object({ id: z.string().uuid() }))
     .output(invitationViewSchema)
     .mutation(async ({ ctx, input }) => {
@@ -142,7 +142,7 @@ export const invitationsRouter = createTRPCRouter({
       return toInvitationView(updated);
     }),
 
-  accept: protectedProcedure
+  accept: perm("users:invite")
     .input(z.object({ token: z.string().min(1) }))
     .output(invitationViewSchema)
     .mutation(async ({ ctx, input }) => {

@@ -1,0 +1,49 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "id": "60da0a38-78d1-4968-99c8-cadbaddd37a5",
+        "orderNumber": "SO-2026-000001",
+        "outletId": "82000000-0000-4000-8000-000000000001",
+        "createdById": "22000000-0000-4000-8000-000000000001",
+        "orderDate": "2026-05-08T01:00:00.000Z",
+        "deliveryAddress": "Phase3 Delivery Address",
+        "status": "partially_dispatched",
+        "priority": "high",
+        "totalValue": "12900",
+        "approvedById": "22000000-0000-4000-8000-000000000001",
+        "approvedAt": "2026-05-08T16:23:08.503Z",
+        "heldById": null,
+        "heldAt": null,
+        "holdNote": null,
+        "approvalNote": "Phase3 approval",
+        "rejectionReason": null,
+        "notes": "Phase3 order",
+        "createdAt": "2026-05-08T16:23:08.493Z",
+        "updatedAt": "2026-05-08T16:23:08.541Z",
+        "lines": [
+          {
+            "id": "46ccb9bf-71dc-47b5-8678-caa30e96fc27",
+            "productId": "62000000-0000-4000-8000-000000000001",
+            "sku": "PHASE3-SKU-001",
+            "qtyOrdered": 4,
+            "qtyDispatched": 2,
+            "unitPrice": "1500",
+            "lineTotal": "6000",
+            "status": "partially_dispatched"
+          },
+          {
+            "id": "85cb4fc7-9cd5-4e19-a134-d357924b9f2d",
+            "productId": "62000000-0000-4000-8000-000000000002",
+            "sku": "PHASE3-SKU-002",
+            "qtyOrdered": 3,
+            "qtyDispatched": 1,
+            "unitPrice": "2300",
+            "lineTotal": "6900",
+            "status": "partially_dispatched"
+          }
+        ]
+      }
+    }
+  }
+}

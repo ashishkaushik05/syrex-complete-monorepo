@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 
 const roleSchema = z.object({
@@ -31,12 +31,12 @@ function toRole(role: { id: string; name: string; permissions: string[]; isSyste
 }
 
 export const rolesRouter = createTRPCRouter({
-  list: protectedProcedure.output(z.array(roleSchema)).query(async ({ ctx }) => {
+  list: perm("roles:read").output(z.array(roleSchema)).query(async ({ ctx }) => {
     const roles = await ctx.prisma.role.findMany({ orderBy: [{ isSystem: "desc" }, { name: "asc" }] });
     return roles.map(toRole);
   }),
 
-  create: protectedProcedure.input(createRoleSchema).output(roleSchema).mutation(async ({ ctx, input }) => {
+  create: perm("roles:write").input(createRoleSchema).output(roleSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.role.findUnique({ where: { name: input.name } });
     if (existing) {
       throw apiError("CONFLICT", "Role name already exists");
@@ -45,7 +45,7 @@ export const rolesRouter = createTRPCRouter({
     return toRole(role);
   }),
 
-  update: protectedProcedure.input(updateRoleSchema).output(roleSchema).mutation(async ({ ctx, input }) => {
+  update: perm("roles:write").input(updateRoleSchema).output(roleSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.role.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "Role not found");

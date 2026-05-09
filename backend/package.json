@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run --watch src/index.ts",
+    "dev": "bun run db:prepare && bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
-    "prisma:generate": "prisma generate --schema ../schema.prisma"
+    "prisma:generate": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma generate --schema ../schema.prisma",
+    "db:reset": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate",
+    "db:seed": "bun run scripts/dev-seed.ts",
+    "db:prepare": "bun run db:reset && bun run db:seed"
   },
   "dependencies": {
     "@prisma/client": "^6.8.2",

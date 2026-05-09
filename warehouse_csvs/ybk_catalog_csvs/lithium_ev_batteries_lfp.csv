@@ -1,0 +1,4 @@
+model,ah,voltage_v,warranty_months,basic_price_inr,gst_percent,including_gst_inr,mrp_inr,points,product_type
+MC51218LFP,30,51.2,18,11499,18,13569,19599,80,battery
+MC60824LFP,30,60.2,18,14399,18,16991,24599,40,battery
+MC6AH LFP Charger,6,,24,4799,5,5039,8199,20,charger

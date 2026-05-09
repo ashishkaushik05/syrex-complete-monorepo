@@ -1,0 +1,4 @@
+brand,category,type_name,product_kind,model,sku_code,display_name,base_price_inr,warranty_months,mrp_inr,gst_percent,including_gst_inr,points,ah,capacity_va,voltage_v,warranty_label,warranty_primary_months,warranty_exchange_window_months,gst_amount_inr,warranty_note,source_file,source_row,is_active,sort_order,description
+YBK,Batteries,Lithium EV Battery LFP,battery,MC51218LFP,YBK-EVLFP-MC51218LFP,MC51218LFP,11499,18,19599,18,13569,80,30,,51.2,,,,,,lithium_ev_batteries_lfp.csv,2,true,10,
+YBK,Batteries,Lithium EV Battery LFP,battery,MC60824LFP,YBK-EVLFP-MC60824LFP,MC60824LFP,14399,18,24599,18,16991,40,30,,60.2,,,,,,lithium_ev_batteries_lfp.csv,3,true,20,
+YBK,Batteries,Lithium EV Battery LFP,charger,MC6AH LFP Charger,YBK-EVLFP-MC6AH-LFP-CHARGER,MC6AH LFP Charger,4799,24,8199,5,5039,20,6,,,,,,,,lithium_ev_batteries_lfp.csv,4,true,30,

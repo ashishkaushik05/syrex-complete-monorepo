@@ -1,0 +1,7 @@
+brand,category,type_name,product_kind,model,sku_code,display_name,base_price_inr,warranty_months,mrp_inr,gst_percent,including_gst_inr,points,ah,capacity_va,voltage_v,warranty_label,warranty_primary_months,warranty_exchange_window_months,gst_amount_inr,warranty_note,source_file,source_row,is_active,sort_order,description
+YBK,Inverters,Pure Sinewave Lithium Inverter,inverter,NER 1050,YBK-PSLI-NER-1050,NER 1050,3474,36,6999,18,4099,10,,850,12,,,,,,pure_sinewave_lithium_inverters.csv,2,true,10,
+YBK,Inverters,Pure Sinewave Lithium Inverter,inverter,NER 1350,YBK-PSLI-NER-1350,NER 1350,3813,36,7699,18,4499,10,,1200,12,,,,,,pure_sinewave_lithium_inverters.csv,3,true,20,
+YBK,Inverters,Pure Sinewave Lithium Inverter,inverter,NER 2350,YBK-PSLI-NER-2350,NER 2350,6143,36,12399,18,7249,20,,2000,24,,,,,,pure_sinewave_lithium_inverters.csv,4,true,30,
+YBK,Inverters,Pure Sinewave Lithium Inverter,inverter,NER 3850,YBK-PSLI-NER-3850,NER 3850,13431,36,26099,18,15849,20,,3500,24,,,,,,pure_sinewave_lithium_inverters.csv,5,true,40,
+YBK,Inverters,Pure Sinewave Lithium Inverter,inverter,NER 5500,YBK-PSLI-NER-5500,NER 5500,25253,36,50899,18,29799,40,,5000,48,,,,,,pure_sinewave_lithium_inverters.csv,6,true,50,
+YBK,Inverters,Pure Sinewave Lithium Inverter,inverter,NER 10000,YBK-PSLI-NER-10000,NER 10000,55508,36,11899,18,65499,80,,10000,96,,,,,,pure_sinewave_lithium_inverters.csv,7,true,60,

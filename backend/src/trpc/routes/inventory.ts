@@ -1,7 +1,11 @@
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+
+function isAdmin(ctx: { permissions: string[] }) {
+  return ctx.permissions.includes("*");
+}
 
 const stockItemSchema = z.object({
   id: z.string(),
@@ -47,7 +51,7 @@ function toStockItem(stock: {
 }
 
 export const inventoryRouter = createTRPCRouter({
-  stockList: protectedProcedure
+  stockList: perm("inventory:read")
     .input(
       paginationInputSchema.extend({
         warehouseId: z.string().uuid(),
@@ -58,9 +62,13 @@ export const inventoryRouter = createTRPCRouter({
     .output(z.object({ items: z.array(stockItemSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const offset = decodeCursor(input.cursor) ?? 0;
+      const effectiveWarehouseId = isAdmin(ctx) ? input.warehouseId : (ctx.managedWarehouseId ?? "");
+      if (!effectiveWarehouseId) {
+        return { items: [], nextCursor: null };
+      }
       const rows = await ctx.prisma.warehouseStock.findMany({
         where: {
-          warehouseId: input.warehouseId,
+          warehouseId: effectiveWarehouseId,
           productId: input.productId,
           OR: input.q
             ? [
@@ -91,7 +99,7 @@ export const inventoryRouter = createTRPCRouter({
       };
     }),
 
-  createGoodsReceipt: protectedProcedure
+  createGoodsReceipt: perm("inventory:write")
     .input(
       z.object({
         warehouseId: z.string().uuid(),
@@ -121,6 +129,11 @@ export const inventoryRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (!isAdmin(ctx)) {
+        if (!ctx.managedWarehouseId) throw apiError("FORBIDDEN", "No warehouse assigned to your account");
+        if (input.warehouseId !== ctx.managedWarehouseId) throw apiError("FORBIDDEN", "You can only receive goods into your assigned warehouse");
+      }
+
       await ctx.prisma.warehouse.findUniqueOrThrow({ where: { id: input.warehouseId } }).catch(() => {
         throw apiError("BAD_REQUEST", "Invalid warehouseId");
       });
@@ -203,7 +216,7 @@ export const inventoryRouter = createTRPCRouter({
       };
     }),
 
-  createStockAdjustment: protectedProcedure
+  createStockAdjustment: perm("inventory:write")
     .input(stockAdjustmentInputSchema)
     .output(
       z.object({
@@ -222,6 +235,11 @@ export const inventoryRouter = createTRPCRouter({
         throw apiError("UNAUTHORIZED", "Missing actor context");
       }
       const actorId = ctx.actor.id;
+
+      if (!isAdmin(ctx)) {
+        if (!ctx.managedWarehouseId) throw apiError("FORBIDDEN", "No warehouse assigned to your account");
+        if (input.warehouseId !== ctx.managedWarehouseId) throw apiError("FORBIDDEN", "You can only adjust stock in your assigned warehouse");
+      }
 
       await ctx.prisma.warehouse.findUniqueOrThrow({ where: { id: input.warehouseId } }).catch(() => {
         throw apiError("BAD_REQUEST", "Invalid warehouseId");
@@ -243,7 +261,7 @@ export const inventoryRouter = createTRPCRouter({
         const currentQty = existing?.currentQty ?? 0;
         const resultingQty = currentQty + input.adjustmentQty;
         if (resultingQty < 0) {
-          throw apiError("CONFLICT", "Stock adjustment would result in negative currentQty");
+          throw apiError("BAD_REQUEST", "Stock cannot go below zero");
         }
 
         if (!existing) {

@@ -1,7 +1,11 @@
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+
+function isAdmin(ctx: { permissions: string[] }) {
+  return ctx.permissions.includes("*");
+}
 
 const warehouseSchema = z.object({
   id: z.string(),
@@ -9,6 +13,7 @@ const warehouseSchema = z.object({
   location: z.string(),
   address: z.string().nullable(),
   managerId: z.string().nullable(),
+  manager: z.object({ id: z.string(), name: z.string(), email: z.string() }).nullable(),
   isActive: z.boolean(),
   createdAt: z.string()
 });
@@ -42,6 +47,7 @@ function toWarehouse(warehouse: {
   location: string;
   address: string | null;
   managerId: string | null;
+  manager: { id: string; name: string; email: string } | null;
   isActive: boolean;
   createdAt: Date;
 }) {
@@ -51,16 +57,19 @@ function toWarehouse(warehouse: {
   };
 }
 
+const managerInclude = { manager: { select: { id: true, name: true, email: true } } } as const;
+
 export const warehousesRouter = createTRPCRouter({
-  list: protectedProcedure
+  list: perm("warehouses:read")
     .input(listWarehousesInputSchema)
     .output(z.object({ items: z.array(warehouseSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const offset = decodeCursor(input.cursor) ?? 0;
+      const managerFilter = isAdmin(ctx) ? input.managerId : ctx.actor.id;
       const warehouses = await ctx.prisma.warehouse.findMany({
         where: {
           isActive: input.isActive,
-          managerId: input.managerId,
+          managerId: managerFilter,
           OR: input.q
             ? [
                 { name: { contains: input.q, mode: "insensitive" } },
@@ -68,6 +77,7 @@ export const warehousesRouter = createTRPCRouter({
               ]
             : undefined
         },
+        include: managerInclude,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: offset,
         take: input.limit + 1
@@ -80,18 +90,21 @@ export const warehousesRouter = createTRPCRouter({
       };
     }),
 
-  getById: protectedProcedure
+  getById: perm("warehouses:read")
     .input(z.object({ id: z.string().uuid() }))
     .output(warehouseSchema)
     .query(async ({ ctx, input }) => {
-      const warehouse = await ctx.prisma.warehouse.findUnique({ where: { id: input.id } });
+      const warehouse = await ctx.prisma.warehouse.findUnique({
+        where: { id: input.id },
+        include: managerInclude
+      });
       if (!warehouse) {
         throw apiError("NOT_FOUND", "Warehouse not found");
       }
       return toWarehouse(warehouse);
     }),
 
-  create: protectedProcedure
+  create: perm("warehouses:write")
     .input(createWarehouseSchema)
     .output(warehouseSchema)
     .mutation(async ({ ctx, input }) => {
@@ -108,12 +121,13 @@ export const warehousesRouter = createTRPCRouter({
           address: input.address,
           managerId: input.managerId,
           isActive: input.isActive
-        }
+        },
+        include: managerInclude
       });
       return toWarehouse(warehouse);
     }),
 
-  update: protectedProcedure
+  update: perm("warehouses:write")
     .input(updateWarehouseSchema)
     .output(warehouseSchema)
     .mutation(async ({ ctx, input }) => {
@@ -135,7 +149,8 @@ export const warehousesRouter = createTRPCRouter({
           address: input.address,
           managerId: input.managerId,
           isActive: input.isActive
-        }
+        },
+        include: managerInclude
       });
       return toWarehouse(warehouse);
     })

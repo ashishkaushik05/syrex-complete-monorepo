@@ -1,0 +1,12 @@
+model,ah,warranty_label,warranty_primary_months,warranty_exchange_window_months,basic_price_inr,gst_percent,gst_amount_inr,including_gst_inr,mrp_inr,warranty_note
+LA160TT36,140,36+24,36,24,10040,18,1810,11850,16799,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA175TT36,150,36+24,36,24,10590,18,1910,12500,17799,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA180TT36,160,36+24,36,24,11015,18,1985,13000,18599,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA200TT36,190,36+24,36,24,11865,18,2135,14000,20299,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA200TT48,190,48+24,48,24,12370,18,2230,14600,21199,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA220TT36,210,36+24,36,24,12290,18,2210,14500,21099,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA225TT48,210,48+24,48,24,12795,18,2305,15100,22299,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA220TT60,210,60+24,60,24,13980,18,2520,16500,24399,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA260TT48,260,48+48,48,48,14490,18,2610,17100,25499,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA260TT60,260,60+60,60,60,15565,18,2785,18250,27099,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"
+LA300TT60,300,60+60,60,60,17710,18,3190,20900,31899,"Exchange window after primary warranty is against old battery/scrap value; scrap value is variable"

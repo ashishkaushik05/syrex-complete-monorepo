@@ -1,0 +1,4 @@
+brand,category,type_name,product_kind,model,sku_code,display_name,base_price_inr,warranty_months,mrp_inr,gst_percent,including_gst_inr,points,ah,capacity_va,voltage_v,warranty_label,warranty_primary_months,warranty_exchange_window_months,gst_amount_inr,warranty_note,source_file,source_row,is_active,sort_order,description
+YBK,Inverters,Solar Hybrid MPPT PCU,pcu,NER 3850,YBK-PCU-NER-3850,NER 3850,17965,36,36199,18,21199,80,,3500,24,,,,,,solar_hybrid_mppt_pcu.csv,2,true,10,
+YBK,Inverters,Solar Hybrid MPPT PCU,pcu,NER 5500,YBK-PCU-NER-5500,NER 5500,38304,36,77199,18,45199,80,,5250,48,,,,,,solar_hybrid_mppt_pcu.csv,3,true,20,
+YBK,Inverters,Solar Hybrid MPPT PCU,pcu,NER 11000,YBK-PCU-NER-11000,NER 11000,75592,36,152299,5,79372,100,,10000,96,,,,,,solar_hybrid_mppt_pcu.csv,4,true,30,

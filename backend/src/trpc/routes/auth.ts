@@ -20,7 +20,8 @@ const sessionTokenSchema = z.object({
     email: z.string().email(),
     name: z.string(),
     userType: z.string(),
-    roleId: z.string()
+    roleId: z.string(),
+    managedWarehouseId: z.string().nullable()
   })
 });
 
@@ -50,7 +51,8 @@ export const authRouter = createTRPCRouter({
         passwordHash: true,
         userType: true,
         roleId: true,
-        isActive: true
+        isActive: true,
+        managedWarehouse: { select: { id: true } }
       }
     });
 
@@ -81,7 +83,8 @@ export const authRouter = createTRPCRouter({
         email: user.email,
         name: user.name,
         userType: user.userType,
-        roleId: user.roleId
+        roleId: user.roleId,
+        managedWarehouseId: user.managedWarehouse?.id ?? null
       }
     };
   }),
@@ -100,7 +103,15 @@ export const authRouter = createTRPCRouter({
 
     const user = await ctx.prisma.user.findUnique({
       where: { id: session.userId },
-      select: { id: true, email: true, name: true, userType: true, roleId: true, isActive: true }
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        userType: true,
+        roleId: true,
+        isActive: true,
+        managedWarehouse: { select: { id: true } }
+      }
     });
     if (!user || !user.isActive) {
       throw apiError("UNAUTHORIZED", "Invalid refresh context");
@@ -120,7 +131,14 @@ export const authRouter = createTRPCRouter({
       accessToken: `access_${tokenPrefix()}`,
       refreshToken: rotatedRefreshToken,
       expiresIn: 900,
-      user
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        userType: user.userType,
+        roleId: user.roleId,
+        managedWarehouseId: user.managedWarehouse?.id ?? null
+      }
     };
   }),
 
@@ -143,7 +161,8 @@ export const authRouter = createTRPCRouter({
         name: z.string(),
         userType: z.string(),
         roleId: z.string(),
-        isActive: z.boolean()
+        isActive: z.boolean(),
+        managedWarehouseId: z.string().nullable()
       })
     )
     .query(async ({ ctx }) => {
@@ -153,11 +172,27 @@ export const authRouter = createTRPCRouter({
       }
       const user = await ctx.prisma.user.findUnique({
         where: { id: actorId },
-        select: { id: true, email: true, name: true, userType: true, roleId: true, isActive: true }
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          userType: true,
+          roleId: true,
+          isActive: true,
+          managedWarehouse: { select: { id: true } }
+        }
       });
       if (!user) {
         throw apiError("NOT_FOUND", "User not found");
       }
-      return user;
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        userType: user.userType,
+        roleId: user.roleId,
+        isActive: user.isActive,
+        managedWarehouseId: user.managedWarehouse?.id ?? null
+      };
     })
 });

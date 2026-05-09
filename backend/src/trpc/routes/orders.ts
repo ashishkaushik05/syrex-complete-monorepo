@@ -1,6 +1,6 @@
 import { OrderStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -44,6 +44,31 @@ const orderSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   lines: z.array(orderLineSchema)
+});
+
+const orderLinkedInvoiceSchema = z.object({
+  id: z.string(),
+  invoiceNumber: z.string(),
+  invoiceDate: z.string(),
+  total: z.string(),
+  amountPaid: z.string(),
+  amountDue: z.string(),
+  createdAt: z.string()
+});
+
+const orderLinkedDispatchSchema = z.object({
+  id: z.string(),
+  dispatchDate: z.string(),
+  deliveryStatus: z.string(),
+  lrNumber: z.string().nullable(),
+  transporterName: z.string(),
+  vehicleNumber: z.string(),
+  createdAt: z.string()
+});
+
+const orderDetailSchema = orderSchema.extend({
+  linkedInvoices: z.array(orderLinkedInvoiceSchema),
+  linkedDispatches: z.array(orderLinkedDispatchSchema)
 });
 
 const orderLineInputSchema = z.object({
@@ -161,8 +186,19 @@ async function nextOrderNumber(tx: Prisma.TransactionClient, now: Date) {
   return `SO-${year}-${String(row.lastSequence).padStart(6, "0")}`;
 }
 
+async function nextInvoiceNumber(tx: Prisma.TransactionClient, now: Date) {
+  const year = now.getUTCFullYear();
+  const row = await tx.invoiceSequence.upsert({
+    where: { year },
+    create: { year, lastSequence: 1 },
+    update: { lastSequence: { increment: 1 } },
+    select: { lastSequence: true }
+  });
+  return `INV-${year}-${String(row.lastSequence).padStart(6, "0")}`;
+}
+
 export const ordersRouter = createTRPCRouter({
-  list: protectedProcedure
+  list: perm("orders:read")
     .input(
       paginationInputSchema.extend({
         outletId: z.string().uuid().optional(),
@@ -188,8 +224,15 @@ export const ordersRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       const offset = decodeCursor(input.cursor) ?? 0;
+      const isAdmin = ctx.permissions.includes("*");
+      const warehouseFilter = isAdmin
+        ? {}
+        : ctx.managedWarehouseId
+          ? { outlet: { warehouseId: ctx.managedWarehouseId } }
+          : { id: "____no_match____" };
       const rows = await ctx.prisma.saleOrder.findMany({
         where: {
+          ...warehouseFilter,
           outletId: input.outletId,
           status: input.status,
           OR: input.q
@@ -217,21 +260,87 @@ export const ordersRouter = createTRPCRouter({
       };
     }),
 
-  getById: protectedProcedure
+  getById: perm("orders:read")
     .input(z.object({ id: z.string().uuid() }))
-    .output(orderSchema)
+    .output(orderDetailSchema)
     .query(async ({ ctx, input }) => {
       const order = await ctx.prisma.saleOrder.findUnique({
         where: { id: input.id },
-        include: { lines: true }
+        include: {
+          lines: {
+            include: {
+              dispatchLines: {
+                include: {
+                  dispatch: true
+                }
+              }
+            }
+          },
+          invoice: true
+        }
       });
       if (!order) {
         throw apiError("NOT_FOUND", "Order not found");
       }
-      return serializeOrder(order);
+
+      const dispatchMap = new Map<
+        string,
+        {
+          id: string;
+          dispatchDate: string;
+          deliveryStatus: string;
+          lrNumber: string | null;
+          transporterName: string;
+          vehicleNumber: string;
+          createdAt: string;
+        }
+      >();
+
+      for (const line of order.lines) {
+        for (const dispatchLine of line.dispatchLines) {
+          const dispatch = dispatchLine.dispatch;
+          if (!dispatchMap.has(dispatch.id)) {
+            dispatchMap.set(dispatch.id, {
+              id: dispatch.id,
+              dispatchDate: dispatch.dispatchDate.toISOString(),
+              deliveryStatus: dispatch.deliveryStatus,
+              lrNumber: dispatch.lrNumber,
+              transporterName: dispatch.transporterName,
+              vehicleNumber: dispatch.vehicleNumber,
+              createdAt: dispatch.createdAt.toISOString()
+            });
+          }
+        }
+      }
+
+      const linkedInvoices = order.invoice
+        ? [
+            {
+              id: order.invoice.id,
+              invoiceNumber: order.invoice.invoiceNumber,
+              invoiceDate: order.invoice.invoiceDate.toISOString(),
+              total: order.invoice.total.toString(),
+              amountPaid: order.invoice.amountPaid.toString(),
+              amountDue: order.invoice.amountDue.toString(),
+              createdAt: order.invoice.createdAt.toISOString()
+            }
+          ]
+        : [];
+
+      const linkedDispatches = Array.from(dispatchMap.values()).sort((a, b) => {
+        const timeDiff = new Date(b.dispatchDate).getTime() - new Date(a.dispatchDate).getTime();
+        if (timeDiff !== 0) return timeDiff;
+        return b.id.localeCompare(a.id);
+      });
+
+      return {
+        ...serializeOrder(order),
+        linkedInvoices,
+        linkedDispatches
+      };
     }),
 
-  create: protectedProcedure
+  create: perm("orders:write")
     .input(
       z.object({
         outletId: z.string().uuid(),
@@ -247,6 +356,20 @@ export const ordersRouter = createTRPCRouter({
       const outlet = await ctx.prisma.outlet.findUnique({ where: { id: input.outletId } });
       if (!outlet) {
         throw apiError("BAD_REQUEST", "Invalid outletId");
+      }
+      if (!outlet.warehouseId) {
+        throw apiError("BAD_REQUEST", "Outlet has no assigned warehouse");
+      }
+
+      const warehouse = await ctx.prisma.warehouse.findUnique({
+        where: { id: outlet.warehouseId },
+        select: { id: true, isActive: true }
+      });
+      if (!warehouse) {
+        throw apiError("BAD_REQUEST", "Assigned warehouse not found");
+      }
+      if (!warehouse.isActive) {
+        throw apiError("CONFLICT", "Assigned warehouse is inactive");
       }
 
       const productIds = [...new Set(input.lines.map((line) => line.productId))];
@@ -304,7 +427,7 @@ export const ordersRouter = createTRPCRouter({
       return serializeOrder(created);
     }),
 
-  transition: protectedProcedure
+  transition: perm("orders:manage")
     .input(
       z.object({
         id: z.string().uuid(),
@@ -314,8 +437,8 @@ export const ordersRouter = createTRPCRouter({
     )
     .output(orderSchema)
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.actor.id) {
-        throw apiError("UNAUTHORIZED", "Missing actor context");
+      if (input.action === "approve" && !ctx.permissions.includes("*") && !ctx.permissions.includes("orders:approve")) {
+        throw apiError("FORBIDDEN", "Requires: orders:approve");
       }
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
@@ -396,13 +519,58 @@ export const ordersRouter = createTRPCRouter({
           }
         }
 
-        return tx.saleOrder.update({
+        const updatedOrder = await tx.saleOrder.update({
           where: { id: input.id },
           data,
           include: {
             lines: true
           }
         });
+
+        if (input.action === "approve") {
+          const existingInvoice = await tx.invoice.findUnique({
+            where: { orderId: updatedOrder.id }
+          });
+
+          if (!existingInvoice) {
+            const invoiceNumber = await nextInvoiceNumber(tx, now);
+            await tx.invoice.create({
+              data: {
+                invoiceNumber,
+                orderId: updatedOrder.id,
+                outletId: updatedOrder.outletId,
+                invoiceDate: now,
+                subtotal: updatedOrder.totalValue,
+                total: updatedOrder.totalValue,
+                amountPaid: new Prisma.Decimal(0),
+                amountDue: updatedOrder.totalValue,
+                lines: {
+                  create: updatedOrder.lines.map((line) => ({
+                    productId: line.productId,
+                    sku: line.sku,
+                    qty: line.qtyOrdered,
+                    unitPrice: line.unitPrice,
+                    lineTotal: line.lineTotal
+                  }))
+                }
+              }
+            });
+
+            const outstanding = await tx.invoice.aggregate({
+              where: { outletId: updatedOrder.outletId },
+              _sum: { amountDue: true }
+            });
+
+            await tx.outlet.update({
+              where: { id: updatedOrder.outletId },
+              data: {
+                outstandingBalance: outstanding._sum.amountDue ?? new Prisma.Decimal(0)
+              }
+            });
+          }
+        }
+
+        return updatedOrder;
       });
 
       return serializeOrder(updated);

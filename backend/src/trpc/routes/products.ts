@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -98,7 +98,7 @@ function toProduct(product: {
 }
 
 export const productsRouter = createTRPCRouter({
-  list: protectedProcedure
+  list: perm("catalog:read")
     .input(listProductsInputSchema)
     .output(z.object({ items: z.array(productSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
@@ -127,7 +127,7 @@ export const productsRouter = createTRPCRouter({
       };
     }),
 
-  getById: protectedProcedure
+  getById: perm("catalog:read")
     .input(z.object({ id: z.string().uuid() }))
     .output(productSchema)
     .query(async ({ ctx, input }) => {
@@ -138,7 +138,7 @@ export const productsRouter = createTRPCRouter({
       return toProduct(product);
     }),
 
-  create: protectedProcedure.input(createProductSchema).output(productSchema).mutation(async ({ ctx, input }) => {
+  create: perm("catalog:write").input(createProductSchema).output(productSchema).mutation(async ({ ctx, input }) => {
     const category = await ctx.prisma.category.findUnique({ where: { id: input.categoryId } });
     if (!category) {
       throw apiError("BAD_REQUEST", "Invalid categoryId");
@@ -164,7 +164,7 @@ export const productsRouter = createTRPCRouter({
     return toProduct(product);
   }),
 
-  update: protectedProcedure.input(updateProductSchema).output(productSchema).mutation(async ({ ctx, input }) => {
+  update: perm("catalog:write").input(updateProductSchema).output(productSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.product.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "Product not found");

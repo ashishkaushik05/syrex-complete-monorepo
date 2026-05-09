@@ -1,0 +1,4 @@
+brand,category,type_name,product_kind,model,sku_code,display_name,base_price_inr,warranty_months,mrp_inr,gst_percent,including_gst_inr,points,ah,capacity_va,voltage_v,warranty_label,warranty_primary_months,warranty_exchange_window_months,gst_amount_inr,warranty_note,source_file,source_row,is_active,sort_order,description
+YBK,Batteries,Lithium Inverter Battery,battery,12660,YBK-LIB-12660,12660,11899,60,22499,18,14041,30,100,,12,,,,,,lithium_inverter_batteries.csv,2,true,10,
+YBK,Batteries,Lithium Inverter Battery,battery,25660,YBK-LIB-25660,25660,22399,60,42299,18,26431,60,100,,24,,,,,,lithium_inverter_batteries.csv,3,true,20,
+YBK,Batteries,Lithium Inverter Battery,battery,51248,YBK-LIB-51248,51248,43199,60,81599,18,50975,100,100,,48,,,,,,lithium_inverter_batteries.csv,4,true,30,

@@ -1,0 +1,3 @@
+model,ah,voltage_v,warranty_months,basic_price_inr,gst_percent,including_gst_inr,mrp_inr,points,product_type
+SY-SLFP100,100,51.2,36,33399,18,39411,57099,100,battery
+ER20AH CHARGER,20,,24,9999,5,10499,17099,20,charger

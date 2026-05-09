@@ -1,0 +1,3 @@
+brand,category,type_name,product_kind,model,sku_code,display_name,base_price_inr,warranty_months,mrp_inr,gst_percent,including_gst_inr,points,ah,capacity_va,voltage_v,warranty_label,warranty_primary_months,warranty_exchange_window_months,gst_amount_inr,warranty_note,source_file,source_row,is_active,sort_order,description
+YBK,Batteries,Lithium EV Battery Shakti,battery,SY-SLFP100,YBK-EVSHAKTI-SY-SLFP100,SY-SLFP100,33399,36,57099,18,39411,100,100,,51.2,,,,,,lithium_ev_batteries_shakti.csv,2,true,10,
+YBK,Batteries,Lithium EV Battery Shakti,charger,ER20AH CHARGER,YBK-EVSHAKTI-ER20AH-CHARGER,ER20AH CHARGER,9999,24,17099,5,10499,20,20,,,,,,,,lithium_ev_batteries_shakti.csv,3,true,20,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -64,7 +64,7 @@ async function hashPassword(password: string) {
 }
 
 export const usersRouter = createTRPCRouter({
-  list: protectedProcedure
+  list: perm("users:read")
     .input(listUsersInputSchema)
     .output(
       z.object({
@@ -108,7 +108,7 @@ export const usersRouter = createTRPCRouter({
       };
     }),
 
-  getById: protectedProcedure
+  getById: perm("users:read")
     .input(z.object({ id: z.string().uuid() }))
     .output(userSchema)
     .query(async ({ ctx, input }) => {
@@ -132,7 +132,7 @@ export const usersRouter = createTRPCRouter({
       return toUser(user);
     }),
 
-  create: protectedProcedure.input(createUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
+  create: perm("users:write").input(createUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
     const role = await ctx.prisma.role.findUnique({ where: { id: input.roleId } });
     if (!role) {
       throw apiError("BAD_REQUEST", "Invalid roleId");
@@ -167,7 +167,7 @@ export const usersRouter = createTRPCRouter({
     return toUser(user);
   }),
 
-  update: protectedProcedure.input(updateUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
+  update: perm("users:write").input(updateUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.user.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "User not found");

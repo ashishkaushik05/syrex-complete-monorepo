@@ -18,16 +18,46 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const createTRPCRouter = t.router;
 export const publicProcedure = t.procedure;
-export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
+
+const authMiddleware = t.middleware(async ({ ctx, next }) => {
   if (!ctx.actor.id) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Missing actor context"
     });
   }
+  const user = await ctx.prisma.user.findUnique({
+    where: { id: ctx.actor.id },
+    include: {
+      role: { select: { permissions: true } },
+      managedWarehouse: { select: { id: true } }
+    }
+  });
+  if (!user) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Actor not found"
+    });
+  }
   return next({
     ctx: {
-      ...ctx
+      ...ctx,
+      permissions: user.role.permissions,
+      managedWarehouseId: user.managedWarehouse?.id ?? null
     }
   });
 });
+
+export const protectedProcedure = t.procedure.use(authMiddleware);
+
+export const perm = (permission: string) =>
+  protectedProcedure.use(async ({ ctx, next }) => {
+    const perms = ctx.permissions;
+    if (!perms.includes("*") && !perms.includes(permission)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Requires: ${permission}`
+      });
+    }
+    return next({ ctx });
+  });

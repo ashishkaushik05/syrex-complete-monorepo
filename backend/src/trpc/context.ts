@@ -10,6 +10,8 @@ export type TrpcContext = {
   requestId: string;
   actor: RequestActor;
   prisma: typeof prisma;
+  permissions: string[];
+  managedWarehouseId: string | null;
 };
 
 function readHeader(c: Context, key: string) {
@@ -23,6 +25,8 @@ export function createRequestContext(c: Context): TrpcContext {
       id: readHeader(c, "x-actor-id"),
       orgId: readHeader(c, "x-org-id")
     },
-    prisma
+    prisma,
+    permissions: [],
+    managedWarehouseId: null
   };
 }
