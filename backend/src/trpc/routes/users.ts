@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { Prisma } from "@prisma/client";
 
 const userTypeSchema = z.enum(["internal", "outlet"]);
 
@@ -33,6 +34,11 @@ const updateUserSchema = z.object({
   name: z.string().min(1).optional(),
   roleId: z.string().uuid().optional(),
   isActive: z.boolean().optional()
+});
+
+const changePasswordSchema = z.object({
+  id: z.string().uuid(),
+  password: z.string().min(8)
 });
 
 const listUsersInputSchema = paginationInputSchema.extend({
@@ -200,5 +206,67 @@ export const usersRouter = createTRPCRouter({
       }
     });
     return toUser(user);
-  })
+  }),
+
+  changePassword: perm("users:write")
+    .input(changePasswordSchema)
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.user.findUnique({ where: { id: input.id }, select: { id: true } });
+      if (!existing) {
+        throw apiError("NOT_FOUND", "User not found");
+      }
+
+      await ctx.prisma.user.update({
+        where: { id: input.id },
+        data: { passwordHash: await hashPassword(input.password) }
+      });
+
+      return { ok: true };
+    }),
+
+  remove: perm("users:write")
+    .input(z.object({ id: z.string().uuid() }))
+    .output(z.object({ ok: z.literal(true) }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.user.findUnique({ where: { id: input.id }, select: { id: true } });
+      if (!existing) {
+        throw apiError("NOT_FOUND", "User not found");
+      }
+
+      try {
+        await ctx.prisma.user.delete({ where: { id: input.id } });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+          throw apiError(
+            "BAD_REQUEST",
+            "User cannot be deleted because it is referenced by other records; remove dependencies first."
+          );
+        }
+        throw error;
+      }
+
+      return { ok: true };
+    }),
+
+  toggleFieldSense: perm("users:write")
+    .input(z.object({ id: z.string().uuid(), enabled: z.boolean() }))
+    .output(z.object({ ok: z.literal(true), isFieldEnabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, userType: true }
+      });
+      if (!existing) throw apiError("NOT_FOUND", "User not found");
+      if (existing.userType !== "internal") {
+        throw apiError("BAD_REQUEST", "Field Sense can only be enabled for internal users");
+      }
+
+      await ctx.prisma.user.update({
+        where: { id: input.id },
+        data: { isFieldEnabled: input.enabled }
+      });
+
+      return { ok: true, isFieldEnabled: input.enabled };
+    })
 });

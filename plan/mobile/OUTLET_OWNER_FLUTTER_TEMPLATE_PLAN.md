@@ -116,3 +116,7 @@ Required client behaviors:
 - Protected routes are inaccessible without valid session.
 - At least one authenticated sample screen fetches data through shared query layer.
 - No duplicate auth or API client code path exists.
+
+## Detailed References
+- Architecture detail: `plan/FLUTTER_OUTLET_OWNER_TEMPLATE_ARCHITECTURE.md`
+- Delivery plan detail: `plan/mobile/MOBILE_IMPLEMENTATION_PLAN.md`

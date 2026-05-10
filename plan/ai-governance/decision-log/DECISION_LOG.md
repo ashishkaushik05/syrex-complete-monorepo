@@ -4,6 +4,100 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260509-014
+- Decision ID: `DEC-20260509-014`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Implement Field Sense backend — shifts, GPS location, visits, attendance, schedules, SSE live-stream, crons, and isFieldEnabled user toggle`
+- Decision: `Add Field Sense as a tRPC module (field.shifts.*, field.location.*, field.visits.*, field.attendance.*, field.schedule.*) with one raw Hono SSE route (/field/live-stream) for live agent map. All 5 models added to schema.prisma. Two Bun.cron jobs: field-auto-start (every minute) and field-auto-close (19:00 IST). isFieldEnabled flag added to User (internal users only). users.toggleFieldSense procedure + web UsersPage toggle added.`
+- Rationale: `Field Sense is a GPS-based field agent tracking subsystem. tRPC is used for consistency with the rest of the API. SSE is used for the live-stream instead of WebSockets (unidirectional, lightweight, Bun handles 500 concurrent SSE connections natively). Crons are backend-authoritative for schedule-driven shift auto-start. isFieldEnabled gates feature access per internal user.`
+- Alternatives Considered:
+  - `WebSocket (tRPC subscriptions)` rejected — adds WS adapter complexity for a one-way map feed.
+  - `Polling only` rejected — less efficient at 500 concurrent users vs SSE.
+  - `Org scoping via User.orgId column` rejected — existing pattern is x-org-id header, used consistently.
+  - `Separate FieldSenseUser join table` rejected — isFieldEnabled on User is simpler and consistent with isActive.
+- Scope:
+  - `schema.prisma` — add isFieldEnabled to User; add ShiftStatus, ShiftStartType, ShiftEndType, AttendanceStatus enums; add Shift, FieldLocation, ShiftSchedule, FieldVisit, DailyAttendance models
+  - `backend/src/infra/sse.ts` — SSE connection store + broadcast
+  - `backend/src/trpc/routes/field-shifts.ts` — shift start/end/extend/active/list
+  - `backend/src/trpc/routes/field-location.ts` — GPS ingest, trail, agent trail, active agents
+  - `backend/src/trpc/routes/field-visits.ts` — visit log/list/forShift
+  - `backend/src/trpc/routes/field-attendance.ts` — mark/list/patch
+  - `backend/src/trpc/routes/field-schedule.ts` — me/upsertMe/list/setForUser
+  - `backend/src/trpc/routes/users.ts` — add toggleFieldSense
+  - `backend/src/trpc/router.ts` — wire field routers
+  - `backend/src/app.ts` — add GET /field/live-stream SSE route
+  - `backend/src/cron/field-auto-start.ts` — schedule-aware auto-start
+  - `backend/src/cron/field-auto-close.ts` — 19:00 IST auto-close
+  - `backend/src/index.ts` — wire crons
+  - `web/src/pages/dashboard/UsersPage.tsx` — isFieldEnabled toggle in Manage dialog
+- Status: `completed`
+- Completion Notes:
+  - Done: `schema.prisma updated (isFieldEnabled on User, 4 enums, 5 models, Prisma client regenerated); backend/src/infra/sse.ts (SSE store + broadcast); field-shifts.ts (start/end/extend/active/list); field-location.ts (ingest/trail/agentTrail/activeAgents + RDP simplification + downsample); field-visits.ts (log/list/forShift); field-attendance.ts (mark/list/patch); field-schedule.ts (me/upsertMe/list/setForUser); users.ts toggleFieldSense added; router.ts wired all 5 field routers; app.ts GET /field/live-stream SSE route with Bearer+x-actor-id auth; cron/field-auto-start.ts (every-minute schedule-aware auto-start); cron/field-auto-close.ts (19:00 IST auto-close); index.ts crons wired via Bun.cron; UsersPage.tsx isFieldEnabled toggle in Manage dialog (internal users only). TypeScript typecheck: 0 errors.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `schema.prisma changes require db:reset (dev) or migration in prod.`
+  - `SSE connections are in-process — not shared across multiple API instances. Acceptable for single-instance deployment.`
+  - `Auto-close at 19:00 IST is hardcoded. Config-driven auto-close deferred.`
+  - `No push notifications wired — auto-start/close crons proceed silently.`
+- Cleanup Required: `none anticipated`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `claude-sonnet-4-6 in current session`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-09T11:00:00Z`
+
+---
+
+## DEC-20260509-002
+- Decision ID: `DEC-20260509-002`
+- Model: `claude-code`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Remove redundant roles.list round trip from web auth layer now that auth payload includes role.permissions`
+- Decision: `Replace getPermissionsForRole() calls in phase1Post('/auth/login') and phase1Get('/auth/me') with direct reads of session.user.role.permissions / user.role.permissions. Delete getPermissionsForRole() as it becomes dead code.`
+- Rationale: `DEC-20260509-001 added role.permissions to the backend auth payload. The web adapter was previously calling roles.list on every login and me to resolve permissions from roleId. That workaround is now redundant and should be removed.`
+- Alternatives Considered:
+  - `Leave getPermissionsForRole() in place` rejected because dead code is a maintenance hazard and the extra round trip is unnecessary overhead on every session check.
+- Scope:
+  - `web/src/lib/api.ts` — phase1Post('/auth/login') and phase1Get('/auth/me') blocks; remove getPermissionsForRole function
+- Status: `completed`
+- Completion Notes:
+  - Done: `Both auth blocks read permissions from payload; getPermissionsForRole removed.`
+  - Not Done: `nothing`
+- Impact/Risk:
+  - `getRolesIndex is still used by user/outlet resolution — unaffected. No behaviour change for useAuth.ts; permissions array shape is identical.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `claude-code @ 2026-05-09T00:00:00Z`
+
+---
+
+## DEC-20260509-001
+- Decision ID: `DEC-20260509-001`
+- Model: `claude-code`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Add role+permissions to auth payload so mobile apps can resolve permissions without a second round trip`
+- Decision: `Additively include a nested role object (id, name, permissions) in auth.login, auth.refresh, and auth.me responses by joining the Role table in each query. Keep roleId unchanged so web is unaffected.`
+- Rationale: `Both mobile auth_repository.dart files parse result['user']['role']['name'] and result['user']['role']['permissions'], but the backend only returns roleId. This causes empty permissions on every login and blocks the permission gate. The fix is additive: no existing consumer breaks, mobile works without code changes.`
+- Alternatives Considered:
+  - `Have mobile call roles.list after login to resolve permissions (Option B)` rejected because it adds a round trip, duplicates web's workaround in two clients, and leaves the backend contract incomplete.
+- Scope:
+  - `backend/src/trpc/routes/auth.ts` — all three procedures (login, refresh, me): query join + output schema update
+- Status: `completed`
+- Completion Notes:
+  - Done: `sessionTokenSchema extended with user.role; auth.me output extended with role; all three Prisma queries select role.id/name/permissions; all three return blocks include role.`
+  - Not Done: `nothing`
+- Impact/Risk:
+  - `One extra DB join per auth call (role table is tiny, negligible cost). Web unaffected — it ignores the new role field and continues using roleId + roles.list.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `claude-code @ 2026-05-09T00:00:00Z`
+
+---
+
 ## DEC-20260508-001
 - Decision ID: `DEC-20260508-001`
 - Model: `codex`
@@ -2779,10 +2873,10 @@ Use `DECISION_TEMPLATE.md` for every new entry.
   - `plan/mobile/MOBILE_IMPLEMENTATION_PLAN.md`
   - `plan/mobile/OUTLET_OWNER_FLUTTER_TEMPLATE_PLAN.md`
   - `plan/ai-governance/decision-log/DECISION_LOG.md`
-- Status: `in_progress`
+- Status: `completed`
 - Completion Notes:
-  - Done: `Decision scope opened.`
-  - Not Done: `Detailed planning documents not yet added.`
+  - Done: `Added detailed architecture documentation under plan/ and a separate mobile implementation plan under plan/mobile/. Updated the original template note with references to both detailed documents.`
+  - Not Done: `Flutter scaffold implementation is intentionally out of scope for this documentation-only decision.`
 - Impact/Risk:
   - `If package choices or backend contract assumptions are wrong, docs may require revision before implementation.`
 - Cleanup Required:
@@ -2792,4 +2886,441 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Next Cleanup Owner: `codex in current session`
 - Owner Timestamp: `codex @ 2026-05-09T09:52:00Z`
 - Follow-up Notes:
-  - `none`
+  - `Created: plan/FLUTTER_OUTLET_OWNER_TEMPLATE_ARCHITECTURE.md`
+  - `Created: plan/mobile/MOBILE_IMPLEMENTATION_PLAN.md`
+  - `Updated: plan/mobile/OUTLET_OWNER_FLUTTER_TEMPLATE_PLAN.md`
+
+---
+
+## DEC-20260509-011
+- Decision ID: `DEC-20260509-011`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Implement T0 Flutter template scaffold with auth/network/query foundations`
+- Decision: `Create a new Flutter project under mobile/outlet_owner_template and implement the base architecture, environment config, guarded router shell, and shared core stubs for auth/network/query.`
+- Rationale: `T0 requires working baseline infrastructure before module feature delivery; scaffold-first reduces downstream rework.`
+- Alternatives Considered:
+  - `Manual folder creation without Flutter scaffold` rejected because it misses platform/tooling defaults and slows setup.
+  - `Implement Sales module directly` rejected because T0 must validate shared foundation first.
+- Scope:
+  - `mobile/outlet_owner_template/**`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created Flutter scaffold at mobile/outlet_owner_template with Android/iOS/Web targets; implemented T0 architecture folders (`app/core/modules/shared`), environment config, central Dio client with token injection and 401 refresh-retry flow, secure token storage, auth repository, session controller state machine, guarded go_router flow (`/splash`, `/login`, `/home`), and an authenticated pilot query screen using shared client. Added a baseline widget test and updated dependencies for Dart 3.4 compatibility.`
+  - Not Done: `Backend-coupled runtime verification of login/refresh against a running API was not executed in this pass.`
+- Impact/Risk:
+  - `Current auth request parsing assumes tRPC HTTP response shape; if backend transport format changes, auth parsing helpers must be updated.`
+  - `The pilot screen query endpoint call is intentionally minimal and should be replaced with typed module clients in T1+ phases.`
+- Cleanup Required:
+  - `Add typed API DTO/codegen strategy and replace dynamic map parsing in T1.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T10:00:00Z`
+- Follow-up Notes:
+  - `Verification passed: flutter analyze (0 issues), flutter test (all tests passed).`
+
+---
+
+## DEC-20260509-012
+- Decision ID: `DEC-20260509-012`
+- Model: `codex`
+- Branch/Commit: `master@b11298b`
+- Task: `Implement outlet app backend policy + outletPortal routes with outlet ownership enforcement`
+- Decision: `Add reusable outlet ownership guard (`outlet.userId = actor.id`), extract shared order read helpers, add outletPortal summary/history/detail routes, and enforce ownership checks in orders list/getById/create.`
+- Rationale: `Outlet app needs stable scoped APIs without duplicating order query logic while preventing cross-outlet data access.`
+- Alternatives Considered:
+  - `Reuse only existing orders routes without outletPortal` rejected because mobile contract stability and isolation are required.
+  - `Duplicate outlet order queries in a new router` rejected because it introduces parallel data logic paths.
+- Scope:
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/routes/orders-shared.ts`
+  - `backend/src/trpc/routes/outlet-access.ts`
+  - `backend/src/trpc/routes/outlet-portal.ts`
+  - `backend/src/trpc/router.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented reusable outlet ownership helpers (`assertOutletAccess`, `findActorLinkedOutletId`) anchored to `outlet.userId = actor.id`; extracted shared order read logic and schemas into `orders-shared.ts`; updated `orders.list` to lock/override outlet scope for outlet-linked actors; updated `orders.getById` and `orders.create` to enforce outlet ownership checks; added new `outletPortal` router with `summary`, `orderHistory`, and `orderDetail` procedures; wired `outletPortal` into app router; implemented summary output with both `outstandingSnapshot` and live `invoice.amountDue` aggregate as `outstandingLive`; verified TypeScript compile integrity.`
+  - Not Done: `No phase-gate snapshot artifacts or dedicated outletPortal smoke script were added in this pass.`
+- Impact/Risk:
+  - `Authorization behavior changes for outlet-linked users on `orders.*` paths may alter existing client assumptions if they were passing arbitrary outletId filters.`
+  - `assertOutletAccess` intentionally returns `NOT_FOUND` for outlet-linked access mismatches; consumers must not rely on `FORBIDDEN` for this case.`
+- Cleanup Required:
+  - `Add integration smoke coverage for `outletPortal.*` and outlet-linked `orders.*` tampering scenarios in a follow-up verification task.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T10:25:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run typecheck`
+
+---
+
+## DEC-20260509-013
+- Decision ID: `DEC-20260509-013`
+- Model: `claude-code`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Fix 5 backend gaps blocking outlet app mobile integration`
+- Decision: `Implement bearer token middleware, fix queryOrderList outlet filter, add outletPortal.invoiceHistory, expose outletId in auth.me, and fix summary.ordersCount to open-only.`
+- Rationale: `Without these fixes, 100% of authenticated mobile calls fail (no bearer resolution), all order queries return empty for outlet users (warehouse filter no-match branch), invoice history has no contract, and the app cannot bootstrap an outletId after login.`
+- Alternatives Considered:
+  - `Have mobile send x-actor-id directly` rejected because it is forgeable and bypasses all token validation.
+  - `Add a separate outletPortal.bootstrap procedure` rejected because it adds a round-trip and the data naturally belongs in auth.me.
+  - `Keep invoiceHistory in invoices.list with outletId filter` rejected because it exposes the internal invoices router to the mobile contract and leaks broad filter surface.
+- Scope:
+  - `backend/src/app.ts` — add bearer token → actor middleware
+  - `backend/src/trpc/routes/orders-shared.ts` — fix warehouseFilter for outlet users
+  - `backend/src/trpc/routes/outlet-portal.ts` — add invoiceHistory procedure, fix ordersCount
+  - `backend/src/trpc/routes/auth.ts` — add outletId to auth.me output and query
+- Status: `completed`
+- Completion Notes:
+  - Done: `Bearer middleware in app.ts resolves Authorization: Bearer <token> → userId via authSession.accessToken lookup. schema.prisma adds accessToken @unique to AuthSession. auth.ts stores and rotates accessToken on login and refresh. queryOrderList fixes outlet user filter (bypasses warehouseFilter when forcedOutletId is set). auth.me adds outletId via parallel outlet lookup. outletPortal adds invoiceHistory procedure with outlet ownership enforcement. summary.ordersCount now excludes cancelled/rejected orders. Prisma client regenerated and db pushed.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Bearer middleware adds one DB lookup per authenticated request; acceptable for v1.`
+  - `auth.me change is additive (nullable outletId field) so existing web/internal clients are unaffected.`
+  - `queryOrderList change is safe: forcedOutletId branch only activates when caller explicitly passes it.`
+- Cleanup Required: `none anticipated`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `claude-code in current session`
+- Owner Timestamp: `claude-code @ 2026-05-09T10:30:00Z`
+
+---
+
+## DEC-20260509-014
+- Decision ID: `DEC-20260509-014`
+- Model: `claude-code`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Implement complete Flutter outlet owner mobile application`
+- Decision: `Build all remaining mobile features in a single implementation pass: AuthUser outletId fix, outlet context provider, typed API client layer, route tree, and all 6 feature screens (dashboard, order history, order detail, invoice history, catalog, create order).`
+- Rationale: `All backend contracts are stable and tested. Foundation (auth, Dio, session) is working. Building in one pass avoids repeated scaffold churn and keeps the route tree consistent.`
+- Alternatives Considered:
+  - `Incremental per-screen PRs` rejected for solo dev velocity; single pass is cleaner given all contracts are known.
+  - `Code generation for API types` rejected; manual typed clients are sufficient for v1 scope and avoid tooling setup overhead.
+- Scope:
+  - `mobile/outlet_owner_template/lib/core/auth/auth_models.dart`
+  - `mobile/outlet_owner_template/lib/core/auth/auth_repository.dart`
+  - `mobile/outlet_owner_template/lib/core/outlet/outlet_context.dart`
+  - `mobile/outlet_owner_template/lib/core/api/outlet_portal_client.dart`
+  - `mobile/outlet_owner_template/lib/core/api/orders_client.dart`
+  - `mobile/outlet_owner_template/lib/core/api/catalog_client.dart`
+  - `mobile/outlet_owner_template/lib/app/router/app_router.dart`
+  - `mobile/outlet_owner_template/lib/modules/dashboard/dashboard_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/orders/orders_history_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/orders/order_detail_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/invoices/invoice_history_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/catalog/catalog_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/orders/create_order_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/orders/cart_provider.dart`
+- Status: `completed`
+- Completion Notes:
+  - Done: `AuthUser.outletId added. auth_repository login+me parse outletId. outlet_context.dart provider. Typed API clients: OutletPortalClient (summary, orderHistory, orderDetail, invoiceHistory), OrdersClient (createOrder), CatalogClient (brands, categories, products). CartNotifier with add/remove/qty/price/submit. Route tree: /dashboard, /orders/history, /orders/:orderId, /orders/create, /invoices/history, /catalog. All 6 feature screens implemented. Shared widgets: ErrorView, StatusChip. pilot_home_page.dart deleted. flutter analyze: 0 issues.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `pilot_home_page.dart replaced by dashboard — pilot page becomes dead code, will be deleted.`
+  - `All screens depend on outletId from outlet context; if user has no linked outlet, screens show an error state.`
+- Cleanup Required: `Delete pilot_home_page.dart after dashboard is live`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `claude-code in current session`
+- Owner Timestamp: `claude-code @ 2026-05-09T11:00:00Z`
+
+---
+
+## DEC-20260509-015
+- Decision ID: `DEC-20260509-015`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Implement Sales Mobile v1 plan on outlet_owner_template`
+- Decision: `Execute a single-path implementation for Sales Mobile v1 with remember-me auth UX, read-only pricing order flow, catalog/order core flows, and read-only invoice/dispatch visibility.`
+- Rationale: `User requested direct implementation of the approved v1 plan while preserving architecture guardrails and decision logging protocol.`
+- Alternatives Considered:
+  - `Implement only partial UI changes` rejected because the requested plan is full-scope v1.
+  - `Introduce parallel module-specific networking/auth` rejected because it violates one-path architecture rules.
+- Scope:
+  - `mobile/outlet_owner_template/lib/**`
+  - `mobile/outlet_owner_template/test/**`
+  - `mobile/outlet_owner_template/README.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `planned`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `Implementation and verification work pending.`
+- Impact/Risk:
+  - `Auth/session behavior changes can affect existing login persistence expectations.`
+  - `Read-only pricing enforcement can change existing order-entry operator habits.`
+- Cleanup Required:
+  - `Update this same entry to final status with completed/partial detail and any cleanup actions.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T06:21:30Z`
+- Follow-up Notes:
+  - `Will be updated to in_progress during implementation and finalized after validation.`
+
+---
+
+## DEC-20260509-016
+- Decision ID: `DEC-20260509-016`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Create separate clean Flutter Sales application project`
+- Decision: `Create a new standalone Flutter project under mobile/ for Sales v1 and keep outlet_owner_template untouched.`
+- Rationale: `User requested a separate clean project boundary for Sales application after reverting prior changes in outlet app.`
+- Alternatives Considered:
+  - `Reuse and mutate outlet_owner_template` rejected because it conflicts with requirement for separate project.
+  - `Share code via immediate monorepo package split` rejected because it adds complexity beyond immediate delivery scope.
+- Scope:
+  - `mobile/sales_mobile_app/**`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created a separate clean Flutter project at mobile/sales_mobile_app using flutter create, migrated Sales app implementation structure into the new project (app/core/modules/shared), aligned pubspec dependencies, added dispatch history support in client DTO/method, updated bootstrap class to SalesMobileApp, fixed package imports in tests, and added a Sales-specific README. Verified with flutter analyze and flutter test in the new project.`
+  - Not Done: `No additional backend changes were made in this pass; this task only establishes the separate Sales app project boundary and working codebase.`
+- Impact/Risk:
+  - `Project duplication can cause drift if shared behaviors change later.`
+- Cleanup Required:
+  - `Optional follow-up: extract shared mobile core into reusable package to reduce drift between outlet and sales apps.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T06:30:23Z`
+- Follow-up Notes:
+  - `Validation commands: cd mobile/sales_mobile_app && flutter analyze && flutter test`
+
+---
+
+## DEC-20260509-017
+- Decision ID: `DEC-20260509-017`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Decouple sales_mobile_app from outlet-owner model into internal sales-user model`
+- Decision: `Implement backend-enforced mine-only orders path and migrate sales_mobile_app from outletPortal/outlet-linked context to generic sales routes with permission gating.`
+- Rationale: `Requested target behavior requires server-side enforcement and removal of outlet.userId linkage assumptions from mobile.`
+- Alternatives Considered:
+  - `Client-side filtering only` rejected because it is not secure for my-orders visibility.
+  - `Keep outletPortal and patch around it` rejected because it retains outlet-owner coupling.
+- Scope:
+  - `backend/src/trpc/routes/orders-shared.ts`
+  - `backend/src/trpc/routes/orders.ts`
+  - `mobile/sales_mobile_app/lib/**`
+  - `mobile/sales_mobile_app/test/**`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Backend: added `mineOnly` to `orders.list` input contract and enforced `createdById = actor.id` filtering in shared list query; added permission check for mine-only usage requiring sales-capable permission (`orders:write` or `*`). Mobile: replaced outlet-owner coupling with sales mode by introducing `sales_client` using generic routes (`orders.*`, `outlets.*`, `invoices.*`), added sales permission app gate/unauthorized route, rewired dashboard to outlet outstanding aggregation from outlets+invoices, rewired order history/detail to my-orders flow, rewired create-order to required outlet picker, rewired invoice history/detail to generic invoices routes, removed dispatch screens from active app flow, and migrated outlet context to selected-outlet state instead of linked-user outlet. Verification passed for backend typecheck, flutter analyze, and flutter test.`
+  - Not Done: `The legacy `outlet_portal_client.dart` and `orders_client.dart` remain in tree but are no longer used by active sales routes; they should be removed in a cleanup pass if you want strict dead-path elimination.`
+- Impact/Risk:
+  - `Order visibility behavior changes for mobile consumers using mine-only mode.`
+  - `Removing outlet-linked assumptions may expose latent permission mismatches.`
+- Cleanup Required:
+  - `Remove unused legacy sales-mobile files (`core/api/outlet_portal_client.dart`, `core/api/orders_client.dart`) after confirming no external references.`
+- Dead Paths Introduced: `Unused legacy client files retained temporarily: core/api/outlet_portal_client.dart, core/api/orders_client.dart`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T07:44:19Z`
+- Follow-up Notes:
+  - `Validation commands: cd backend && bun run typecheck; cd mobile/sales_mobile_app && flutter analyze && flutter test`
+
+---
+
+## DEC-20260509-018
+- Decision ID: `DEC-20260509-018`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Add user-management actions for password change and user deletion`
+- Decision: `Extend users tRPC router with dedicated password-reset and delete-user mutations for user-screen actions.`
+- Rationale: `User requested explicit options on the user screen to change passwords and delete users; backend needs first-class endpoints for those operations.`
+- Alternatives Considered:
+  - `Overload existing users.update for password updates` rejected because it mixes sensitive credential writes with profile edits.
+  - `Soft-delete only by forcing isActive=false` rejected because request explicitly asks for delete option.
+- Scope:
+  - `backend/src/trpc/routes/users.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `Router mutations and validation are pending.`
+- Impact/Risk:
+  - `Deleting users may fail for records referenced by outlet/orders/invitations due to relational constraints.`
+  - `Password mutation increases privileged surface and must stay under users:write permission.`
+- Cleanup Required:
+  - `Update this same entry to final status after implementation and verification.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T08:20:00Z`
+- Follow-up Notes:
+  - `Will append final update after typecheck.`
+
+### DEC-20260509-018 Final Update
+- Decision ID: `DEC-20260509-018`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Add user-management actions for password change and user deletion`
+- Decision: `Extended users router with dedicated `changePassword` and `remove` mutations under `users:write` permission.`
+- Rationale: `Keeps profile updates and credential changes separated, while enabling explicit delete action support from user-management UI.`
+- Alternatives Considered:
+  - `Handle password in users.update` rejected to preserve separation of concerns for sensitive writes.
+  - `Silent soft-delete fallback` rejected because request was explicit about delete option.
+- Scope:
+  - `backend/src/trpc/routes/users.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added `changePassword` mutation (`id`, `password`) with existence check and hashed password write. Added `remove` mutation (`id`) with existence check and relational-constraint error mapping (Prisma P2003 -> BAD_REQUEST clear message). Ran backend typecheck successfully.`
+  - Not Done: `No frontend screen changes in this repository because no user-management screen exists here.`
+- Impact/Risk:
+  - `Delete operation may return BAD_REQUEST for users linked to outlet/order/invitation records, requiring dependent cleanup first.`
+  - `Password minimum length is now enforced at 8 characters for this mutation.`
+- Cleanup Required:
+  - `Wire these new mutations from the actual user-management UI project if it lives outside this repository.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex or frontend owner in next integration pass`
+- Owner Timestamp: `codex @ 2026-05-09T08:24:00Z`
+
+---
+
+## DEC-20260509-019
+- Decision ID: `DEC-20260509-019`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Enhance web dashboard users page with role switch and password reset actions`
+- Decision: `Extend existing web UsersPage with per-user management dialog actions for role update and password reset, using existing REST shim routes.`
+- Rationale: `A users page already exists in web UI; extending it preserves one implementation path and satisfies requested user-management controls.`
+- Alternatives Considered:
+  - `Create a separate second users page` rejected because it duplicates behavior and navigation.
+  - `Implement inline row edits only` rejected because dialog-based actions reduce accidental updates.
+- Scope:
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `UI actions and API mapping pending.`
+- Impact/Risk:
+  - `Role updates can affect access immediately.`
+  - `Password reset must enforce minimum-length validation in UI and backend path mapping.`
+- Cleanup Required:
+  - `Update this same decision with final status after build verification.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T08:33:00Z`
+- Follow-up Notes:
+  - `Will run web build after implementation.`
+
+### DEC-20260509-019 Final Update
+- Decision ID: `DEC-20260509-019`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Enhance web dashboard users page with role switch and password reset actions`
+- Decision: `Extended existing users page with a per-user manage dialog and wired password reset API shim to backend mutation.`
+- Rationale: `Provides requested role switching and password reset directly on the web users page without introducing duplicate UI paths.`
+- Alternatives Considered:
+  - `Separate users-management page` rejected to avoid split behavior paths.
+  - `Direct table inline edits` rejected for higher accidental-change risk.
+- Scope:
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added Users table action column with Manage button. Added Manage User dialog with Switch Role section (role select + update action) and Reset Password section (new password input + reset action). Added API shim mapping for PATCH /users/:id/password -> users.changePassword, including 8-character validation. Verified with web build (tsc + vite).`
+  - Not Done: `User deletion option was not added in this pass because this request specifically asked for role switching and password reset.`
+- Impact/Risk:
+  - `Role updates apply immediately and can change access permissions in active sessions.`
+  - `Large bundle warning remains unchanged from existing build output.`
+- Cleanup Required:
+  - `Optional: add delete-user action in this page using backend users.remove if required.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex or web owner in next pass`
+- Owner Timestamp: `codex @ 2026-05-09T08:37:00Z`
+
+---
+
+## DEC-20260510-015
+- Decision ID: `DEC-20260510-015`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Web UI legacy cleanup pass 1 and auth/permissions audit pass 2`
+- Decision: `Remove only confirmed dead/unreachable web UI code paths first, then document current auth+permissions+roles flow and mismatches in dashboard route gating.`
+- Rationale: `A conservative first pass avoids regressions by deleting only files with zero route/import reachability while producing an explicit dead-route list and a clear authz architecture map.`
+- Alternatives Considered:
+  - `Bulk-delete legacy-looking files without reachability verification` rejected because it risks removing still-used behavior.
+  - `Do audit only without cleanup` rejected because user asked for dead code removal in pass 1.
+- Scope:
+  - `web/src/pages/dashboard/DispatchQueueMetricsPage.tsx`
+  - `web/src/pages/dashboard/PlanningOverviewPage.tsx`
+  - `web/src/pages/dashboard/ProductionPlanPage.tsx`
+  - `web/src/pages/dashboard/RawMaterialsPage.tsx`
+  - `web/src/pages/dashboard/TomorrowDispatchQueuePage.tsx`
+  - `web/src/pages/dashboard/WarehouseGrnPage.tsx`
+  - `web/src/pages/dashboard/WarehouseStockAdjustmentPage.tsx`
+  - `web/src/components/AgentMap.tsx`
+  - `web/src/components/OrgTree.tsx`
+  - `web/src/components/UserTable.tsx`
+  - `web/src/assets/hero.png`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Reachability audit started; dead candidates identified from router/import graph.`
+  - Not Done: `File removal, typecheck verification, and auth/permissions architecture report.`
+- Impact/Risk:
+  - `Potential accidental removal if any file is loaded dynamically outside static imports.`
+  - `Dashboard nav may still include stale links even after dead file cleanup.`
+- Cleanup Required:
+  - `After pass 2, optionally align stale nav items/routes to avoid broken links.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `Legacy dashboard nav targets include paths without registered routes.`
+- Next Cleanup Owner: `codex in current session`
+- Owner Timestamp: `codex @ 2026-05-09T19:56:21Z`
+- Follow-up Notes:
+  - `Entry will be updated to final status after cleanup + audit output.`
+
+### DEC-20260510-015 Final Update
+- Decision ID: `DEC-20260510-015`
+- Model: `codex`
+- Branch/Commit: `master@ed46b6e`
+- Task: `Web UI legacy cleanup pass 1 and auth/permissions audit pass 2`
+- Decision: `Removed all confirmed dead/unreachable web UI files and documented current auth/permissions/roles behavior plus route-gating mismatches.`
+- Rationale: `Static import + route reachability confirms safe deletions, while explicit authz mapping identifies where legacy navigation still points to non-existent routes.`
+- Alternatives Considered:
+  - `Keep dead files for future reuse` rejected because it increases maintenance noise and misalignment risk.
+  - `Modify auth/route behavior in same pass` rejected to keep this pass focused on safe removals + audit.
+- Scope:
+  - `web/src/pages/dashboard/DispatchQueueMetricsPage.tsx`
+  - `web/src/pages/dashboard/PlanningOverviewPage.tsx`
+  - `web/src/pages/dashboard/ProductionPlanPage.tsx`
+  - `web/src/pages/dashboard/RawMaterialsPage.tsx`
+  - `web/src/pages/dashboard/TomorrowDispatchQueuePage.tsx`
+  - `web/src/pages/dashboard/WarehouseGrnPage.tsx`
+  - `web/src/pages/dashboard/WarehouseStockAdjustmentPage.tsx`
+  - `web/src/components/AgentMap.tsx`
+  - `web/src/components/OrgTree.tsx`
+  - `web/src/components/UserTable.tsx`
+  - `web/src/lib/authz.ts`
+  - `web/src/App.css`
+  - `web/src/assets/hero.png`
+  - `web/src/assets/react.svg`
+  - `web/src/assets/vite.svg`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Deleted all files listed in scope that had no route/import reachability in current UI. Produced dead route/page list and documented auth+permissions+roles enforcement path and mismatches.`
+  - Not Done: `No behavioral fix yet for stale nav links to missing routes; this is identified for next pass.`
+- Impact/Risk:
+  - `Functional behavior unchanged for active routes; only unreachable code removed.`
+  - `Web build still reports a pre-existing TS6133 warning in UsersPage (unused local variable), unrelated to this cleanup scope.`
+- Cleanup Required:
+  - `Align DashboardLayout nav items with real routes (or add missing route implementations) to remove broken links.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `Sidebar still advertises legacy paths that do not have matching routes in App.tsx.`
+- Next Cleanup Owner: `codex or web owner in next pass`
+- Owner Timestamp: `codex @ 2026-05-09T20:05:00Z`

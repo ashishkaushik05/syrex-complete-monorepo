@@ -32,6 +32,7 @@ const createOutletSchema = z.object({
 
 const updateOutletSchema = z.object({
   id: z.string().uuid(),
+  userId: z.string().uuid().optional(),
   warehouseId: z.string().uuid().nullable().optional(),
   name: z.string().min(1).optional(),
   ownerName: z.string().min(1).optional(),
@@ -161,6 +162,7 @@ export const outletsRouter = createTRPCRouter({
     const outlet = await ctx.prisma.outlet.update({
       where: { id: input.id },
       data: {
+        userId: input.userId,
         warehouseId: input.warehouseId,
         name: input.name,
         ownerName: input.ownerName,

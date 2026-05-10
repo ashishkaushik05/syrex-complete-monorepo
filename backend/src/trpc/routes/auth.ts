@@ -21,7 +21,13 @@ const sessionTokenSchema = z.object({
     name: z.string(),
     userType: z.string(),
     roleId: z.string(),
-    managedWarehouseId: z.string().nullable()
+    role: z.object({
+      id: z.string(),
+      name: z.string(),
+      permissions: z.array(z.string())
+    }),
+    managedWarehouseId: z.string().nullable(),
+    outletId: z.string().nullable()
   })
 });
 
@@ -51,8 +57,10 @@ export const authRouter = createTRPCRouter({
         passwordHash: true,
         userType: true,
         roleId: true,
+        role: { select: { id: true, name: true, permissions: true } },
         isActive: true,
-        managedWarehouse: { select: { id: true } }
+        managedWarehouse: { select: { id: true } },
+        outlet: { select: { id: true } }
       }
     });
 
@@ -65,17 +73,19 @@ export const authRouter = createTRPCRouter({
       throw apiError("UNAUTHORIZED", "Invalid credentials");
     }
 
+    const accessToken = `access_${tokenPrefix()}`;
     const refreshToken = `refresh_${tokenPrefix()}`;
     await ctx.prisma.authSession.create({
       data: {
         userId: user.id,
+        accessToken,
         refreshToken,
         expiresAt: tokenExpiryDate()
       }
     });
 
     return {
-      accessToken: `access_${tokenPrefix()}`,
+      accessToken,
       refreshToken,
       expiresIn: 900,
       user: {
@@ -84,7 +94,9 @@ export const authRouter = createTRPCRouter({
         name: user.name,
         userType: user.userType,
         roleId: user.roleId,
-        managedWarehouseId: user.managedWarehouse?.id ?? null
+        role: { id: user.role.id, name: user.role.name, permissions: user.role.permissions },
+        managedWarehouseId: user.managedWarehouse?.id ?? null,
+        outletId: user.outlet?.id ?? null
       }
     };
   }),
@@ -109,18 +121,22 @@ export const authRouter = createTRPCRouter({
         name: true,
         userType: true,
         roleId: true,
+        role: { select: { id: true, name: true, permissions: true } },
         isActive: true,
-        managedWarehouse: { select: { id: true } }
+        managedWarehouse: { select: { id: true } },
+        outlet: { select: { id: true } }
       }
     });
     if (!user || !user.isActive) {
       throw apiError("UNAUTHORIZED", "Invalid refresh context");
     }
 
+    const rotatedAccessToken = `access_${tokenPrefix()}`;
     const rotatedRefreshToken = `refresh_${tokenPrefix()}`;
     await ctx.prisma.authSession.update({
       where: { id: session.id },
       data: {
+        accessToken: rotatedAccessToken,
         refreshToken: rotatedRefreshToken,
         expiresAt: tokenExpiryDate(),
         revokedAt: null
@@ -128,7 +144,7 @@ export const authRouter = createTRPCRouter({
     });
 
     return {
-      accessToken: `access_${tokenPrefix()}`,
+      accessToken: rotatedAccessToken,
       refreshToken: rotatedRefreshToken,
       expiresIn: 900,
       user: {
@@ -137,7 +153,9 @@ export const authRouter = createTRPCRouter({
         name: user.name,
         userType: user.userType,
         roleId: user.roleId,
-        managedWarehouseId: user.managedWarehouse?.id ?? null
+        role: { id: user.role.id, name: user.role.name, permissions: user.role.permissions },
+        managedWarehouseId: user.managedWarehouse?.id ?? null,
+        outletId: user.outlet?.id ?? null
       }
     };
   }),
@@ -161,8 +179,15 @@ export const authRouter = createTRPCRouter({
         name: z.string(),
         userType: z.string(),
         roleId: z.string(),
+        role: z.object({
+          id: z.string(),
+          name: z.string(),
+          permissions: z.array(z.string())
+        }),
         isActive: z.boolean(),
-        managedWarehouseId: z.string().nullable()
+        isFieldEnabled: z.boolean(),
+        managedWarehouseId: z.string().nullable(),
+        outletId: z.string().nullable()
       })
     )
     .query(async ({ ctx }) => {
@@ -170,18 +195,26 @@ export const authRouter = createTRPCRouter({
       if (!actorId) {
         throw apiError("UNAUTHORIZED", "Missing actor context");
       }
-      const user = await ctx.prisma.user.findUnique({
-        where: { id: actorId },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          userType: true,
-          roleId: true,
-          isActive: true,
-          managedWarehouse: { select: { id: true } }
-        }
-      });
+      const [user, outlet] = await Promise.all([
+        ctx.prisma.user.findUnique({
+          where: { id: actorId },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            userType: true,
+            roleId: true,
+            role: { select: { id: true, name: true, permissions: true } },
+            isActive: true,
+            isFieldEnabled: true,
+            managedWarehouse: { select: { id: true } }
+          }
+        }),
+        ctx.prisma.outlet.findUnique({
+          where: { userId: actorId },
+          select: { id: true }
+        })
+      ]);
       if (!user) {
         throw apiError("NOT_FOUND", "User not found");
       }
@@ -191,8 +224,11 @@ export const authRouter = createTRPCRouter({
         name: user.name,
         userType: user.userType,
         roleId: user.roleId,
+        role: { id: user.role.id, name: user.role.name, permissions: user.role.permissions },
         isActive: user.isActive,
-        managedWarehouseId: user.managedWarehouse?.id ?? null
+        isFieldEnabled: user.isFieldEnabled,
+        managedWarehouseId: user.managedWarehouse?.id ?? null,
+        outletId: outlet?.id ?? null
       };
     })
 });

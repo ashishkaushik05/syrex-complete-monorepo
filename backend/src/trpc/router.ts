@@ -4,11 +4,17 @@ import { authRouter } from "./routes/auth";
 import { brandsRouter } from "./routes/brands";
 import { categoriesRouter } from "./routes/categories";
 import { dispatchesRouter } from "./routes/dispatches";
+import { fieldAttendanceRouter } from "./routes/field-attendance";
+import { fieldLocationRouter } from "./routes/field-location";
+import { fieldScheduleRouter } from "./routes/field-schedule";
+import { fieldShiftsRouter } from "./routes/field-shifts";
+import { fieldVisitsRouter } from "./routes/field-visits";
 import { imagesRouter } from "./routes/images";
 import { inventoryRouter } from "./routes/inventory";
 import { invoicesRouter } from "./routes/invoices";
 import { invitationsRouter } from "./routes/invitations";
 import { ordersRouter } from "./routes/orders";
+import { outletPortalRouter } from "./routes/outlet-portal";
 import { outletsRouter } from "./routes/outlets";
 import { paymentsRouter } from "./routes/payments";
 import { productsRouter } from "./routes/products";
@@ -34,7 +40,13 @@ export const appRouter = createTRPCRouter({
   payments: paymentsRouter,
   outlets: outletsRouter,
   warehouses: warehousesRouter,
-  orders: ordersRouter
+  orders: ordersRouter,
+  outletPortal: outletPortalRouter,
+  fieldShifts: fieldShiftsRouter,
+  fieldLocation: fieldLocationRouter,
+  fieldVisits: fieldVisitsRouter,
+  fieldAttendance: fieldAttendanceRouter,
+  fieldSchedule: fieldScheduleRouter,
 });
 
 export type AppRouter = typeof appRouter;
