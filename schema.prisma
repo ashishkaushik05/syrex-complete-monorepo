@@ -60,16 +60,17 @@ enum GoodsReceiptSourceType {
 // =============================================================================
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  phone        String?
-  name         String
-  passwordHash String
-  userType     UserType
-  roleId       String
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String   @id @default(uuid())
+  email            String   @unique
+  phone            String?
+  name             String
+  passwordHash     String
+  userType         UserType
+  roleId           String
+  isActive         Boolean  @default(true)
+  isFieldEnabled   Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   role                   Role               @relation(fields: [roleId], references: [id])
   outlet                 Outlet?
@@ -85,6 +86,10 @@ model User {
   stockAdjustments       StockAdjustment[]  @relation("StockAdjustedBy")
   managedWarehouse       Warehouse?         @relation("WarehouseManager")
   authSessions           AuthSession[]
+  shifts                 Shift[]
+  fieldVisits            FieldVisit[]
+  attendance             DailyAttendance[]
+  shiftSchedule          ShiftSchedule?
 
   @@map("users")
 }
@@ -126,6 +131,7 @@ model UserInvitation {
 model AuthSession {
   id           String    @id @default(uuid())
   userId       String
+  accessToken  String    @unique
   refreshToken String    @unique
   expiresAt    DateTime
   revokedAt    DateTime?
@@ -626,4 +632,123 @@ model OrderSequence {
   lastSequence Int @default(0)
 
   @@map("order_sequences")
+}
+
+// =============================================================================
+// FIELD SENSE  —  Shift lifecycle, GPS tracking, visits, attendance, schedules
+// =============================================================================
+
+enum ShiftStatus {
+  active
+  completed
+}
+
+enum ShiftStartType {
+  auto
+  manual
+}
+
+enum ShiftEndType {
+  auto
+  manual
+  extended
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  half_day
+  leave
+}
+
+model Shift {
+  id        String         @id @default(uuid())
+  agentId   String
+  orgId     String
+  startedAt DateTime       @default(now())
+  endedAt   DateTime?
+  startType ShiftStartType
+  endType   ShiftEndType?
+  status    ShiftStatus    @default(active)
+
+  agent     User            @relation(fields: [agentId], references: [id])
+  locations FieldLocation[]
+  visits    FieldVisit[]
+
+  @@index([agentId, status])
+  @@index([orgId, status])
+  @@index([agentId, startedAt])
+  @@map("shifts")
+}
+
+model FieldLocation {
+  id         String   @id @default(uuid())
+  agentId    String
+  shiftId    String
+  orgId      String
+  lat        Float
+  lng        Float
+  accuracy   Float
+  recordedAt DateTime
+  receivedAt DateTime @default(now())
+
+  shift Shift @relation(fields: [shiftId], references: [id])
+
+  @@index([agentId, recordedAt])
+  @@index([shiftId, recordedAt])
+  @@index([orgId, recordedAt])
+  @@index([orgId, receivedAt])
+  @@map("field_locations")
+}
+
+model ShiftSchedule {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  orgId         String
+  autoStartTime String
+  timezone      String   @default("Asia/Kolkata")
+  isEnabled     Boolean  @default(true)
+  updatedBy     String?
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("shift_schedules")
+}
+
+model FieldVisit {
+  id          String   @id @default(uuid())
+  agentId     String
+  shiftId     String
+  orgId       String
+  lat         Float
+  lng         Float
+  description String?
+  audioUrl    String?
+  recordedAt  DateTime
+  createdAt   DateTime @default(now())
+
+  agent User  @relation(fields: [agentId], references: [id])
+  shift Shift @relation(fields: [shiftId], references: [id])
+
+  @@index([agentId, recordedAt])
+  @@index([shiftId])
+  @@map("field_visits")
+}
+
+model DailyAttendance {
+  id       String           @id @default(uuid())
+  userId   String
+  orgId    String
+  date     String
+  status   AttendanceStatus
+  markedBy String?
+  note     String?
+  markedAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@index([orgId, date])
+  @@map("daily_attendance")
 }
