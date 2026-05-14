@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 
 const scheduleSchema = z.object({
@@ -47,7 +48,7 @@ const scheduleInputSchema = z.object({
 });
 
 export const fieldScheduleRouter = createTRPCRouter({
-  me: perm("field:read")
+  me: perm(P.field.read)
     .input(z.object({}))
     .output(scheduleSchema.nullable())
     .query(async ({ ctx }) => {
@@ -59,7 +60,7 @@ export const fieldScheduleRouter = createTRPCRouter({
       return row ? toSchedule(row) : null;
     }),
 
-  upsertMe: perm("field:write")
+  upsertMe: perm(P.field.write)
     .input(scheduleInputSchema)
     .output(scheduleSchema)
     .mutation(async ({ ctx, input }) => {
@@ -87,7 +88,7 @@ export const fieldScheduleRouter = createTRPCRouter({
       return toSchedule(row);
     }),
 
-  list: perm("field:read")
+  list: perm(P.field.read)
     .input(
       z.object({
         orgId: z.string().optional(),
@@ -104,7 +105,7 @@ export const fieldScheduleRouter = createTRPCRouter({
       return rows.map(toSchedule);
     }),
 
-  setForUser: perm("field:write")
+  setForUser: perm(P.field.write)
     .input(
       scheduleInputSchema.extend({
         userId: z.string().uuid()
@@ -112,8 +113,8 @@ export const fieldScheduleRouter = createTRPCRouter({
     )
     .output(scheduleSchema)
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.permissions.includes("*") && !ctx.permissions.includes("users:write")) {
-        throw apiError("FORBIDDEN", "Setting schedule for another user requires users:write");
+      if (!ctx.permissions.includes(SUPER_ADMIN_PERMISSION) && !ctx.permissions.includes(P.field.admin)) {
+        throw apiError("FORBIDDEN", "Setting schedule for another user requires field:admin");
       }
       const orgId = input.orgId ?? ctx.actor.orgId;
       if (!orgId) throw apiError("BAD_REQUEST", "orgId required");

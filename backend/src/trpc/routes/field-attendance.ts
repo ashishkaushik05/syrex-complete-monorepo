@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 
 const attendanceStatusSchema = z.enum(["present", "absent", "half_day", "leave"]);
@@ -53,7 +54,7 @@ function toAttendance(row: {
 }
 
 export const fieldAttendanceRouter = createTRPCRouter({
-  mark: perm("field:write")
+  mark: perm(P.field.write)
     .input(
       z.object({
         userId: z.string().uuid().optional(),
@@ -69,8 +70,8 @@ export const fieldAttendanceRouter = createTRPCRouter({
       const targetUserId = input.userId ?? callerId;
       const isOverride = targetUserId !== callerId;
 
-      if (isOverride && !ctx.permissions.includes("*") && !ctx.permissions.includes("users:write")) {
-        throw apiError("FORBIDDEN", "Admin override requires users:write");
+      if (isOverride && !ctx.permissions.includes(SUPER_ADMIN_PERMISSION) && !ctx.permissions.includes(P.field.admin)) {
+        throw apiError("FORBIDDEN", "Admin override requires field:admin");
       }
 
       const orgId = input.orgId ?? ctx.actor.orgId;
@@ -99,7 +100,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
       return toAttendance(row);
     }),
 
-  list: perm("field:read")
+  list: perm(P.field.read)
     .input(
       z.object({
         userId: z.string().uuid().optional(),
@@ -151,7 +152,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
       return rows.map(toAttendance);
     }),
 
-  patch: perm("field:write")
+  patch: perm(P.field.write)
     .input(
       z.object({
         id: z.string().uuid(),
@@ -161,8 +162,8 @@ export const fieldAttendanceRouter = createTRPCRouter({
     )
     .output(attendanceSchema)
     .mutation(async ({ ctx, input }) => {
-      if (!ctx.permissions.includes("*") && !ctx.permissions.includes("users:write")) {
-        throw apiError("FORBIDDEN", "Patching attendance requires users:write");
+      if (!ctx.permissions.includes(SUPER_ADMIN_PERMISSION) && !ctx.permissions.includes(P.field.admin)) {
+        throw apiError("FORBIDDEN", "Patching attendance requires field:admin");
       }
       const existing = await ctx.prisma.dailyAttendance.findUnique({
         where: { id: input.id }

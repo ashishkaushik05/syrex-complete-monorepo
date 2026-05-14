@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { assertOutletWarehouseScope } from "./outlet-access";
 
 const invoiceLineSchema = z.object({
   id: z.string(),
@@ -69,7 +71,7 @@ function toInvoiceItem(invoice: {
 }
 
 export const invoicesRouter = createTRPCRouter({
-  list: perm("invoices:read")
+  list: perm(P.invoices.read)
     .input(
       paginationInputSchema
         .extend({
@@ -108,7 +110,7 @@ export const invoicesRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("invoices:read")
+  getById: perm(P.invoices.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(invoiceSchema)
     .query(async ({ ctx, input }) => {
@@ -119,6 +121,7 @@ export const invoicesRouter = createTRPCRouter({
       if (!invoice) {
         throw apiError("NOT_FOUND", "Invoice not found");
       }
+      await assertOutletWarehouseScope(ctx, invoice.outletId);
       return toInvoiceItem(invoice);
     })
 });

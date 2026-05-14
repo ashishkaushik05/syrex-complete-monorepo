@@ -4,6 +4,7 @@ import { appRouter } from "./trpc/router";
 import { createRequestContext } from "./trpc/context";
 import { prisma } from "./infra/db/prisma";
 import { addSseConnection, removeSseConnection } from "./infra/sse";
+import { P, SUPER_ADMIN_PERMISSION } from "./rbac/catalog";
 
 export function createApp() {
   const app = new Hono();
@@ -77,7 +78,7 @@ export function createApp() {
       return c.json({ error: "Forbidden" }, 403);
     }
     const perms = user.role.permissions;
-    if (!perms.includes("*") && !perms.includes("field:read")) {
+    if (!perms.includes(SUPER_ADMIN_PERMISSION) && !perms.includes(P.field.read)) {
       return c.json({ error: "Forbidden" }, 403);
     }
 

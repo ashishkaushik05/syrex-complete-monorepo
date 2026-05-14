@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import { assertOutletAccess } from "./outlet-access";
@@ -31,7 +32,7 @@ const summarySchema = z.object({
 });
 
 export const outletPortalRouter = createTRPCRouter({
-  summary: perm("outlets:read")
+  summary: perm(P.outlets.read)
     .input(z.object({ outletId: z.string().uuid() }))
     .output(summarySchema)
     .query(async ({ ctx, input }) => {
@@ -70,7 +71,7 @@ export const outletPortalRouter = createTRPCRouter({
       };
     }),
 
-  orderHistory: perm("orders:read")
+  orderHistory: perm(P.orders.read)
     .input(
       orderListFilterSchema
         .omit({ outletId: true })
@@ -100,7 +101,7 @@ export const outletPortalRouter = createTRPCRouter({
       return list;
     }),
 
-  orderDetail: perm("orders:read")
+  orderDetail: perm(P.orders.read)
     .input(
       z.object({ outletId: z.string().uuid(), orderId: z.string().uuid() }),
     )
@@ -114,7 +115,7 @@ export const outletPortalRouter = createTRPCRouter({
       return detail;
     }),
 
-  invoiceDetail: perm("invoices:read")
+  invoiceDetail: perm(P.invoices.read)
     .input(z.object({ outletId: z.string().uuid(), invoiceId: z.string().uuid() }))
     .output(
       z.object({
@@ -169,7 +170,7 @@ export const outletPortalRouter = createTRPCRouter({
       };
     }),
 
-  dispatchDetail: perm("orders:read")
+  dispatchDetail: perm(P.orders.read)
     .input(z.object({ outletId: z.string().uuid(), dispatchId: z.string().uuid() }))
     .output(
       z.object({
@@ -223,7 +224,7 @@ export const outletPortalRouter = createTRPCRouter({
       };
     }),
 
-  invoiceHistory: perm("invoices:read")
+  invoiceHistory: perm(P.invoices.read)
     .input(
       paginationInputSchema.extend({
         outletId: z.string().uuid(),

@@ -1,4 +1,6 @@
 import { PrismaClient, UserType, Prisma } from "@prisma/client";
+import { validatePermissionKeys } from "../src/rbac/catalog";
+import { PHASE1_SALES_PERMISSIONS } from "./seed-permissions";
 
 const prisma = new PrismaClient();
 
@@ -17,6 +19,11 @@ const IDS = {
 } as const;
 
 async function main() {
+  const { invalid } = validatePermissionKeys([...PHASE1_SALES_PERMISSIONS]);
+  if (invalid.length > 0) {
+    throw new Error(`[phase1-seed] Invalid Sales role permission keys: ${invalid.join(", ")}`);
+  }
+
   const adminPasswordHash = await Bun.password.hash("admin123");
   const outletPasswordHash = await Bun.password.hash("outlet123");
 
@@ -28,11 +35,11 @@ async function main() {
 
   await prisma.role.upsert({
     where: { id: IDS.salesRole },
-    update: { name: "Sales", permissions: ["orders.read", "orders.write"], isSystem: false },
+    update: { name: "Sales", permissions: [...PHASE1_SALES_PERMISSIONS], isSystem: false },
     create: {
       id: IDS.salesRole,
       name: "Sales",
-      permissions: ["orders.read", "orders.write"],
+      permissions: [...PHASE1_SALES_PERMISSIONS],
       isSystem: false
     }
   });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 
 const shiftSchema = z.object({
@@ -60,7 +61,7 @@ async function upsertAttendance(
 }
 
 export const fieldShiftsRouter = createTRPCRouter({
-  start: perm("field:write")
+  start: perm(P.field.write)
     .input(z.object({ orgId: z.string().optional() }))
     .output(shiftSchema)
     .mutation(async ({ ctx, input }) => {
@@ -90,7 +91,7 @@ export const fieldShiftsRouter = createTRPCRouter({
       return toShift(shift);
     }),
 
-  end: perm("field:write")
+  end: perm(P.field.write)
     .input(z.object({}))
     .output(shiftSchema)
     .mutation(async ({ ctx }) => {
@@ -108,7 +109,7 @@ export const fieldShiftsRouter = createTRPCRouter({
       return toShift(updated);
     }),
 
-  extend: perm("field:write")
+  extend: perm(P.field.write)
     .input(z.object({}))
     .output(shiftSchema)
     .mutation(async ({ ctx }) => {
@@ -126,7 +127,7 @@ export const fieldShiftsRouter = createTRPCRouter({
       return toShift(updated);
     }),
 
-  active: perm("field:read")
+  active: perm(P.field.read)
     .input(z.object({}))
     .output(shiftSchema.nullable())
     .query(async ({ ctx }) => {
@@ -138,7 +139,7 @@ export const fieldShiftsRouter = createTRPCRouter({
       return shift ? toShift(shift) : null;
     }),
 
-  list: perm("field:read")
+  list: perm(P.field.read)
     .input(
       z.object({
         agentId: z.string().uuid().optional(),

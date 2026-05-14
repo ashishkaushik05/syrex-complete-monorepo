@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { P } from "../src/rbac/catalog";
 
 type HeadersMap = Record<string, string>;
 
@@ -68,7 +69,7 @@ async function main() {
 
   const roleCreate = await trpcMutation(
     "roles.create",
-    { name: "Phase1 Temp Role", permissions: ["catalog.read"], isSystem: false },
+    { name: "Phase1 Temp Role", permissions: [P.catalog.read], isSystem: false },
     { "x-actor-id": ACTOR_ADMIN }
   );
   await saveSnapshot("phase1_roles_create.json", roleCreate);
@@ -76,7 +77,7 @@ async function main() {
 
   const roleUpdate = await trpcMutation(
     "roles.update",
-    { id: roleId, name: "Phase1 Temp Role Updated", permissions: ["catalog.read", "catalog.write"] },
+    { id: roleId, name: "Phase1 Temp Role Updated", permissions: [P.catalog.read, P.catalog.write] },
     { "x-actor-id": ACTOR_ADMIN }
   );
   await saveSnapshot("phase1_roles_update.json", roleUpdate);

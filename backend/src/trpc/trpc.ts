@@ -2,6 +2,7 @@ import { initTRPC } from "@trpc/server";
 import { TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { type CatalogPermission, SUPER_ADMIN_PERMISSION } from "../rbac/catalog";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -50,10 +51,10 @@ const authMiddleware = t.middleware(async ({ ctx, next }) => {
 
 export const protectedProcedure = t.procedure.use(authMiddleware);
 
-export const perm = (permission: string) =>
+export const perm = (permission: CatalogPermission) =>
   protectedProcedure.use(async ({ ctx, next }) => {
     const perms = ctx.permissions;
-    if (!perms.includes("*") && !perms.includes(permission)) {
+    if (!perms.includes(SUPER_ADMIN_PERMISSION) && !perms.includes(permission)) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: `Requires: ${permission}`

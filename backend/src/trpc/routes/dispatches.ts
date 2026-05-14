@@ -1,11 +1,13 @@
 import { OrderStatus, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { assertWarehouseScope } from "./outlet-access";
 
 function isAdmin(ctx: { permissions: string[] }) {
-  return ctx.permissions.includes("*");
+  return ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
 }
 
 const deliveryStatusSchema = z.enum(["created", "in_transit", "delivered"]);
@@ -151,7 +153,7 @@ function toDispatchItem(dispatch: {
 
 export const dispatchesRouter = createTRPCRouter({
   
-  list: perm("dispatches:read")
+  list: perm(P.dispatches.read)
     .input(
       paginationInputSchema.extend({
         warehouseId: z.string().uuid().optional(),
@@ -192,7 +194,7 @@ export const dispatchesRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("dispatches:read")
+  getById: perm(P.dispatches.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(dispatchSchema)
     .query(async ({ ctx, input }) => {
@@ -215,10 +217,11 @@ export const dispatchesRouter = createTRPCRouter({
         throw apiError("NOT_FOUND", "Dispatch not found");
       }
 
+      assertWarehouseScope(ctx, dispatch.warehouseId);
       return toDispatchItem(dispatch);
     }),
 
-  create: perm("dispatches:write")
+  create: perm(P.dispatches.write)
     .input(createDispatchInputSchema)
     .output(dispatchSchema)
     .mutation(async ({ ctx, input }) => {
@@ -391,7 +394,7 @@ export const dispatchesRouter = createTRPCRouter({
       return toDispatchItem(created);
     }),
 
-  markDelivered: perm("dispatches:deliver")
+  markDelivered: perm(P.dispatches.deliver)
     .input(
       z.object({
         id: z.string().uuid(),

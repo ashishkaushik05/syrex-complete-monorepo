@@ -1,8 +1,9 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertOutletAccess, findActorLinkedOutletId } from "./outlet-access";
+import { assertOutletAccess, assertOutletWarehouseScope, findActorLinkedOutletId } from "./outlet-access";
 import {
   orderDetailSchema,
   orderListFilterSchema,
@@ -43,7 +44,7 @@ async function nextInvoiceNumber(tx: Prisma.TransactionClient, now: Date) {
 }
 
 export const ordersRouter = createTRPCRouter({
-  list: perm("orders:read")
+  list: perm(P.orders.read)
     .input(orderListFilterSchema)
     .output(
       z.object({
@@ -54,8 +55,8 @@ export const ordersRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       if (
         input.mineOnly &&
-        !ctx.permissions.includes("*") &&
-        !ctx.permissions.includes("orders:write")
+        !ctx.permissions.includes(SUPER_ADMIN_PERMISSION) &&
+        !ctx.permissions.includes(P.orders.write)
       ) {
         throw apiError(
           "FORBIDDEN",
@@ -68,7 +69,7 @@ export const ordersRouter = createTRPCRouter({
       });
     }),
 
-  getById: perm("orders:read")
+  getById: perm(P.orders.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(orderDetailSchema)
     .query(async ({ ctx, input }) => {
@@ -77,10 +78,11 @@ export const ordersRouter = createTRPCRouter({
       if (linkedOutletId) {
         await assertOutletAccess(ctx, detail.outletId);
       }
+      await assertOutletWarehouseScope(ctx, detail.outletId);
       return detail;
     }),
 
-  create: perm("orders:write")
+  create: perm(P.orders.write)
     .input(
       z.object({
         outletId: z.string().uuid(),
@@ -180,7 +182,7 @@ export const ordersRouter = createTRPCRouter({
       return serializeOrder(created);
     }),
 
-  transition: perm("orders:manage")
+  transition: perm(P.orders.manage)
     .input(
       z.object({
         id: z.string().uuid(),
@@ -192,11 +194,23 @@ export const ordersRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       if (
         input.action === "approve" &&
-        !ctx.permissions.includes("*") &&
-        !ctx.permissions.includes("orders:approve")
+        !ctx.permissions.includes(SUPER_ADMIN_PERMISSION) &&
+        !ctx.permissions.includes(P.orders.approve)
       ) {
         throw apiError("FORBIDDEN", "Requires: orders:approve");
       }
+
+      const preCheck = await ctx.prisma.saleOrder.findUnique({
+        where: { id: input.id },
+        select: { outletId: true }
+      });
+      if (!preCheck) throw apiError("NOT_FOUND", "Order not found");
+
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      if (linkedOutletId) {
+        await assertOutletAccess(ctx, preCheck.outletId);
+      }
+      await assertOutletWarehouseScope(ctx, preCheck.outletId);
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
         const order = await tx.saleOrder.findUnique({

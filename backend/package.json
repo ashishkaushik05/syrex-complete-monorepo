@@ -7,10 +7,12 @@
     "dev": "bun run db:prepare && bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
+    "rbac:preflight": "bun run scripts/rbac-preflight.ts",
     "prisma:generate": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma generate --schema ../schema.prisma",
     "db:reset": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate",
-    "db:seed": "bun run scripts/dev-seed.ts",
-    "db:prepare": "bun run db:reset && bun run db:seed"
+    "db:seed": "bun run rbac:preflight && bun run scripts/dev-seed.ts",
+    "db:prepare": "bun run db:reset && bun run db:seed",
+    "ci:preflight": "bun run typecheck && bun run rbac:preflight"
   },
   "dependencies": {
     "@prisma/client": "^6.8.2",

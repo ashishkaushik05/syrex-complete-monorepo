@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { broadcastLocationUpdate } from "../../infra/sse";
 
 // ---------------------------------------------------------------------------
@@ -132,7 +133,7 @@ const activeAgentSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const fieldLocationRouter = createTRPCRouter({
-  ingest: perm("field:write")
+  ingest: perm(P.field.write)
     .input(
       z.object({
         locations: z.array(locationPointSchema).min(1).max(500)
@@ -185,7 +186,7 @@ export const fieldLocationRouter = createTRPCRouter({
       return { accepted: data.length };
     }),
 
-  trail: perm("field:read")
+  trail: perm(P.field.read)
     .input(
       z.object({
         shiftId: z.string().uuid(),
@@ -249,7 +250,7 @@ export const fieldLocationRouter = createTRPCRouter({
       };
     }),
 
-  agentTrail: perm("field:read")
+  agentTrail: perm(P.field.read)
     .input(
       z.object({
         agentId: z.string().uuid(),
@@ -328,7 +329,7 @@ export const fieldLocationRouter = createTRPCRouter({
       };
     }),
 
-  activeAgents: perm("field:read")
+  activeAgents: perm(P.field.read)
     .input(z.object({ orgId: z.string().optional() }))
     .output(z.array(activeAgentSchema))
     .query(async ({ ctx, input }) => {

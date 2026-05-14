@@ -2,14 +2,14 @@
   "result": {
     "data": {
       "json": {
-        "id": "f0b7fdfe-0d0f-4681-8c7b-3e494ee913d3",
+        "id": "9a7c0516-0460-4b2d-86ef-a16abd3ae134",
         "name": "Phase1 Temp Role Updated",
         "permissions": [
-          "catalog.read",
-          "catalog.write"
+          "catalog:read",
+          "catalog:write"
         ],
         "isSystem": false,
-        "createdAt": "2026-05-08T11:12:26.780Z"
+        "createdAt": "2026-05-14T17:58:12.754Z"
       }
     }
   }

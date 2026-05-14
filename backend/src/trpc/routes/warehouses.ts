@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
 function isAdmin(ctx: { permissions: string[] }) {
-  return ctx.permissions.includes("*");
+  return ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
 }
 
 const warehouseSchema = z.object({
@@ -60,7 +61,7 @@ function toWarehouse(warehouse: {
 const managerInclude = { manager: { select: { id: true, name: true, email: true } } } as const;
 
 export const warehousesRouter = createTRPCRouter({
-  list: perm("warehouses:read")
+  list: perm(P.warehouses.read)
     .input(listWarehousesInputSchema)
     .output(z.object({ items: z.array(warehouseSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
@@ -90,7 +91,7 @@ export const warehousesRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("warehouses:read")
+  getById: perm(P.warehouses.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(warehouseSchema)
     .query(async ({ ctx, input }) => {
@@ -104,7 +105,7 @@ export const warehousesRouter = createTRPCRouter({
       return toWarehouse(warehouse);
     }),
 
-  create: perm("warehouses:write")
+  create: perm(P.warehouses.write)
     .input(createWarehouseSchema)
     .output(warehouseSchema)
     .mutation(async ({ ctx, input }) => {
@@ -127,7 +128,7 @@ export const warehousesRouter = createTRPCRouter({
       return toWarehouse(warehouse);
     }),
 
-  update: perm("warehouses:write")
+  update: perm(P.warehouses.write)
     .input(updateWarehouseSchema)
     .output(warehouseSchema)
     .mutation(async ({ ctx, input }) => {

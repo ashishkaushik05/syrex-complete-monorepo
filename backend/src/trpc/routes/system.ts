@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { publicProcedure, createTRPCRouter } from "../trpc";
+import { publicProcedure, createTRPCRouter, perm } from "../trpc";
+import { P, permissionCatalog } from "../../rbac/catalog";
 
 const conventionSchema = z.object({
   timezonePolicy: z.literal("UTC_ISO_8601"),
@@ -32,5 +33,24 @@ export const systemRouter = createTRPCRouter({
       }
     },
     errors: ["BAD_REQUEST", "CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "FORBIDDEN", "INTERNAL"]
-  }))
+  })),
+  permissions: perm(P.roles.read)
+    .output(
+      z.object({
+        permissions: z.array(
+          z.object({
+            key: z.string(),
+            module: z.string(),
+            action: z.string(),
+            label: z.string(),
+            description: z.string(),
+            risk: z.enum(["low", "medium", "high"]),
+            group: z.string()
+          })
+        )
+      })
+    )
+    .query(() => ({
+      permissions: permissionCatalog
+    }))
 });

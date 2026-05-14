@@ -1,4 +1,6 @@
 import { PrismaClient, UserType } from "@prisma/client";
+import { validatePermissionKeys } from "../src/rbac/catalog";
+import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS } from "./seed-permissions";
 
 const prisma = new PrismaClient();
 
@@ -11,32 +13,17 @@ const IDS = {
   warehouseUser: "d1000000-0000-4000-8000-000000000003"
 } as const;
 
-const SALES_PERMISSIONS = [
-  "orders:read",
-  "orders:write",
-  "catalog:read",
-  "outlets:read",
-  "inventory:read",
-  "dispatches:read",
-  "invoices:read",
-  "payments:read",
-  "attachments:read",
-  "attachments:write"
-];
-
-const WAREHOUSE_PERMISSIONS = [
-  "inventory:read",
-  "inventory:write",
-  "warehouses:read",
-  "orders:read",
-  "dispatches:read",
-  "dispatches:write",
-  "dispatches:deliver",
-  "attachments:read",
-  "attachments:write"
-];
+function assertValidSeedPermissions(roleName: string, permissions: readonly string[]) {
+  const { invalid } = validatePermissionKeys([...permissions]);
+  if (invalid.length > 0) {
+    throw new Error(`[dev-seed] Invalid permission keys for ${roleName}: ${invalid.join(", ")}`);
+  }
+}
 
 async function main() {
+  assertValidSeedPermissions("Sales", DEV_SALES_PERMISSIONS);
+  assertValidSeedPermissions("Warehouse Manager", DEV_WAREHOUSE_PERMISSIONS);
+
   const adminPasswordHash = await Bun.password.hash("admin123");
   const outletPasswordHash = await Bun.password.hash("outlet123");
   const warehousePasswordHash = await Bun.password.hash("warehouse123");
@@ -49,17 +36,17 @@ async function main() {
 
   await prisma.role.upsert({
     where: { id: IDS.salesRole },
-    update: { name: "Sales", permissions: SALES_PERMISSIONS, isSystem: false },
-    create: { id: IDS.salesRole, name: "Sales", permissions: SALES_PERMISSIONS, isSystem: false }
+    update: { name: "Sales", permissions: [...DEV_SALES_PERMISSIONS], isSystem: false },
+    create: { id: IDS.salesRole, name: "Sales", permissions: [...DEV_SALES_PERMISSIONS], isSystem: false }
   });
 
   await prisma.role.upsert({
     where: { id: IDS.warehouseRole },
-    update: { name: "Warehouse Manager", permissions: WAREHOUSE_PERMISSIONS, isSystem: false },
+    update: { name: "Warehouse Manager", permissions: [...DEV_WAREHOUSE_PERMISSIONS], isSystem: false },
     create: {
       id: IDS.warehouseRole,
       name: "Warehouse Manager",
-      permissions: WAREHOUSE_PERMISSIONS,
+      permissions: [...DEV_WAREHOUSE_PERMISSIONS],
       isSystem: false
     }
   });

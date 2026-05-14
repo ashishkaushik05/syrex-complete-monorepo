@@ -1,0 +1,36 @@
+name: RBAC Preflight
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'schema.prisma'
+      - '.github/workflows/rbac-preflight.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+      - 'schema.prisma'
+      - '.github/workflows/rbac-preflight.yml'
+
+jobs:
+  rbac-preflight:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: RBAC CI Preflight
+        run: bun run ci:preflight

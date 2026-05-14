@@ -2,15 +2,15 @@
   "result": {
     "data": {
       "json": {
-        "id": "86a55b27-7e26-446a-9e57-fa1997981cbd",
+        "id": "0c975dac-87c9-484f-ad5e-84dc803d1c50",
         "email": "phase1.new.user@syrex.dev",
         "phone": null,
         "name": "Phase1 Updated User",
         "userType": "internal",
-        "roleId": "f0b7fdfe-0d0f-4681-8c7b-3e494ee913d3",
+        "roleId": "9a7c0516-0460-4b2d-86ef-a16abd3ae134",
         "isActive": true,
-        "createdAt": "2026-05-08T11:12:26.911Z",
-        "updatedAt": "2026-05-08T11:12:26.918Z"
+        "createdAt": "2026-05-14T17:58:12.860Z",
+        "updatedAt": "2026-05-14T17:58:12.875Z"
       }
     }
   }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 
 const visitSchema = z.object({
@@ -48,7 +49,7 @@ function toVisit(v: {
 }
 
 export const fieldVisitsRouter = createTRPCRouter({
-  log: perm("field:write")
+  log: perm(P.field.write)
     .input(
       z.object({
         lat: z.number(),
@@ -84,7 +85,7 @@ export const fieldVisitsRouter = createTRPCRouter({
       return toVisit(visit);
     }),
 
-  list: perm("field:read")
+  list: perm(P.field.read)
     .input(
       z.object({
         agentId: z.string().uuid().optional(),
@@ -126,7 +127,7 @@ export const fieldVisitsRouter = createTRPCRouter({
       return visits.map(toVisit);
     }),
 
-  forShift: perm("field:read")
+  forShift: perm(P.field.read)
     .input(z.object({ shiftId: z.string().uuid() }))
     .output(z.array(visitSchema))
     .query(async ({ ctx, input }) => {

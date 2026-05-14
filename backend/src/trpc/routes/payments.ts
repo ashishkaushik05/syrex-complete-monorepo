@@ -1,8 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { assertOutletWarehouseScope } from "./outlet-access";
 
 const allocationSchema = z.object({
   id: z.string(),
@@ -67,7 +69,7 @@ function toPaymentItem(payment: {
 }
 
 export const paymentsRouter = createTRPCRouter({
-  list: perm("payments:read")
+  list: perm(P.payments.read)
     .input(
       paginationInputSchema.extend({
         outletId: z.string().uuid().optional(),
@@ -101,7 +103,7 @@ export const paymentsRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("payments:read")
+  getById: perm(P.payments.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(paymentSchema)
     .query(async ({ ctx, input }) => {
@@ -112,10 +114,11 @@ export const paymentsRouter = createTRPCRouter({
       if (!payment) {
         throw apiError("NOT_FOUND", "Payment not found");
       }
+      await assertOutletWarehouseScope(ctx, payment.outletId);
       return toPaymentItem(payment);
     }),
 
-  create: perm("payments:write")
+  create: perm(P.payments.write)
     .input(createPaymentSchema)
     .output(paymentSchema)
     .mutation(async ({ ctx, input }) => {

@@ -9,17 +9,17 @@
             "*"
           ],
           "isSystem": true,
-          "createdAt": "2026-05-08T11:12:25.489Z"
+          "createdAt": "2026-05-14T17:58:11.423Z"
         },
         {
           "id": "10000000-0000-4000-8000-000000000002",
           "name": "Sales",
           "permissions": [
-            "orders.read",
-            "orders.write"
+            "orders:read",
+            "orders:write"
           ],
           "isSystem": false,
-          "createdAt": "2026-05-08T11:12:25.500Z"
+          "createdAt": "2026-05-14T17:58:11.428Z"
         }
       ]
     }

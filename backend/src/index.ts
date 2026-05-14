@@ -1,6 +1,9 @@
 import { createApp } from "./app";
 import { env } from "./config/env";
 import { logger } from "./infra/logger";
+import { assertPermissionCatalogIntegrity } from "./rbac/catalog";
+
+assertPermissionCatalogIntegrity();
 
 const app = createApp();
 

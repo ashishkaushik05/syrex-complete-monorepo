@@ -1,5 +1,26 @@
 import type { TrpcContext } from "../context";
 import { apiError } from "../error";
+import { SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+
+export function assertWarehouseScope(ctx: TrpcContext, resourceWarehouseId: string | null): void {
+  if (ctx.permissions.includes(SUPER_ADMIN_PERMISSION)) return;
+  if (!ctx.managedWarehouseId) return;
+  if (ctx.managedWarehouseId !== resourceWarehouseId) {
+    throw apiError("FORBIDDEN", "Outside managed warehouse scope");
+  }
+}
+
+export async function assertOutletWarehouseScope(ctx: TrpcContext, outletId: string): Promise<void> {
+  if (ctx.permissions.includes(SUPER_ADMIN_PERMISSION)) return;
+  if (!ctx.managedWarehouseId) return;
+  const outlet = await ctx.prisma.outlet.findUnique({
+    where: { id: outletId },
+    select: { warehouseId: true }
+  });
+  if (!outlet || outlet.warehouseId !== ctx.managedWarehouseId) {
+    throw apiError("FORBIDDEN", "Outside managed warehouse scope");
+  }
+}
 
 export async function findActorLinkedOutletId(
   ctx: TrpcContext,

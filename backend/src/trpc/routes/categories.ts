@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -55,7 +56,7 @@ function toCategory(category: {
 }
 
 export const categoriesRouter = createTRPCRouter({
-  list: perm("catalog:read")
+  list: perm(P.catalog.read)
     .input(listCategoriesInputSchema)
     .output(z.object({ items: z.array(categorySchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
@@ -78,7 +79,7 @@ export const categoriesRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("catalog:read")
+  getById: perm(P.catalog.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(categorySchema)
     .query(async ({ ctx, input }) => {
@@ -89,7 +90,7 @@ export const categoriesRouter = createTRPCRouter({
       return toCategory(category);
     }),
 
-  create: perm("catalog:write")
+  create: perm(P.catalog.write)
     .input(createCategorySchema)
     .output(categorySchema)
     .mutation(async ({ ctx, input }) => {
@@ -109,7 +110,7 @@ export const categoriesRouter = createTRPCRouter({
       return toCategory(category);
     }),
 
-  update: perm("catalog:write")
+  update: perm(P.catalog.write)
     .input(updateCategorySchema)
     .output(categorySchema)
     .mutation(async ({ ctx, input }) => {

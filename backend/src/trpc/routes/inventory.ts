@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
 function isAdmin(ctx: { permissions: string[] }) {
-  return ctx.permissions.includes("*");
+  return ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
 }
 
 const stockItemSchema = z.object({
@@ -51,7 +52,7 @@ function toStockItem(stock: {
 }
 
 export const inventoryRouter = createTRPCRouter({
-  stockList: perm("inventory:read")
+  stockList: perm(P.inventory.read)
     .input(
       paginationInputSchema.extend({
         warehouseId: z.string().uuid(),
@@ -99,7 +100,7 @@ export const inventoryRouter = createTRPCRouter({
       };
     }),
 
-  createGoodsReceipt: perm("inventory:write")
+  createGoodsReceipt: perm(P.inventory.receive)
     .input(
       z.object({
         warehouseId: z.string().uuid(),
@@ -216,7 +217,7 @@ export const inventoryRouter = createTRPCRouter({
       };
     }),
 
-  createStockAdjustment: perm("inventory:write")
+  createStockAdjustment: perm(P.inventory.adjust)
     .input(stockAdjustmentInputSchema)
     .output(
       z.object({

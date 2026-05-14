@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import { Prisma } from "@prisma/client";
@@ -70,7 +71,7 @@ async function hashPassword(password: string) {
 }
 
 export const usersRouter = createTRPCRouter({
-  list: perm("users:read")
+  list: perm(P.users.read)
     .input(listUsersInputSchema)
     .output(
       z.object({
@@ -114,7 +115,7 @@ export const usersRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("users:read")
+  getById: perm(P.users.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(userSchema)
     .query(async ({ ctx, input }) => {
@@ -138,7 +139,7 @@ export const usersRouter = createTRPCRouter({
       return toUser(user);
     }),
 
-  create: perm("users:write").input(createUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
+  create: perm(P.users.write).input(createUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
     const role = await ctx.prisma.role.findUnique({ where: { id: input.roleId } });
     if (!role) {
       throw apiError("BAD_REQUEST", "Invalid roleId");
@@ -173,7 +174,7 @@ export const usersRouter = createTRPCRouter({
     return toUser(user);
   }),
 
-  update: perm("users:write").input(updateUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
+  update: perm(P.users.write).input(updateUserSchema).output(userSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.user.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "User not found");
@@ -208,7 +209,7 @@ export const usersRouter = createTRPCRouter({
     return toUser(user);
   }),
 
-  changePassword: perm("users:write")
+  changePassword: perm(P.users.write)
     .input(changePasswordSchema)
     .output(z.object({ ok: z.literal(true) }))
     .mutation(async ({ ctx, input }) => {
@@ -225,7 +226,7 @@ export const usersRouter = createTRPCRouter({
       return { ok: true };
     }),
 
-  remove: perm("users:write")
+  remove: perm(P.users.deactivate)
     .input(z.object({ id: z.string().uuid() }))
     .output(z.object({ ok: z.literal(true) }))
     .mutation(async ({ ctx, input }) => {
@@ -249,7 +250,7 @@ export const usersRouter = createTRPCRouter({
       return { ok: true };
     }),
 
-  toggleFieldSense: perm("users:write")
+  toggleFieldSense: perm(P.users["field-enable"])
     .input(z.object({ id: z.string().uuid(), enabled: z.boolean() }))
     .output(z.object({ ok: z.literal(true), isFieldEnabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {

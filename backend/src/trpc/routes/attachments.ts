@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import type { TrpcContext } from "../context";
@@ -132,7 +133,7 @@ async function assertEntityExists(
 }
 
 export const attachmentsRouter = createTRPCRouter({
-  list: perm("attachments:read")
+  list: perm(P.attachments.read)
     .input(
       paginationInputSchema.extend({
         entityType: attachmentEntityTypeSchema.optional(),
@@ -169,7 +170,7 @@ export const attachmentsRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("attachments:read")
+  getById: perm(P.attachments.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(attachmentSchema)
     .query(async ({ ctx, input }) => {
@@ -183,7 +184,7 @@ export const attachmentsRouter = createTRPCRouter({
       return toAttachment(row);
     }),
 
-  createPending: perm("attachments:write")
+  createPending: perm(P.attachments.write)
     .input(
       z.object({
         entityType: attachmentEntityTypeSchema,
@@ -247,7 +248,7 @@ export const attachmentsRouter = createTRPCRouter({
       };
     }),
 
-  confirm: perm("attachments:write")
+  confirm: perm(P.attachments.write)
     .input(
       z.object({
         attachmentId: z.string().uuid()
@@ -295,7 +296,7 @@ export const attachmentsRouter = createTRPCRouter({
       return toAttachment(updated);
     }),
 
-  remove: perm("attachments:write")
+  remove: perm(P.attachments.delete)
     .input(z.object({ id: z.string().uuid() }))
     .output(z.object({ id: z.string(), deleted: z.boolean() }))
     .mutation(async ({ ctx, input }) => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import type { TrpcContext } from "../context";
@@ -88,7 +89,7 @@ function toImage(image: {
 }
 
 export const imagesRouter = createTRPCRouter({
-  list: perm("catalog:read")
+  list: perm(P.catalog.read)
     .input(listImagesInputSchema)
     .output(z.object({ items: z.array(imageSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
@@ -111,7 +112,7 @@ export const imagesRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("catalog:read")
+  getById: perm(P.catalog.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(imageSchema)
     .query(async ({ ctx, input }) => {
@@ -122,7 +123,7 @@ export const imagesRouter = createTRPCRouter({
       return toImage(image);
     }),
 
-  create: perm("catalog:write").input(createImageSchema).output(imageSchema).mutation(async ({ ctx, input }) => {
+  create: perm(P.catalog.write).input(createImageSchema).output(imageSchema).mutation(async ({ ctx, input }) => {
     validateOneTarget(input);
     await validateTargetExists(ctx, input);
     const image = await ctx.prisma.image.create({
@@ -138,7 +139,7 @@ export const imagesRouter = createTRPCRouter({
     return toImage(image);
   }),
 
-  update: perm("catalog:write").input(updateImageSchema).output(imageSchema).mutation(async ({ ctx, input }) => {
+  update: perm(P.catalog.write).input(updateImageSchema).output(imageSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.image.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "Image not found");
@@ -166,7 +167,7 @@ export const imagesRouter = createTRPCRouter({
     return toImage(image);
   }),
 
-  remove: perm("catalog:write")
+  remove: perm(P.catalog.delete)
     .input(z.object({ id: z.string().uuid() }))
     .output(z.object({ ok: z.literal(true) }))
     .mutation(async ({ ctx, input }) => {

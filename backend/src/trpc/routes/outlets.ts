@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -79,7 +80,7 @@ function toOutlet(outlet: {
 }
 
 export const outletsRouter = createTRPCRouter({
-  list: perm("outlets:read")
+  list: perm(P.outlets.read)
     .input(listOutletsInputSchema)
     .output(z.object({ items: z.array(outletSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
@@ -108,7 +109,7 @@ export const outletsRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("outlets:read")
+  getById: perm(P.outlets.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(outletSchema)
     .query(async ({ ctx, input }) => {
@@ -119,7 +120,7 @@ export const outletsRouter = createTRPCRouter({
       return toOutlet(outlet);
     }),
 
-  create: perm("outlets:write").input(createOutletSchema).output(outletSchema).mutation(async ({ ctx, input }) => {
+  create: perm(P.outlets.write).input(createOutletSchema).output(outletSchema).mutation(async ({ ctx, input }) => {
     const user = await ctx.prisma.user.findUnique({ where: { id: input.userId } });
     if (!user) {
       throw apiError("BAD_REQUEST", "Invalid userId");
@@ -147,7 +148,7 @@ export const outletsRouter = createTRPCRouter({
     return toOutlet(outlet);
   }),
 
-  update: perm("outlets:write").input(updateOutletSchema).output(outletSchema).mutation(async ({ ctx, input }) => {
+  update: perm(P.outlets.write).input(updateOutletSchema).output(outletSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.outlet.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "Outlet not found");

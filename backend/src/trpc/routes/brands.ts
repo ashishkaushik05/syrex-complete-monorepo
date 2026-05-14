@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
@@ -46,7 +47,7 @@ function toBrand(brand: {
 }
 
 export const brandsRouter = createTRPCRouter({
-  list: perm("catalog:read")
+  list: perm(P.catalog.read)
     .input(listBrandsInputSchema)
     .output(z.object({ items: z.array(brandSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
@@ -68,7 +69,7 @@ export const brandsRouter = createTRPCRouter({
       };
     }),
 
-  getById: perm("catalog:read")
+  getById: perm(P.catalog.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(brandSchema)
     .query(async ({ ctx, input }) => {
@@ -79,7 +80,7 @@ export const brandsRouter = createTRPCRouter({
       return toBrand(brand);
     }),
 
-  create: perm("catalog:write").input(createBrandSchema).output(brandSchema).mutation(async ({ ctx, input }) => {
+  create: perm(P.catalog.write).input(createBrandSchema).output(brandSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.brand.findUnique({ where: { name: input.name } });
     if (existing) {
       throw apiError("CONFLICT", "Brand name already exists");
@@ -94,7 +95,7 @@ export const brandsRouter = createTRPCRouter({
     return toBrand(brand);
   }),
 
-  update: perm("catalog:write").input(updateBrandSchema).output(brandSchema).mutation(async ({ ctx, input }) => {
+  update: perm(P.catalog.write).input(updateBrandSchema).output(brandSchema).mutation(async ({ ctx, input }) => {
     const existing = await ctx.prisma.brand.findUnique({ where: { id: input.id } });
     if (!existing) {
       throw apiError("NOT_FOUND", "Brand not found");

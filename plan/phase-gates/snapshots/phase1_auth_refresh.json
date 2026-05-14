@@ -2,15 +2,24 @@
   "result": {
     "data": {
       "json": {
-        "accessToken": "access_fc0ea711220443979eb9f4df52f6611f",
-        "refreshToken": "refresh_47ef46f505e24978b612aef22ef1f3d1",
+        "accessToken": "access_0ffa26a476ee46adb85eeaa5f1299bd0",
+        "refreshToken": "refresh_175c02bf2c7942d191e288444a68e8fb",
         "expiresIn": 900,
         "user": {
           "id": "20000000-0000-4000-8000-000000000001",
           "email": "admin.phase1@syrex.dev",
           "name": "Phase1 Admin",
           "userType": "internal",
-          "roleId": "10000000-0000-4000-8000-000000000001"
+          "roleId": "10000000-0000-4000-8000-000000000001",
+          "role": {
+            "id": "10000000-0000-4000-8000-000000000001",
+            "name": "Admin",
+            "permissions": [
+              "*"
+            ]
+          },
+          "managedWarehouseId": "30000000-0000-4000-8000-000000000001",
+          "outletId": null
         }
       }
     }

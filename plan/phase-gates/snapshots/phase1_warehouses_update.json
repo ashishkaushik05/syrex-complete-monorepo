@@ -2,13 +2,18 @@
   "result": {
     "data": {
       "json": {
-        "id": "ad90e226-e192-4c95-9522-3cc070c93330",
+        "id": "94ea0781-d90a-40c1-ab5c-ecd184ed616a",
         "name": "Phase1 New Warehouse",
         "location": "Mangaluru",
         "address": "Smoke warehouse",
-        "managerId": "86a55b27-7e26-446a-9e57-fa1997981cbd",
+        "managerId": "0c975dac-87c9-484f-ad5e-84dc803d1c50",
+        "manager": {
+          "id": "0c975dac-87c9-484f-ad5e-84dc803d1c50",
+          "name": "Phase1 Updated User",
+          "email": "phase1.new.user@syrex.dev"
+        },
         "isActive": true,
-        "createdAt": "2026-05-08T11:12:26.991Z"
+        "createdAt": "2026-05-14T17:58:12.971Z"
       }
     }
   }
