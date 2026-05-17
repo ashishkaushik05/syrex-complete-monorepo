@@ -8,6 +8,46 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Test
-        run: echo "Workflow is alive"
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: 45.195.159.172
+          port: 2222
+          username: ashish
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+
+            cd /srv/syrex-api
+            git pull origin master
+
+            cd /srv/syrex-api/backend
+            /home/ashish/.bun/bin/bun install --frozen-lockfile
+
+            cd /srv/syrex-api
+            echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
+            backend/node_modules/.bin/prisma generate --schema schema.prisma
+            rm -f package.json
+
+            cd /srv/syrex-api/backend
+            PRISMA_GENERATE_SKIP_AUTOINSTALL=1 /home/ashish/.bun/bin/bunx prisma db push --schema ../schema.prisma --skip-generate --accept-data-loss
+
+            cd /srv/syrex-api/web
+            npm ci
+            VITE_API_URL=https://strideit.syrexbatteries.in npm run build
+
+            sudo systemctl restart syrex-api
+
+            for i in $(seq 1 10); do
+              sleep 3
+              STATUS=$(curl -sf http://localhost:3000/health 2>/dev/null || true)
+              if echo "$STATUS" | grep -q '"ok"'; then
+                echo "Deploy successful"
+                exit 0
+              fi
+              echo "Waiting... $i/10"
+            done
+            echo "Health check failed" && exit 1
