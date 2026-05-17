@@ -9,6 +9,7 @@ import { ORDERS_P, ordersManifest } from "./modules/orders";
 import { OUTLETS_P, outletsManifest } from "./modules/outlets";
 import { PAYMENTS_P, paymentsManifest } from "./modules/payments";
 import { ROLES_P, rolesManifest } from "./modules/roles";
+import { SERVICE_P, serviceManifest } from "./modules/service";
 import { USERS_P, usersManifest } from "./modules/users";
 import { WAREHOUSES_P, warehousesManifest } from "./modules/warehouses";
 
@@ -23,6 +24,7 @@ const manifests = [
   outletsManifest,
   paymentsManifest,
   rolesManifest,
+  serviceManifest,
   usersManifest,
   warehousesManifest,
 ] as const;
@@ -44,6 +46,7 @@ export const P = {
   outlets: OUTLETS_P,
   payments: PAYMENTS_P,
   roles: ROLES_P,
+  service: SERVICE_P,
   users: USERS_P,
   warehouses: WAREHOUSES_P,
 } as const;

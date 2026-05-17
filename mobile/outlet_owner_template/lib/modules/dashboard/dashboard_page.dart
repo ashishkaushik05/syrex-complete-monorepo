@@ -72,6 +72,13 @@ class DashboardPage extends ConsumerWidget {
               label: 'Browse Catalog',
               onTap: () => context.push('/catalog'),
             ),
+            // Field Sense tile — only shown when user has isFieldEnabled
+            if (session.user?.isFieldEnabled == true)
+              _NavTile(
+                icon: Icons.location_on,
+                label: 'Field Sense',
+                onTap: () => context.push('/field'),
+              ),
           ],
         ),
       ),

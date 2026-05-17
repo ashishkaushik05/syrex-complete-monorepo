@@ -12,6 +12,9 @@ import '../../modules/orders/create_order_page.dart';
 import '../../modules/orders/dispatch_detail_page.dart';
 import '../../modules/orders/order_detail_page.dart';
 import '../../modules/orders/orders_history_page.dart';
+import '../../modules/field/shift/shift_screen.dart';
+import '../../modules/field/visits/log_visit_screen.dart';
+import '../../modules/field/attendance/attendance_screen.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   final session = ref.watch(sessionControllerProvider);
@@ -93,6 +96,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/catalog',
         builder: (_, __) => const CatalogPage(),
+      ),
+      GoRoute(
+        path: '/field',
+        builder: (_, __) => const ShiftScreen(),
+      ),
+      GoRoute(
+        path: '/field/visit/log',
+        builder: (_, __) => const LogVisitScreen(),
+      ),
+      GoRoute(
+        path: '/field/attendance',
+        builder: (_, __) => const AttendanceScreen(),
       ),
     ],
   );

@@ -16,6 +16,11 @@ dependencies:
   dio: ^5.8.0+1
   flutter_secure_storage: ^9.2.4
   logger: ^2.5.0
+  geolocator: ^13.0.0
+  permission_handler: ^11.3.1
+  flutter_background_service: ^5.0.6
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:

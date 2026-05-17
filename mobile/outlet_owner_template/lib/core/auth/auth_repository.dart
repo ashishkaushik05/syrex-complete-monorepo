@@ -55,6 +55,7 @@ class AuthRepository {
               .toList(),
       managedWarehouseId: result['managedWarehouseId']?.toString(),
       outletId: result['outletId']?.toString(),
+      isFieldEnabled: (result['isFieldEnabled'] as bool?) ?? false,
     );
   }
 

@@ -7,7 +7,7 @@ import '../../core/outlet/outlet_context.dart';
 import '../../shared/widgets/error_view.dart';
 
 final _dispatchHistoryProvider = FutureProvider.autoDispose
-    .family<PagedResult<DispatchListItem>, String>((ref, outletId) {
+    .family<PagedResult<LinkedDispatch>, String>((ref, outletId) {
   return ref.watch(outletPortalClientProvider).dispatchHistory(outletId);
 });
 
@@ -56,7 +56,7 @@ class DispatchHistoryPage extends ConsumerWidget {
 class _DispatchCard extends StatelessWidget {
   const _DispatchCard({required this.item, required this.outletId});
 
-  final DispatchListItem item;
+  final LinkedDispatch item;
   final String outletId;
 
   @override

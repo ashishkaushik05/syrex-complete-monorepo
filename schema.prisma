@@ -55,6 +55,38 @@ enum GoodsReceiptSourceType {
   production_line_movement
 }
 
+enum ServiceComplaintStatus {
+  raised
+  assigned
+  visit
+  test_result_submitted
+  retest_requested
+  resolved
+  telephonic_closure
+  cancelled
+}
+
+enum ServiceFormFieldType {
+  text
+  textarea
+  number
+  boolean
+  select
+  multiselect
+  date
+}
+
+enum ServiceWarrantyDecisionStatus {
+  pending
+  approved
+  rejected
+}
+
+enum ServiceMachineClientStatus {
+  active
+  revoked
+}
+
 // =============================================================================
 // AUTH + ROLES
 // =============================================================================
@@ -87,9 +119,21 @@ model User {
   managedWarehouse       Warehouse?         @relation("WarehouseManager")
   authSessions           AuthSession[]
   shifts                 Shift[]
-  fieldVisits            FieldVisit[]
+  fieldVisits            FieldVisit[] @relation("FieldVisitAgent")
+  fieldVisitsAsCustomer  FieldVisit[] @relation("FieldVisitCustomer")
+  fieldStops             FieldStop[]
   attendance             DailyAttendance[]
   shiftSchedule          ShiftSchedule?
+  serviceComplaintsRaised ServiceComplaint[] @relation("ServiceComplaintRaisedBy")
+  serviceAssignmentsAsi  ServiceAssignmentHistory[] @relation("ServiceAssignmentAsi")
+  serviceAssignmentsSe   ServiceAssignmentHistory[] @relation("ServiceAssignmentSe")
+  serviceAssignmentsBy   ServiceAssignmentHistory[] @relation("ServiceAssignmentBy")
+  serviceTestsSubmitted  ServiceTestReport[] @relation("ServiceTestSubmittedBy")
+  serviceActivities      ServiceComplaintActivity[] @relation("ServiceActivityActor")
+  serviceWarrantyDecisions ServiceWarrantyDecision[] @relation("ServiceWarrantyDecidedBy")
+  serviceMachineClientsCreated ServiceMachineClient[] @relation("ServiceMachineClientCreatedBy")
+  serviceFormTemplatesCreated  ServiceFormTemplate[]  @relation("ServiceFormTemplateCreatedBy")
+  serviceFormSubmissions       ServiceFormSubmission[] @relation("ServiceFormSubmittedBy")
 
   @@map("users")
 }
@@ -170,6 +214,9 @@ model Outlet {
   orders   SaleOrder[]
   invoices Invoice[]
   payments OutletPayment[]
+  serviceComplaints ServiceComplaint[]
+  serviceSerialsSold ServiceSerialIndex[]
+  fieldVisits FieldVisit[]
 
   @@map("outlets")
 }
@@ -233,6 +280,8 @@ model Product {
   warehouseStocks   WarehouseStock[]
   goodsReceiptLines GoodsReceiptLine[]
   stockAdjustments  StockAdjustment[]
+  serviceComplaintLines ServiceComplaintLine[]
+  serviceSerialIndexRows ServiceSerialIndex[]
 
   @@index([categoryId, isActive])
   @@map("products")
@@ -279,6 +328,8 @@ model Warehouse {
   receipts      GoodsReceipt[]
   adjustments   StockAdjustment[]
   dispatches    Dispatch[]
+  serviceSourceOrders SaleOrder[] @relation("ServiceSourceWarehouse")
+  serviceWarrantyDecisions ServiceWarrantyDecision[]
 
   @@index([managerId])
   @@map("warehouses")
@@ -356,6 +407,11 @@ model SaleOrder {
   id              String        @id @default(uuid())
   orderNumber     String        @unique
   outletId        String
+  orderType       String        @default("sale")
+  sourceComplaintId String?
+  sourceWarehouseId String?
+  suppressAutoInvoice Boolean   @default(false)
+  serviceMetadata Json?
   createdById     String?
   orderDate       DateTime      @default(now())
   deliveryAddress String
@@ -375,17 +431,23 @@ model SaleOrder {
   updatedAt       DateTime      @updatedAt
 
   outlet     Outlet  @relation(fields: [outletId],    references: [id])
+  sourceComplaint ServiceComplaint? @relation("ComplaintReplacementOrders", fields: [sourceComplaintId], references: [id])
+  sourceWarehouse Warehouse? @relation("ServiceSourceWarehouse", fields: [sourceWarehouseId], references: [id])
   createdBy  User?   @relation("OrderCreatedBy",  fields: [createdById],  references: [id])
   approvedBy User?   @relation("OrderApprovedBy", fields: [approvedById], references: [id])
   heldBy     User?   @relation("OrderHeldBy",     fields: [heldById],     references: [id])
 
   lines   SaleOrderLine[]
   invoice Invoice?        // 1:1 — auto-generated on approval
+  warrantyDecisionLink ServiceWarrantyDecision? @relation("ServiceWarrantyReplacementOrder")
 
   // Dispatches are resolved via DispatchLine → SaleOrderLine → SaleOrder
   // Query: DispatchLine.findMany({ where: { orderLine: { orderId: id } } })
 
   @@index([outletId, status])
+  @@index([orderType, status])
+  @@index([sourceComplaintId])
+  @@index([sourceWarehouseId])
   @@index([status, priority, createdAt])
   @@map("sale_orders")
 }
@@ -674,6 +736,7 @@ model Shift {
   agent     User            @relation(fields: [agentId], references: [id])
   locations FieldLocation[]
   visits    FieldVisit[]
+  stops     FieldStop[]
 
   @@index([agentId, status])
   @@index([orgId, status])
@@ -725,15 +788,43 @@ model FieldVisit {
   lng         Float
   description String?
   audioUrl    String?
+  outletId    String?
+  customerId  String?
   recordedAt  DateTime
   createdAt   DateTime @default(now())
+
+  agent    User    @relation("FieldVisitAgent", fields: [agentId], references: [id])
+  shift    Shift   @relation(fields: [shiftId], references: [id])
+  outlet   Outlet? @relation(fields: [outletId], references: [id])
+  customer User?   @relation("FieldVisitCustomer", fields: [customerId], references: [id])
+
+  @@index([agentId, recordedAt])
+  @@index([shiftId])
+  @@index([outletId])
+  @@index([customerId])
+  @@index([outletId, customerId, createdAt])
+  @@map("field_visits")
+}
+
+model FieldStop {
+  id         String    @id @default(uuid())
+  agentId    String
+  shiftId    String
+  orgId      String
+  lat        Float
+  lng        Float
+  reason     String?
+  notes      String?
+  startedAt  DateTime
+  endedAt    DateTime?
+  createdAt  DateTime  @default(now())
 
   agent User  @relation(fields: [agentId], references: [id])
   shift Shift @relation(fields: [shiftId], references: [id])
 
-  @@index([agentId, recordedAt])
+  @@index([agentId, startedAt])
   @@index([shiftId])
-  @@map("field_visits")
+  @@map("field_stops")
 }
 
 model DailyAttendance {
@@ -751,4 +842,298 @@ model DailyAttendance {
   @@unique([userId, date])
   @@index([orgId, date])
   @@map("daily_attendance")
+}
+
+// =============================================================================
+// SERVICE  —  Complaints, serial intelligence, warranty fulfillment
+// =============================================================================
+
+model ServiceComplaint {
+  id               String                 @id @default(uuid())
+  complaintNumber  String                 @unique
+  status           ServiceComplaintStatus @default(raised)
+  title            String?
+  description      String?
+  outletId         String?
+  raisedById       String
+  telephonicReason String?
+  resolutionNote   String?
+  closedAt         DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  outlet             Outlet?                    @relation(fields: [outletId], references: [id])
+  raisedBy           User                       @relation("ServiceComplaintRaisedBy", fields: [raisedById], references: [id])
+  lines              ServiceComplaintLine[]
+  assignments        ServiceAssignmentHistory[]
+  testReports        ServiceTestReport[]
+  activities         ServiceComplaintActivity[]
+  warrantyDecision   ServiceWarrantyDecision?
+  replacementOrders  SaleOrder[]                @relation("ComplaintReplacementOrders")
+  formSubmissions    ServiceFormSubmission[]
+
+  @@index([status, createdAt])
+  @@index([outletId, createdAt])
+  @@map("service_complaints")
+}
+
+model ServiceComplaintLine {
+  id                        String   @id @default(uuid())
+  complaintId               String
+  serialNumber              String
+  normalizedSerial          String
+  replacementSerialNumber   String?
+  normalizedReplacementSerial String?
+  productId                 String?
+  notes                     String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  complaint ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  product   Product?         @relation(fields: [productId], references: [id])
+  testReports ServiceTestReport[]
+
+  @@index([complaintId])
+  @@index([normalizedSerial])
+  @@index([normalizedReplacementSerial])
+  @@map("service_complaint_lines")
+}
+
+model ServiceAssignmentHistory {
+  id           String   @id @default(uuid())
+  complaintId  String
+  asiUserId    String?
+  seUserId     String?
+  assignedById String
+  action       String
+  note         String?
+  createdAt    DateTime @default(now())
+
+  complaint  ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  asiUser    User?            @relation("ServiceAssignmentAsi", fields: [asiUserId], references: [id])
+  seUser     User?            @relation("ServiceAssignmentSe", fields: [seUserId], references: [id])
+  assignedBy User             @relation("ServiceAssignmentBy", fields: [assignedById], references: [id])
+
+  @@index([complaintId, createdAt])
+  @@map("service_assignment_history")
+}
+
+model ServiceTestReport {
+  id             String   @id @default(uuid())
+  complaintId    String
+  complaintLineId String?
+  submittedById  String
+  verdict        String
+  summary        String?
+  structuredData Json?
+  createdAt      DateTime @default(now())
+
+  complaint     ServiceComplaint      @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  complaintLine ServiceComplaintLine? @relation(fields: [complaintLineId], references: [id])
+  submittedBy   User                  @relation("ServiceTestSubmittedBy", fields: [submittedById], references: [id])
+  formSubmissions ServiceFormSubmission[]
+
+  @@index([complaintId, createdAt])
+  @@map("service_test_reports")
+}
+
+model ServiceComplaintActivity {
+  id           String   @id @default(uuid())
+  complaintId  String
+  actorId      String?
+  action       String
+  fromStatus   ServiceComplaintStatus?
+  toStatus     ServiceComplaintStatus?
+  note         String?
+  meta         Json?
+  createdAt    DateTime @default(now())
+
+  complaint ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  actor     User?            @relation("ServiceActivityActor", fields: [actorId], references: [id])
+
+  @@index([complaintId, createdAt])
+  @@map("service_complaint_activities")
+}
+
+model ServiceWarrantyDecision {
+  id                      String                        @id @default(uuid())
+  complaintId             String                        @unique
+  status                  ServiceWarrantyDecisionStatus @default(pending)
+  decidedById             String?
+  sourceWarehouseId       String?
+  approvedReplacementSerial String?
+  rejectionReason         String?
+  replacementOrderId      String?                       @unique
+  decidedAt               DateTime?
+  createdAt               DateTime                      @default(now())
+  updatedAt               DateTime                      @updatedAt
+
+  complaint        ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  decidedBy        User?            @relation("ServiceWarrantyDecidedBy", fields: [decidedById], references: [id])
+  sourceWarehouse  Warehouse?       @relation(fields: [sourceWarehouseId], references: [id])
+  replacementOrder SaleOrder?       @relation("ServiceWarrantyReplacementOrder", fields: [replacementOrderId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([sourceWarehouseId])
+  @@map("service_warranty_decisions")
+}
+
+model ServiceSerialIndex {
+  id               String   @id @default(uuid())
+  normalizedSerial String   @unique
+  serialNumber     String
+  productId        String?
+  soldOutletId     String?
+  firstSeenAt      DateTime @default(now())
+  lastSeenAt       DateTime @default(now())
+  hydratedLegacy   Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  product    Product? @relation(fields: [productId], references: [id])
+  soldOutlet Outlet?  @relation(fields: [soldOutletId], references: [id])
+
+  @@index([soldOutletId, updatedAt])
+  @@index([productId, updatedAt])
+  @@map("service_serial_index")
+}
+
+model ServiceSerialEvent {
+  id               String   @id @default(uuid())
+  normalizedSerial String
+  eventType        String
+  entityType       String
+  entityId         String
+  eventAt          DateTime @default(now())
+  meta             Json?
+  createdAt        DateTime @default(now())
+
+  @@index([normalizedSerial, eventAt])
+  @@index([entityType, entityId])
+  @@map("service_serial_events")
+}
+
+model ServiceComplaintSequence {
+  year         Int @id
+  lastSequence Int @default(0)
+
+  @@map("service_complaint_sequences")
+}
+
+model ServiceMachineClient {
+  id             String                     @id @default(uuid())
+  clientId       String                     @unique
+  name           String
+  scopes         String[]                   @default([])
+  secretHash     String
+  secretLast4    String
+  status         ServiceMachineClientStatus @default(active)
+  expiresAt      DateTime?
+  rotatedAt      DateTime                   @default(now())
+  lastUsedAt     DateTime?
+  createdById    String?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  createdBy User?                      @relation("ServiceMachineClientCreatedBy", fields: [createdById], references: [id])
+  auditLogs  ServiceMachineClientAudit[]
+
+  @@index([status, createdAt])
+  @@map("service_machine_clients")
+}
+
+// ── Form Templates ──────────────────────────────────────────────────────────
+
+model ServiceFormTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  version     Int      @default(1)
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy   User?                     @relation("ServiceFormTemplateCreatedBy", fields: [createdById], references: [id])
+  fields      ServiceFormTemplateField[]
+  submissions ServiceFormSubmission[]
+
+  @@index([isActive, createdAt])
+  @@map("service_form_templates")
+}
+
+model ServiceFormTemplateField {
+  id              String              @id @default(uuid())
+  templateId      String
+  fieldKey        String
+  label           String
+  fieldType       ServiceFormFieldType
+  isRequired      Boolean             @default(true)
+  displayOrder    Int                 @default(0)
+  validationRules Json?
+  isActive        Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  template ServiceFormTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  values   ServiceFormSubmissionValue[]
+
+  @@unique([templateId, fieldKey])
+  @@index([templateId, displayOrder])
+  @@map("service_form_template_fields")
+}
+
+model ServiceFormSubmission {
+  id            String   @id @default(uuid())
+  complaintId   String
+  templateId    String
+  submittedById String
+  testReportId  String?
+  isDisabled    Boolean  @default(false)
+  disabledReason String?
+  submittedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  complaint   ServiceComplaint    @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  template    ServiceFormTemplate @relation(fields: [templateId], references: [id])
+  submittedBy User                @relation("ServiceFormSubmittedBy", fields: [submittedById], references: [id])
+  testReport  ServiceTestReport?  @relation(fields: [testReportId], references: [id])
+  values      ServiceFormSubmissionValue[]
+
+  @@index([complaintId, createdAt])
+  @@index([testReportId])
+  @@map("service_form_submissions")
+}
+
+model ServiceFormSubmissionValue {
+  id              String   @id @default(uuid())
+  submissionId    String
+  fieldId         String
+  fieldKey        String
+  rawValue        String
+  isValid         Boolean
+  validationError String?
+  createdAt       DateTime @default(now())
+
+  submission ServiceFormSubmission    @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  field      ServiceFormTemplateField @relation(fields: [fieldId], references: [id])
+
+  @@unique([submissionId, fieldKey])
+  @@index([submissionId])
+  @@map("service_form_submission_values")
+}
+
+model ServiceMachineClientAudit {
+  id              String   @id @default(uuid())
+  serviceClientId String
+  action          String
+  actorId         String?
+  meta            Json?
+  createdAt       DateTime @default(now())
+
+  client ServiceMachineClient @relation(fields: [serviceClientId], references: [id], onDelete: Cascade)
+
+  @@index([serviceClientId, createdAt])
+  @@map("service_machine_client_audit")
 }

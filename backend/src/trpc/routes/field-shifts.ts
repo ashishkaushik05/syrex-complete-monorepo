@@ -60,14 +60,86 @@ async function upsertAttendance(
   });
 }
 
+async function inferOrgIdForShiftStart(
+  prisma: PrismaClient,
+  agentId: string
+) {
+  const actorScopedHints = await Promise.all([
+    prisma.shift.findFirst({
+      where: { agentId },
+      orderBy: { startedAt: "desc" },
+      select: { orgId: true }
+    }),
+    prisma.shiftSchedule.findFirst({
+      where: { userId: agentId },
+      orderBy: { updatedAt: "desc" },
+      select: { orgId: true }
+    }),
+    prisma.dailyAttendance.findFirst({
+      where: { userId: agentId },
+      orderBy: { date: "desc" },
+      select: { orgId: true }
+    }),
+    prisma.fieldLocation.findFirst({
+      where: { agentId },
+      orderBy: { recordedAt: "desc" },
+      select: { orgId: true }
+    }),
+    prisma.fieldVisit.findFirst({
+      where: { agentId },
+      orderBy: { recordedAt: "desc" },
+      select: { orgId: true }
+    }),
+    prisma.fieldStop.findFirst({
+      where: { agentId },
+      orderBy: { startedAt: "desc" },
+      select: { orgId: true }
+    })
+  ]);
+
+  for (const hint of actorScopedHints) {
+    if (hint?.orgId) return hint.orgId;
+  }
+
+  const globalOrgRows = await Promise.all([
+    prisma.shift.findMany({ select: { orgId: true }, distinct: ["orgId"], take: 2 }),
+    prisma.shiftSchedule.findMany({ select: { orgId: true }, distinct: ["orgId"], take: 2 }),
+    prisma.dailyAttendance.findMany({ select: { orgId: true }, distinct: ["orgId"], take: 2 }),
+    prisma.fieldLocation.findMany({ select: { orgId: true }, distinct: ["orgId"], take: 2 }),
+    prisma.fieldVisit.findMany({ select: { orgId: true }, distinct: ["orgId"], take: 2 }),
+    prisma.fieldStop.findMany({ select: { orgId: true }, distinct: ["orgId"], take: 2 })
+  ]);
+
+  const orgIds = new Set<string>();
+  for (const rows of globalOrgRows) {
+    for (const row of rows) {
+      if (row.orgId) orgIds.add(row.orgId);
+    }
+  }
+
+  if (orgIds.size === 1) {
+    return [...orgIds][0];
+  }
+  if (orgIds.size > 1) {
+    throw apiError("BAD_REQUEST", "orgId required: multiple organizations detected");
+  }
+  // Single-tenant deployment with no field records yet — use the env default.
+  return process.env.DEFAULT_ORG_ID ?? "default";
+}
+
 export const fieldShiftsRouter = createTRPCRouter({
   start: perm(P.field.write)
     .input(z.object({ orgId: z.string().optional() }))
     .output(shiftSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
-      const orgId = input.orgId ?? ctx.actor.orgId;
-      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
+      const orgId = input.orgId ?? ctx.actor.orgId ?? (await inferOrgIdForShiftStart(ctx.prisma, agentId));
+      if (!orgId) {
+        throw apiError(
+          "BAD_REQUEST",
+          "orgId required: provide x-org-id or orgId in request input"
+        );
+      }
 
       const user = await ctx.prisma.user.findUnique({
         where: { id: agentId },

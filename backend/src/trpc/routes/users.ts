@@ -15,6 +15,7 @@ const userSchema = z.object({
   userType: userTypeSchema,
   roleId: z.string(),
   isActive: z.boolean(),
+  isFieldEnabled: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string()
 });
@@ -56,6 +57,7 @@ function toUser(user: {
   userType: "internal" | "outlet";
   roleId: string;
   isActive: boolean;
+  isFieldEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -100,6 +102,7 @@ export const usersRouter = createTRPCRouter({
           userType: true,
           roleId: true,
           isActive: true,
+          isFieldEnabled: true,
           createdAt: true,
           updatedAt: true
         },
@@ -129,6 +132,7 @@ export const usersRouter = createTRPCRouter({
           userType: true,
           roleId: true,
           isActive: true,
+          isFieldEnabled: true,
           createdAt: true,
           updatedAt: true
         }
@@ -157,7 +161,8 @@ export const usersRouter = createTRPCRouter({
         passwordHash: await hashPassword(input.password),
         userType: input.userType,
         roleId: input.roleId,
-        isActive: input.isActive
+        isActive: input.isActive,
+        isFieldEnabled: false
       },
       select: {
         id: true,
@@ -167,6 +172,7 @@ export const usersRouter = createTRPCRouter({
         userType: true,
         roleId: true,
         isActive: true,
+        isFieldEnabled: true,
         createdAt: true,
         updatedAt: true
       }
@@ -202,6 +208,7 @@ export const usersRouter = createTRPCRouter({
         userType: true,
         roleId: true,
         isActive: true,
+        isFieldEnabled: true,
         createdAt: true,
         updatedAt: true
       }

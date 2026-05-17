@@ -473,6 +473,26 @@ class OutletPortalClient {
     return InvoiceDetail.fromJson(_extract(res.data));
   }
 
+  Future<PagedResult<LinkedDispatch>> dispatchHistory(
+    String outletId, {
+    String? cursor,
+    int limit = 25,
+  }) async {
+    final params = <String, dynamic>{'outletId': outletId, 'limit': limit};
+    if (cursor != null) params['cursor'] = cursor;
+    final res = await _dio.get(
+      '/outletPortal.dispatchHistory',
+      queryParameters: {'input': '{"json":${jsonEncode(params)}}'},
+    );
+    final data = _extract(res.data);
+    return PagedResult(
+      items: (data['items'] as List<dynamic>)
+          .map((e) => LinkedDispatch.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      nextCursor: data['nextCursor'] as String?,
+    );
+  }
+
   Future<DispatchDetail> dispatchDetail(
       String outletId, String dispatchId) async {
     final res = await _dio.get(

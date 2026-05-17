@@ -34,6 +34,9 @@ final dioProvider = Provider<Dio>((ref) {
         if (tokens != null) {
           options.headers['Authorization'] = 'Bearer ${tokens.accessToken}';
         }
+        if (config.orgId != null && config.orgId!.isNotEmpty) {
+          options.headers['x-org-id'] = config.orgId;
+        }
         handler.next(options);
       },
       onError: (error, handler) async {

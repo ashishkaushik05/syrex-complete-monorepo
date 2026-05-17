@@ -15,6 +15,7 @@ class PagedResult<T> {
 class SalesOutlet {
   const SalesOutlet({
     required this.id,
+    required this.userId,
     required this.outletCode,
     required this.name,
     required this.ownerName,
@@ -23,6 +24,7 @@ class SalesOutlet {
   });
 
   final String id;
+  final String userId;
   final String outletCode;
   final String name;
   final String ownerName;
@@ -31,6 +33,7 @@ class SalesOutlet {
 
   factory SalesOutlet.fromJson(Map<String, dynamic> j) => SalesOutlet(
         id: j['id'] as String,
+        userId: j['userId'] as String,
         outletCode: j['outletCode'] as String,
         name: j['name'] as String,
         ownerName: j['ownerName'] as String,
@@ -211,6 +214,79 @@ class SalesInvoiceDetail {
       );
 }
 
+class SalesDispatchLine {
+  const SalesDispatchLine({
+    required this.id,
+    required this.orderLineId,
+    required this.orderId,
+    required this.productId,
+    required this.sku,
+    required this.qtyDispatched,
+    required this.serialNumbers,
+  });
+
+  final String id;
+  final String orderLineId;
+  final String orderId;
+  final String productId;
+  final String sku;
+  final int qtyDispatched;
+  final List<String> serialNumbers;
+
+  factory SalesDispatchLine.fromJson(Map<String, dynamic> j) => SalesDispatchLine(
+        id: j['id'] as String,
+        orderLineId: j['orderLineId'] as String,
+        orderId: j['orderId'] as String,
+        productId: j['productId'] as String,
+        sku: j['sku'] as String,
+        qtyDispatched: j['qtyDispatched'] as int,
+        serialNumbers: ((j['serialNumbers'] ?? const <dynamic>[]) as List<dynamic>)
+            .map((e) => e.toString())
+            .toList(),
+      );
+}
+
+class SalesDispatchDetail {
+  const SalesDispatchDetail({
+    required this.id,
+    required this.warehouseId,
+    required this.transporterName,
+    required this.vehicleNumber,
+    required this.dispatchDate,
+    required this.deliveryStatus,
+    required this.lines,
+    this.lrNumber,
+    this.estimatedDelivery,
+    this.deliveredAt,
+  });
+
+  final String id;
+  final String warehouseId;
+  final String transporterName;
+  final String vehicleNumber;
+  final String? lrNumber;
+  final String dispatchDate;
+  final String? estimatedDelivery;
+  final String? deliveredAt;
+  final String deliveryStatus;
+  final List<SalesDispatchLine> lines;
+
+  factory SalesDispatchDetail.fromJson(Map<String, dynamic> j) => SalesDispatchDetail(
+        id: j['id'] as String,
+        warehouseId: j['warehouseId'] as String,
+        transporterName: j['transporterName'] as String,
+        vehicleNumber: j['vehicleNumber'] as String,
+        lrNumber: j['lrNumber'] as String?,
+        dispatchDate: j['dispatchDate'] as String,
+        estimatedDelivery: j['estimatedDelivery'] as String?,
+        deliveredAt: j['deliveredAt'] as String?,
+        deliveryStatus: j['deliveryStatus'] as String,
+        lines: (j['lines'] as List<dynamic>)
+            .map((e) => SalesDispatchLine.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class OrderLineInput {
   const OrderLineInput({
     required this.productId,
@@ -358,6 +434,18 @@ class SalesClient {
       },
     );
     return SalesInvoiceDetail.fromJson(_extract(res.data));
+  }
+
+  Future<SalesDispatchDetail> dispatchDetail(String id) async {
+    final res = await _dio.get(
+      '/dispatches.getById',
+      queryParameters: {
+        'input': jsonEncode({
+          'json': {'id': id}
+        })
+      },
+    );
+    return SalesDispatchDetail.fromJson(_extract(res.data));
   }
 }
 

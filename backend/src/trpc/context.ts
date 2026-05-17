@@ -12,6 +12,9 @@ export type TrpcContext = {
   prisma: typeof prisma;
   permissions: string[];
   managedWarehouseId: string | null;
+  serviceClientId: string | null;
+  serviceClientSecret: string | null;
+  serviceScopes: string[];
 };
 
 function readHeader(c: Context, key: string) {
@@ -27,6 +30,9 @@ export function createRequestContext(c: Context): TrpcContext {
     },
     prisma,
     permissions: [],
-    managedWarehouseId: null
+    managedWarehouseId: null,
+    serviceClientId: readHeader(c, "x-service-client-id"),
+    serviceClientSecret: readHeader(c, "x-service-client-secret"),
+    serviceScopes: [],
   };
 }

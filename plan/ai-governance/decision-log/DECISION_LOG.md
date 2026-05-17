@@ -4,6 +4,245 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260515-023
+- Decision ID: `DEC-20260515-023`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Enable periodic mobile location ingestion for active shifts in sales_mobile_app`
+- Decision: `Add fieldLocation.ingest client method and an app-level location uploader service that periodically posts GPS points when a shift is active.`
+- Rationale: `Current mobile code starts/ends shifts and reads trail but never sends location samples to backend, so shift trails stay empty.`
+- Alternatives Considered:
+  - `Upload a single location only on shift start` rejected because it does not provide a usable trail or live movement.
+  - `Implement full Android background service immediately` rejected for this patch due to higher complexity; app-level periodic uploader is faster and unblocks current behavior.
+- Scope:
+  - `mobile/sales_mobile_app/lib/modules/field/repository/field_repository.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/services/field_location_uploader.dart` (new)
+  - `mobile/sales_mobile_app/lib/app/bootstrap/app_bootstrap.dart`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added fieldLocation.ingest client method in mobile/sales_mobile_app/lib/modules/field/repository/field_repository.dart. Added app-level periodic uploader service at mobile/sales_mobile_app/lib/modules/field/services/field_location_uploader.dart that checks active shift, captures GPS, and posts to fieldLocation.ingest every 20 seconds. Wired uploader startup through a provider in mobile/sales_mobile_app/lib/app/bootstrap/app_bootstrap.dart so tracking starts automatically while app is running.`
+  - Done: `Validated with flutter analyze (No issues found).`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Periodic GPS ingestion increases battery and network use; interval tuning may be needed.`
+- Cleanup Required:
+  - `Consider promoting to true background tracking service for reliable uploads when app is not foregrounded.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-15T13:46:50Z`
+- Follow-up Notes:
+  - `2026-05-15T13:48:36Z: Removed duplicate ingestLocation declaration in mobile/sales_mobile_app/lib/modules/field/repository/field_repository.dart that caused flutter run compile failure; flutter analyze re-validated with no issues.`
+
+---
+
+## DEC-20260515-022
+- Decision ID: `DEC-20260515-022`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Modify Flutter sales app to send org context for field routes and avoid fieldShifts.start orgId 400`
+- Decision: `Add configurable orgId in mobile app config and inject x-org-id header on every API request via Dio interceptor.`
+- Rationale: `Current mobile requests authenticate via Bearer token but omit org context; fieldShifts.start can still return BAD_REQUEST when org cannot be inferred from existing data. Header-level org propagation is the least invasive client fix and covers all field endpoints.`
+- Alternatives Considered:
+  - `Send orgId only in fieldShifts.start body` rejected because other field routes also use org-aware behavior and would remain inconsistent.
+  - `Rely only on backend fallback inference` rejected because first-time users with no org-linked history still fail.
+- Scope:
+  - `mobile/sales_mobile_app/lib/core/config/app_env.dart`
+  - `mobile/sales_mobile_app/lib/core/network/api_client.dart`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added APP_ORG_ID-backed orgId in mobile/sales_mobile_app/lib/core/config/app_env.dart and injected x-org-id header in Dio request interceptor (mobile/sales_mobile_app/lib/core/network/api_client.dart).`
+  - Not Done: `Could not complete flutter analyze in this environment because local Dart SDK is 3.4.0 while dependencies require >=3.5.0.`
+- Impact/Risk:
+  - `Requests now include x-org-id; wrong configured value could scope data incorrectly in multi-org deployments.`
+- Cleanup Required:
+  - `Document expected APP_ORG_ID runtime define for each environment.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-15T13:22:10Z`
+
+---
+
+## DEC-20260515-021
+- Decision ID: `DEC-20260515-021`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Add backend orgId fallback for fieldShifts.start when caller omits x-org-id/input.orgId`
+- Decision: `Implement orgId inference in fieldShifts.start: prefer explicit input/header, then infer from the actor's recent field records, then fallback to a single global orgId only if the deployment is unambiguous (single-tenant).`
+- Rationale: `Mobile requests currently call fieldShifts.start without orgId or x-org-id, causing BAD_REQUEST. In single-tenant deployments, backend should infer org safely instead of hard failing.`
+- Alternatives Considered:
+  - `Require all clients to always send x-org-id immediately` rejected because existing mobile clients are already deployed without it and currently blocked.
+  - `Hardcode a default orgId constant` rejected because it is brittle and unsafe if multi-tenant data appears.
+- Scope:
+  - `backend/src/trpc/routes/field-shifts.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Implemented inferOrgIdForShiftStart in backend/src/trpc/routes/field-shifts.ts. Resolution order is: explicit input orgId -> x-org-id header orgId -> actor-scoped hints (latest shift/schedule/attendance/location/visit/stop) -> single-tenant global fallback when exactly one orgId exists across field tables. Added explicit BAD_REQUEST for ambiguous multi-org datasets and for completely missing org context.`
+  - Done: `Validated with backend typecheck (tsc --noEmit) passing.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Behavioral change in org resolution path; must avoid silent cross-tenant assignment when multiple orgIds exist.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-15T13:13:10Z`
+
+---
+
+## DEC-20260515-020
+- Decision ID: `DEC-20260515-020`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Fix web role update 404 by wiring /roles/:id PATCH through phase1 tRPC adapter`
+- Decision: `Add explicit /roles and /roles/:id handling in web/src/lib/api.ts so role create/update calls use roles.create/roles.update tRPC instead of falling through to missing REST /api/v1 routes.`
+- Rationale: `RolesPage currently calls api.post('/roles') and api.patch('/roles/:id'). phase1 adapter lacks those handlers, so requests fall through to fallback REST base (/api/v1) and return 404 in dev.`
+- Alternatives Considered:
+  - `Reintroduce REST /api/v1 roles endpoints` rejected because current backend path is tRPC-first and would duplicate behavior.
+  - `Patch RolesPage to call trpcMutation directly` rejected because api adapter is the existing compatibility layer and should own route mapping.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added /roles create mapping in phase1Post and /roles/:id update mapping in phase1Patch, both routed to roles.create/roles.update via tRPC with response shape compatible with RolesPage expectations. Validated by running web build (tsc -b && vite build) successfully.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Low risk; additive adapter routing for role create/update only.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-15T13:05:59Z`
+
+---
+
+## DEC-20260515-019
+- Decision ID: `DEC-20260515-019`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Fix users API payload so Field Sense toggle status persists in web Manage User popup`
+- Decision: `Add isFieldEnabled to users router output schema and all relevant select/toUser paths so read endpoints return the persisted Field Sense state.`
+- Rationale: `toggleFieldSense already updates users.isFieldEnabled, but users.list/getById responses omit this field, causing the web popup to rehydrate without current Field Sense status.`
+- Alternatives Considered:
+  - `Keep backend unchanged and rely on optimistic frontend state only` rejected because dialog reopen/refetch still shows stale/default state.
+  - `Add a separate endpoint only for Field Sense status` rejected because this duplicates user-read concerns and adds unnecessary round trips.
+- Scope:
+  - `backend/src/trpc/routes/users.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added isFieldEnabled to userSchema, toUser typing, and Prisma select payloads for users.list/getById/create/update in backend/src/trpc/routes/users.ts. Verified with backend typecheck (tsc --noEmit) passing.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Additive response field change; low regression risk.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-15T13:00:05Z`
+
+---
+
+## DEC-20260515-018
+- Decision ID: `DEC-20260515-018`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Fix sales_mobile_app Android build failure caused by Kotlin metadata version mismatch`
+- Decision: `Verify and stabilize the existing sales_mobile_app Android toolchain first; only upgrade Kotlin plugin if metadata mismatch reproduces.`
+- Rationale: `The project already pins Kotlin plugin 1.9.0 in android/settings.gradle. Re-running Gradle and Flutter build paths in the current workspace succeeded, so no version bump was required for this scope.`
+- Alternatives Considered:
+  - `Downgrade transitive Kotlin stdlib to 1.7.x` rejected because it is brittle across plugin dependencies and likely to break again on dependency refresh.
+  - `Force immediate Kotlin plugin upgrade` rejected because the failure did not reproduce in the current workspace and unnecessary toolchain churn increases AGP/Gradle compatibility risk.
+- Scope:
+  - `mobile/sales_mobile_app/android/settings.gradle`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Verified Kotlin-related compile path with ./gradlew :app:compileDebugKotlin (success) and Flutter path with flutter build apk --debug (success, assembleDebug completed). Updated decision log with final status and verification outcome.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Transient local Gradle daemon/cache state can still reintroduce the mismatch on a different machine/session; standard clean/rebuild steps may be needed if it recurs.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-15T12:44:12Z`
+- Follow-up Notes:
+  - `No code/config edits in mobile/sales_mobile_app/android were needed in this session after successful rebuild verification.`
+
+---
+
+## DEC-20260515-016
+- Decision ID: `DEC-20260515-016`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master`
+- Task: `Fix three Field Sense gaps: SSE event name mismatch, missing FieldStop entity, minimal visit payload`
+- Decision: `(A) Fix SSE consumer in web/src/lib/api.ts to accept both location-update and location for one-release backward compat. (B) Add FieldStop model (start/end lifecycle) with fieldStops.start, fieldStops.end, fieldStops.list router. (C) Extend FieldVisit with optional outletId + outlet relation; validate outlet exists in org on log.`
+- Rationale: `(A) Backend emits location-update but web listener filtered on location — silent data loss on healthy connections. (B) Stop lifecycle currently unmodeled; duration + reason analytics and SLA reports are impossible without explicit start/end records. (C) Visit records had no business entity link — downstream attribution and analytics were weak.`
+- Alternatives Considered:
+  - `(A) Change backend event name to location` rejected — web consumer is the bug; backend name is more descriptive. Dual-accept in consumer for safe rollout.
+  - `(B) Derive stops from location gaps` rejected — unreliable (network gaps look like stops), no reason/notes, no explicit lifecycle.
+  - `(C) Use a separate visit-outlet join table` rejected — over-engineering for a single FK; nullable outletId on FieldVisit is sufficient and backward-compatible.
+- Scope:
+  - `web/src/lib/api.ts` — accept location-update || location in SSE parser
+  - `schema.prisma` — add FieldStop model; add stops relation to Shift and User; add outletId to FieldVisit
+  - `backend/src/trpc/routes/field-stops.ts` — NEW router: start, end, list
+  - `backend/src/trpc/router.ts` — register fieldStopsRouter
+  - `backend/src/trpc/routes/field-visits.ts` — accept outletId in log; validate outlet; return outletId
+- Status: `completed`
+- Impact/Risk: `Schema migration required (prisma db push). No existing data affected — new columns nullable. Dual SSE event name handling is additive.`
+- Cleanup Actions: `After next release, remove location fallback from SSE parser (keep only location-update).`
+
+---
+
+## DEC-20260515-015
+- Decision ID: `DEC-20260515-015`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master`
+- Task: `Service module backend redesign — assigned status + DB-driven form template system with server-side field validation + immutable form submissions gating test submit`
+- Decision: `Add \`assigned\` as a new ServiceComplaintStatus enum value (between raised and visit). Build a 4-model form template system: ServiceFormTemplate, ServiceFormTemplateField (with typed fieldType enum + validationRules JSON), ServiceFormSubmission (immutable on creation, disable-only), ServiceFormSubmissionValue (per-field isValid + validationError). validateFieldValue() pure function validates per-fieldType rules stored in DB. serviceTests.submit now gates behind at least one non-disabled form submission with all valid values. Add service:form permission for ASI-level submission creation.`
+- Rationale: `Flat structuredData JSON field on ServiceTestReport provided no enforcement of required diagnostic data before test submit. DB-driven templates allow admins to define typed fields with validation rules (min/max, regex, allowed options) without code changes. Immutability of submissions (disable-only, never delete) preserves audit trail. Gating test submit on form submissions ensures test data is always backed by structured evidence.`
+- Alternatives Considered:
+  - `Zod schema per template stored in DB as JSON` rejected — Zod schema strings are hard to version/migrate and impossible to render dynamically in mobile app.
+  - `Flat structuredData JSON (current approach)` rejected — no server-side validation, no structured audit trail per field.
+  - `Delete submissions on disable` rejected — breaks audit trail; immutable append-only is the correct pattern for compliance.
+  - `Allow raised → visit directly` — removed; visit now requires assignment first (raised → assigned → visit) for operational accountability.
+- Scope:
+  - `schema.prisma` — add assigned to ServiceComplaintStatus; add ServiceFormFieldType enum; add 4 new models; add relations to ServiceComplaint, ServiceTestReport, User
+  - `backend/src/trpc/routes/service-shared.ts` — add assigned + assign action; update resolveTransition
+  - `backend/src/trpc/routes/service-assignments.ts` — trigger assigned status on first assign with ASI
+  - `backend/src/trpc/routes/service-forms.ts` — NEW router with template CRUD + submission flow + validateFieldValue helper
+  - `backend/src/trpc/routes/service-tests.ts` — gate submit behind form submissions; link submissions to test report
+  - `backend/src/trpc/routes/attachments.ts` — add service_form_submission entity type
+  - `backend/src/rbac/modules/service.ts` — add service:form permission
+  - `backend/src/trpc/router.ts` — register serviceFormsRouter
+  - `backend/scripts/seed-permissions.ts` — add P.service.form
+  - `backend/src/trpc/routes/service-complaints.ts` — add assigned to tabCounts
+- Status: `completed`
+- Completion Notes:
+  - Done: `All files updated. typecheck: 0 errors. rbac:preflight: ok (54 permissions). state machine tests: 5 pass.`
+  - Not Done: `Web UI for form template management and form submission — deferred.`
+- Impact/Risk:
+  - `schema.prisma changes require db:reset (dev) or migration in prod.`
+  - `Breaking: raised → visit no longer valid. Existing raised complaints need assign first.`
+  - `serviceTests.submit now requires at least one form submission — existing flows need a form template created first.`
+- Cleanup Required: `Build web UI for form template management (admin) and form submission (ASI/mobile).`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `User / next session`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-15T00:00:00Z`
+
+---
+
 ## DEC-20260509-014
 - Decision ID: `DEC-20260509-014`
 - Model: `claude-sonnet-4-6`
@@ -3330,7 +3569,7 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 ## DEC-20260514-001
 - Decision ID: `DEC-20260514-001`
 - Model: `codex`
-- Branch/Commit: `master@fa1d728`
+- Branch/Commit: `master@5f66f1d`
 - Task: `Single-sweep RBAC refactor (Option A): typed module permissions + catalog-driven admin UX + dev reset/reseed alignment`
 - Decision: `Introduce a centralized RBAC catalog engine with strict startup validation, define module-level typed permission constants, migrate all backend permission guards to typed constants, validate role mutations against catalog keys, expose catalog through system.permissions, and make admin roles + permissions UI consume that single backend catalog source. Align development seeds/smoke snapshots to canonical module:action keys and add preflight checks for catalog and seed permission validity.`
 - Rationale: `Current backend route guards use free-form literals and roles mutation accepts arbitrary permission strings, which allows drift and non-canonical keys. A typed constant + manifest-driven catalog keeps one implementation path across compile-time usage and runtime validation, and keeps backend/UI/seed behavior synchronized.`
@@ -3432,18 +3671,113 @@ Use `DECISION_TEMPLATE.md` for every new entry.
   - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx` (new)
   - `mobile/service_mobile_app/**` (new scaffold)
   - `plan/ai-governance/decision-log/DECISION_LOG.md`
-- Status: `in_progress`
+- Status: `partial`
 - Completion Notes:
-  - Done: `Decision entry created before implementation edits.`
-  - Not Done: `Implementation, validation, and final status update pending.`
+  - Done: `Implemented backend Service domain schema (complaints/lines/assignments/tests/activity/warranty decisions/serial index+events/credential primitives), added service RBAC catalog with role-gated permissions, wired new tRPC routers (serviceComplaints/serviceAssignments/serviceTests/serviceSerials/serviceWarranty plus serviceIntegrations contract), added explicit complaint transition engine + audit timeline writes, integrated replacement-order metadata into SaleOrder and invoice-suppression logic, updated dispatch delivery flow to auto-resolve linked replacement complaints, extended attachments entity validation for service entities, added service transition unit tests, and verified backend typecheck + RBAC preflight pass.`
+  - Done: `Implemented web adapter mappings for `/tickets*` to service routers, added Service complaints list/detail pages and dashboard routes/nav/breadcrumbs, and verified `web` build passes.`
+  - Done: `Scaffolded a separate `mobile/service_mobile_app` with service queue/detail/test-capture routing and reused auth/network/router patterns as baseline.`
+  - Not Done: `Did not implement full production-grade mobile feature parity (offline sync/retry queues, attachment upload UX, complete auth repository wiring).`
+  - Not Done: `Did not implement full backend concurrency/idempotency integration tests for simultaneous warranty approvals and duplicate replacement assignment races beyond guard checks.`
+  - Not Done: `Web pages are currently pragmatic operational workspaces (functional but not final UX polish and not fully role-hidden by fine-grained action permissions).`
 - Impact/Risk:
   - `Cross-cutting schema and router changes can break existing order/dispatch behavior if transitions are not carefully guarded.`
-  - `Frontend adapter changes must preserve existing sales routes while introducing service routes.`
+  - `Serial resolver currently lazily hydrates from legacy dispatch JSON by scanning dispatch lines; this is correct for compatibility but can become expensive at high volume before a backfill/indexing job is introduced.`
+  - `Service replacement fulfillment assumes complaint outlet is populated before order creation.`
 - Cleanup Required:
-  - `Update this decision entry with final completed/partial status and explicit residual gaps if any.`
+  - `Add integration tests for: replacement serial race conditions, simultaneous warranty approval attempts, and dispatch-delivery complaint auto-resolution idempotency.`
+  - `Harden service serial hydration with batched/background backfill and indexed lookup strategy for large datasets.`
+  - `Complete mobile app implementation (auth repository wiring, offline retry, attachment upload/confirm flow, role-driven action guards).`
+- Dead Paths Introduced: `ticket reopen/priority adapter endpoints currently map to note updates only; full reopen semantics are intentionally deferred and should be either fully implemented or removed in cleanup`
+- Conflicting Implementations: `none in backend lifecycle engine; ticket adapter compatibility paths remain for legacy UI contracts`
+- Next Cleanup Owner: `ashish + next backend/mobile execution chunk`
+- Owner Timestamp: `codex @ 2026-05-15T03:30:00Z`
+- Follow-up Notes:
+  - `Validation passed: backend prisma generate, backend typecheck, backend rbac:preflight, bun test backend/src/trpc/routes/service-shared.test.ts, and web build.`
+  - `Execution resumed by codex on master@5f66f1d at 2026-05-14T21:32:05Z; this execution chunk is now closed as partial with explicit cleanup actions above.`
+
+---
+
+## DEC-20260515-016
+- Decision ID: `DEC-20260515-016`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Fix Sales mobile app login failures caused by unsafe JSON string interpolation in auth requests`
+- Decision: `Replace manually interpolated JSON strings in sales mobile auth client with structured map payloads for tRPC auth.login and auth.refresh requests.`
+- Rationale: `Manual string interpolation can produce invalid JSON for valid credentials containing quotes/backslashes and leads to false login failures.`
+- Alternatives Considered:
+  - `Keep current interpolation and restrict password characters` rejected because it weakens credential support and keeps fragile request construction.
+  - `Handle escaping manually` rejected because hand-escaping is error-prone vs letting Dio/json encoder serialize maps.
+- Scope:
+  - `mobile/sales_mobile_app/lib/core/auth/auth_repository.dart`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Decision logged and scoped before code edits; replaced interpolated JSON strings with map payloads for auth.login and auth.refresh so Dio performs safe JSON serialization for all credential characters.`
+  - Not Done: `none`
+- Impact/Risk:
+  - `Low risk; request shape remains the same while serialization becomes safe.`
+- Cleanup Required:
+  - `none`
 - Dead Paths Introduced: `none`
 - Conflicting Implementations: `none`
 - Next Cleanup Owner: `codex in current session`
-- Owner Timestamp: `codex @ 2026-05-15T00:00:00Z`
+- Owner Timestamp: `codex @ 2026-05-15T11:03:49Z`
+
+---
+
+## DEC-20260515-017
+- Decision ID: `DEC-20260515-017`
+- Model: `codex`
+- Branch/Commit: `master@5f66f1d`
+- Task: `Single-release sales_mobile_app mobile redesign + Field Sense expansion with minimal backend contract updates`
+- Decision: `Implement a new tab-shell IA (Home, Orders, Field, Finance, More), introduce a tokenized premium mobile design layer and shared UI primitives, migrate existing sales screens into the new shell with preserved deep links, add Field Sense mobile flows (Create Visit, Report Stop, Attendance agent/admin views, Agent Map self-view), and complete backend field contract gaps by adding fieldStops.active and extending fieldVisits.log to require outletId with optional customerId while preserving backward compatibility in list/read payloads and SSE parser transition behavior.`
+- Rationale: `The existing sales mobile app is route-fragmented and visually basic, and Field Sense task flows are incomplete for production operations. A single coherent release minimizes split UX paths and keeps one primary implementation path per behavior under the repository architecture guardrails.`
+- Alternatives Considered:
+  - `Ship Field Sense only without IA redesign` rejected because task-first navigation + quick-action ergonomics are core acceptance requirements.
+  - `Add separate parallel route trees for old/new mobile UI` rejected because it creates conflicting behavior paths and prolonged cleanup burden.
+  - `Delay backend field contract changes until a later release` rejected because mobile stop lifecycle + visit linkage correctness depend on these contracts.
+- Scope:
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+  - `mobile/sales_mobile_app/pubspec.yaml`
+  - `mobile/sales_mobile_app/lib/app/router/app_router.dart`
+  - `mobile/sales_mobile_app/lib/app/theme/app_theme.dart`
+  - `mobile/sales_mobile_app/lib/core/permissions/permission_service.dart`
+  - `mobile/sales_mobile_app/lib/core/api/sales_client.dart`
+  - `mobile/sales_mobile_app/lib/modules/dashboard/dashboard_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/orders/orders_history_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/orders/order_detail_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/orders/create_order_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/invoices/invoice_history_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/invoices/invoice_detail_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/catalog/catalog_page.dart`
+  - `mobile/sales_mobile_app/lib/shared/widgets/* (new design primitives and state surfaces)`
+  - `mobile/sales_mobile_app/lib/modules/field/** (new field repository/models/providers/screens/shell)`
+  - `backend/src/trpc/routes/field-stops.ts`
+  - `backend/src/trpc/routes/field-visits.ts`
+  - `backend/src/trpc/routes/field-location.ts (read compatibility if needed for map payload shape)`
+  - `schema.prisma (field visit linkage customer relation and indexes if required)`
+  - `backend/src/trpc/routes/field-*.test.ts (new/updated contract tests for stops, visit linkage, SSE compatibility as needed)`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision and implementation scope defined before edits.`
+  - Not Done: `Implementation and validation not yet executed.`
+- Impact/Risk:
+  - `Large UI surface change can introduce navigation regressions without targeted route integration tests.`
+  - `Schema/API changes require migration coordination and compatibility checks for existing field clients.`
+- Cleanup Required:
+  - `Finalize this decision entry with completed/partial/blocked status and exact done/not-done items after implementation.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex + repo owner, same release cycle`
+- Owner Timestamp: `codex @ 2026-05-15T13:26:35Z`
 - Follow-up Notes:
-  - `Will run backend typecheck and web build/typecheck checks after implementation.`
+  - `2026-05-15T12:22:42Z Final status update: partial.`
+  - `Done:` Backend: added `fieldStops.active` route with admin-gated cross-agent access, extended `fieldVisits.log` to require `outletId` and accept optional `customerId` validation, and updated schema `FieldVisit.customerId` relation/indexes. Mobile: implemented new 5-tab shell (`Home`, `Orders`, `Field`, `Finance`, `More`), redesigned major sales screens with premium tokenized surfaces, added persistent quick-action rails on key screens, added Field Sense flows (`Create Visit`, `Report Stop`, `Attendance` with admin edit view, and `Agent Map` self-view with trail/visit/stop layers), preserved legacy deep-link compatibility redirects for history/detail routes, and added dispatch detail view route/screen.
+  - `Done:` Validation completed with `backend` typecheck passing and `sales_mobile_app` flutter analyze passing.
+  - `Not Done:` No automated contract/widget/e2e tests were added for stop lifecycle, visit linkage, SSE compatibility, attendance edit flow, or map toggles in this chunk.
+  - `Not Done:` `Agent Map` is an in-app plotted trail canvas (coordinate projection) rather than provider tile-map rendering.
+  - `Not Done:` `customerId` selector currently maps to outlet owner linkage only; multi-contact customer directory UX is not implemented.
+  - `Dead Paths Introduced:` none.
+  - `Conflicting Implementations:` none active; legacy deep-link paths are redirected into the new router tree for compatibility.
+  - `Cleanup Required (owner):` codex + repo owner in next chunk to add automated test coverage (backend contract + Flutter integration + e2e), optional tile-based map rendering, and richer outlet-contact customer selection.
+  - `Timestamp correction:` final status note above was recorded at `2026-05-15T11:48:51Z`.

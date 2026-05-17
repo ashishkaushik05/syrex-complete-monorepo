@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/sales_client.dart';
-import '../../shared/widgets/error_view.dart';
+import '../../shared/widgets/premium_surfaces.dart';
 import '../../shared/widgets/status_chip.dart';
 
 const _statuses = [
@@ -50,94 +50,134 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
     final filter = ref.watch(_filterProvider);
     final orders = ref.watch(_ordersProvider(filter));
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('My Orders')),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                hintText: 'Search orders…',
-                prefixIcon: const Icon(Icons.search),
-                isDense: true,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                suffixIcon: _searchCtrl.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchCtrl.clear();
-                          ref.read(_filterProvider.notifier).state = _FilterState(status: filter.status);
-                        },
-                      )
-                    : null,
-              ),
-              onChanged: (v) => ref.read(_filterProvider.notifier).state = _FilterState(
-                status: filter.status,
-                q: v.isEmpty ? null : v,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 36,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                _FilterChip(
-                  label: 'All',
-                  selected: filter.status == null,
-                  onTap: () => ref.read(_filterProvider.notifier).state = _FilterState(q: filter.q),
+    return PremiumGradientBackground(
+      child: RefreshIndicator(
+        onRefresh: () => ref.refresh(_ordersProvider(filter).future),
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Orders', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppPalette.ink)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _searchCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'Search by order number or status',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchCtrl.text.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  _searchCtrl.clear();
+                                  ref.read(_filterProvider.notifier).state = _FilterState(status: filter.status);
+                                  setState(() {});
+                                },
+                              ),
+                      ),
+                      onChanged: (value) {
+                        ref.read(_filterProvider.notifier).state = _FilterState(
+                          status: filter.status,
+                          q: value.isEmpty ? null : value,
+                        );
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 38,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          _StatusFilterChip(
+                            label: 'All',
+                            selected: filter.status == null,
+                            onTap: () => ref.read(_filterProvider.notifier).state = _FilterState(q: filter.q),
+                          ),
+                          ..._statuses.map(
+                            (status) => _StatusFilterChip(
+                              label: _label(status),
+                              selected: filter.status == status,
+                              onTap: () => ref.read(_filterProvider.notifier).state = _FilterState(status: status, q: filter.q),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    QuickActionRail(
+                      actions: [
+                        QuickActionItem(
+                          label: 'Create Order',
+                          icon: Icons.add_shopping_cart_rounded,
+                          onTap: () => context.push('/orders/create'),
+                        ),
+                        QuickActionItem(
+                          label: 'Field Map',
+                          icon: Icons.map_outlined,
+                          onTap: () => context.push('/field/map'),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                ..._statuses.map((s) => _FilterChip(
-                      label: _label(s),
-                      selected: filter.status == s,
-                      onTap: () => ref.read(_filterProvider.notifier).state = _FilterState(status: s, q: filter.q),
-                    )),
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: orders.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => ErrorView(
-                message: 'Could not load orders.',
-                onRetry: () => ref.refresh(_ordersProvider(filter).future),
+            orders.when(
+              loading: () => const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+              error: (_, __) => const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: EmptyStateView(
+                    title: 'Could not load orders',
+                    subtitle: 'Pull to refresh and try again.',
+                    icon: Icons.sync_problem,
+                  ),
+                ),
               ),
               data: (result) {
                 if (result.items.isEmpty) {
-                  return const Center(child: Text('No orders found.'));
+                  return const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: EmptyStateView(
+                        title: 'No orders found',
+                        subtitle: 'Try removing filters or create a new order.',
+                        icon: Icons.inventory_2_outlined,
+                      ),
+                    ),
+                  );
                 }
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 80),
-                  itemCount: result.items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) => _OrderCard(order: result.items[i]),
+
+                return SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                  sliver: SliverList.separated(
+                    itemCount: result.items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) => _OrderCard(order: result.items[i]),
+                  ),
                 );
               },
             ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push('/orders/create'),
-        icon: const Icon(Icons.add),
-        label: const Text('New Order'),
+          ],
+        ),
       ),
     );
   }
 }
 
-String _label(String s) => s.replaceAll('_', ' ').split(' ').map((w) {
-      if (w.isEmpty) return w;
-      return w[0].toUpperCase() + w.substring(1);
-    }).join(' ');
-
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({required this.label, required this.selected, required this.onTap});
+class _StatusFilterChip extends StatelessWidget {
+  const _StatusFilterChip({required this.label, required this.selected, required this.onTap});
 
   final String label;
   final bool selected;
@@ -147,15 +187,15 @@ class _FilterChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: FilterChip(
-        label: Text(label, style: const TextStyle(fontSize: 12)),
-        selected: selected,
-        onSelected: (_) => onTap(),
-        visualDensity: VisualDensity.compact,
-      ),
+      child: FilterChip(label: Text(label), selected: selected, onSelected: (_) => onTap()),
     );
   }
 }
+
+String _label(String s) => s.replaceAll('_', ' ').split(' ').map((w) {
+      if (w.isEmpty) return w;
+      return w[0].toUpperCase() + w.substring(1);
+    }).join(' ');
 
 class _OrderCard extends StatelessWidget {
   const _OrderCard({required this.order});
@@ -167,9 +207,11 @@ class _OrderCard extends StatelessWidget {
     final date = DateTime.tryParse(order.orderDate);
     final dateStr = date != null ? '${date.day}/${date.month}/${date.year}' : order.orderDate;
 
-    return Card(
+    return PremiumCard(
+      margin: const EdgeInsets.only(bottom: 0),
       child: ListTile(
-        title: Text(order.orderNumber, style: const TextStyle(fontWeight: FontWeight.w600)),
+        contentPadding: EdgeInsets.zero,
+        title: Text(order.orderNumber, style: const TextStyle(fontWeight: FontWeight.w700)),
         subtitle: Text(dateStr),
         trailing: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -177,7 +219,7 @@ class _OrderCard extends StatelessWidget {
           children: [
             StatusChip(status: order.status),
             const SizedBox(height: 4),
-            Text('₹${order.totalValue}', style: const TextStyle(fontWeight: FontWeight.w500)),
+            Text('₹${order.totalValue}', style: const TextStyle(fontWeight: FontWeight.w700)),
           ],
         ),
         onTap: () => context.push('/orders/${order.id}'),

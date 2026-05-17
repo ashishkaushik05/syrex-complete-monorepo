@@ -6,6 +6,7 @@ class AuthUser {
     required this.permissions,
     this.managedWarehouseId,
     this.outletId,
+    this.isFieldEnabled = false,
   });
 
   final String id;
@@ -14,6 +15,7 @@ class AuthUser {
   final List<String> permissions;
   final String? managedWarehouseId;
   final String? outletId;
+  final bool isFieldEnabled;
 }
 
 class LoginInput {

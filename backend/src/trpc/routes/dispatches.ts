@@ -5,6 +5,7 @@ import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import { assertWarehouseScope } from "./outlet-access";
+import { recordComplaintActivity } from "./service-shared";
 
 function isAdmin(ctx: { permissions: string[] }) {
   return ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
@@ -124,7 +125,7 @@ function toDispatchItem(dispatch: {
     sku: string;
     qtyDispatched: number;
     serialNumbers: Prisma.JsonValue;
-    orderLine: { orderId: string };
+    orderLine: { orderId?: string; order?: { id: string } };
   }>;
 }) {
   return {
@@ -142,7 +143,7 @@ function toDispatchItem(dispatch: {
     lines: dispatch.lines.map((line) => ({
       id: line.id,
       orderLineId: line.orderLineId,
-      orderId: line.orderLine.orderId,
+      orderId: line.orderLine.orderId ?? line.orderLine.order?.id ?? "",
       productId: line.productId,
       sku: line.sku,
       qtyDispatched: line.qtyDispatched,
@@ -173,8 +174,14 @@ export const dispatchesRouter = createTRPCRouter({
           lines: {
             include: {
               orderLine: {
-                select: {
-                  orderId: true
+                include: {
+                  order: {
+                    select: {
+                      id: true,
+                      orderType: true,
+                      sourceComplaintId: true
+                    }
+                  }
                 }
               }
             }
@@ -424,14 +431,85 @@ export const dispatchesRouter = createTRPCRouter({
           lines: {
             include: {
               orderLine: {
-                select: {
-                  orderId: true
+                include: {
+                  order: {
+                    select: {
+                      id: true,
+                      orderType: true,
+                      sourceComplaintId: true
+                    }
+                  }
                 }
               }
             }
           }
         }
       });
+
+      const actorId = ctx.actor.id;
+      const complaintIds = Array.from(
+        new Set(
+          updated.lines
+            .map((line) => line.orderLine.order)
+            .filter((order) => order.orderType === "warranty_replacement" && order.sourceComplaintId)
+            .map((order) => order.sourceComplaintId!) 
+        )
+      );
+
+      if (complaintIds.length > 0) {
+        await ctx.prisma.$transaction(async (tx) => {
+          const complaints = await tx.serviceComplaint.findMany({
+            where: { id: { in: complaintIds } },
+            select: { id: true, status: true }
+          });
+
+          for (const complaint of complaints) {
+            if (complaint.status === "resolved" || complaint.status === "telephonic_closure" || complaint.status === "cancelled") {
+              continue;
+            }
+
+            await tx.serviceComplaint.update({
+              where: { id: complaint.id },
+              data: {
+                status: "resolved",
+                closedAt: new Date(),
+                resolutionNote: "Auto-resolved after replacement dispatch delivery"
+              }
+            });
+
+            if (actorId) {
+              await recordComplaintActivity(tx, {
+                complaintId: complaint.id,
+                actorId,
+                action: "replacement_delivered",
+                fromStatus: complaint.status,
+                toStatus: "resolved",
+                note: `Resolved on dispatch delivery ${updated.id}`,
+              });
+            }
+
+            const replacementLines = await tx.serviceComplaintLine.findMany({
+              where: {
+                complaintId: complaint.id,
+                normalizedReplacementSerial: { not: null }
+              },
+              select: { normalizedReplacementSerial: true }
+            });
+
+            if (replacementLines.length > 0) {
+              await tx.serviceSerialEvent.createMany({
+                data: replacementLines.map((line) => ({
+                  normalizedSerial: line.normalizedReplacementSerial!,
+                  eventType: "replacement_delivered",
+                  entityType: "dispatch",
+                  entityId: updated.id,
+                  eventAt: updated.deliveredAt ?? new Date(),
+                }))
+              });
+            }
+          }
+        });
+      }
 
       return toDispatchItem(updated);
     })

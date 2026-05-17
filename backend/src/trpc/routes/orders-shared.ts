@@ -20,6 +20,11 @@ export const orderSchema = z.object({
   id: z.string(),
   orderNumber: z.string(),
   outletId: z.string(),
+  orderType: z.string(),
+  sourceComplaintId: z.string().nullable(),
+  sourceWarehouseId: z.string().nullable(),
+  suppressAutoInvoice: z.boolean(),
+  serviceMetadata: z.unknown().nullable(),
   createdById: z.string().nullable(),
   orderDate: z.string(),
   deliveryAddress: z.string(),
@@ -87,6 +92,8 @@ export const orderListFilterSchema = paginationInputSchema.extend({
     ])
     .optional(),
   q: z.string().min(1).optional(),
+  orderType: z.string().optional(),
+  sourceComplaintId: z.string().uuid().optional(),
 });
 
 export type OrderListFilter = z.infer<typeof orderListFilterSchema>;
@@ -132,6 +139,11 @@ export function serializeOrder(order: {
   id: string;
   orderNumber: string;
   outletId: string;
+  orderType: string;
+  sourceComplaintId: string | null;
+  sourceWarehouseId: string | null;
+  suppressAutoInvoice: boolean;
+  serviceMetadata: Prisma.JsonValue | null;
   createdById: string | null;
   orderDate: Date;
   deliveryAddress: string;
@@ -163,6 +175,11 @@ export function serializeOrder(order: {
     id: order.id,
     orderNumber: order.orderNumber,
     outletId: order.outletId,
+    orderType: order.orderType,
+    sourceComplaintId: order.sourceComplaintId,
+    sourceWarehouseId: order.sourceWarehouseId,
+    suppressAutoInvoice: order.suppressAutoInvoice,
+    serviceMetadata: order.serviceMetadata,
     createdById: order.createdById,
     orderDate: order.orderDate.toISOString(),
     deliveryAddress: order.deliveryAddress,
@@ -216,6 +233,8 @@ export async function queryOrderList(
       outletId: effectiveOutletId,
       createdById: input.mineOnly ? ctx.actor.id : undefined,
       status: input.status,
+      orderType: input.orderType,
+      sourceComplaintId: input.sourceComplaintId,
       OR: input.q
         ? [
             { orderNumber: { contains: input.q, mode: "insensitive" } },

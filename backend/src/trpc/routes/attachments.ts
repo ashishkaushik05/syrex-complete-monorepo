@@ -12,7 +12,10 @@ const attachmentEntityTypeSchema = z.enum([
   "payment",
   "brand",
   "category",
-  "sku"
+  "sku",
+  "service_complaint",
+  "service_test",
+  "service_form_submission",
 ]);
 
 const attachmentSchema = z.object({
@@ -122,6 +125,30 @@ async function assertEntityExists(
     const row = await ctx.prisma.product.findUnique({ where: { id: entityId }, select: { id: true } });
     if (!row) {
       throw apiError("BAD_REQUEST", "Invalid sku entityId");
+    }
+    return;
+  }
+
+  if (entityType === "service_complaint") {
+    const row = await ctx.prisma.serviceComplaint.findUnique({ where: { id: entityId }, select: { id: true } });
+    if (!row) {
+      throw apiError("BAD_REQUEST", "Invalid service complaint entityId");
+    }
+    return;
+  }
+
+  if (entityType === "service_test") {
+    const row = await ctx.prisma.serviceTestReport.findUnique({ where: { id: entityId }, select: { id: true } });
+    if (!row) {
+      throw apiError("BAD_REQUEST", "Invalid service test entityId");
+    }
+    return;
+  }
+
+  if (entityType === "service_form_submission") {
+    const row = await ctx.prisma.serviceFormSubmission.findUnique({ where: { id: entityId }, select: { id: true } });
+    if (!row) {
+      throw apiError("BAD_REQUEST", "Invalid service form submission entityId");
     }
     return;
   }

@@ -25,3 +25,19 @@ final isSalesAuthorizedProvider = Provider<bool>((ref) {
       service.can(user, "orders:write") &&
       service.can(user, "outlets:read");
 });
+
+final canUseFieldProvider = Provider<bool>((ref) {
+  final session = ref.watch(sessionControllerProvider);
+  final user = session.user;
+  if (user == null) return false;
+  final service = ref.watch(permissionServiceProvider);
+  return service.can(user, "field:read") || service.can(user, "field:write");
+});
+
+final canAdminFieldProvider = Provider<bool>((ref) {
+  final session = ref.watch(sessionControllerProvider);
+  final user = session.user;
+  if (user == null) return false;
+  final service = ref.watch(permissionServiceProvider);
+  return service.can(user, "field:admin");
+});

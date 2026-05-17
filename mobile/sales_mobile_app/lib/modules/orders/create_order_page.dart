@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/sales_client.dart';
 import '../../core/outlet/outlet_context.dart';
+import '../../shared/widgets/premium_surfaces.dart';
 import '../../shared/widgets/error_view.dart';
 import 'cart_provider.dart';
 
@@ -78,26 +79,27 @@ class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
           ),
         ],
       ),
-      body: outletsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => ErrorView(
-          message: 'Could not load outlets.',
-          onRetry: () => ref.refresh(_outletsProvider.future),
-        ),
-        data: (outlets) {
-          if (outlets.isEmpty) {
-            return const ErrorView(message: 'No active outlets available.');
-          }
+      body: PremiumGradientBackground(
+        child: outletsAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (_, __) => ErrorView(
+            message: 'Could not load outlets.',
+            onRetry: () => ref.refresh(_outletsProvider.future),
+          ),
+          data: (outlets) {
+            if (outlets.isEmpty) {
+              return const ErrorView(message: 'No active outlets available.');
+            }
 
-          final selected = outlets.any((o) => o.id == selectedOutletId)
-              ? selectedOutletId
-              : null;
+            final selected = outlets.any((o) => o.id == selectedOutletId)
+                ? selectedOutletId
+                : null;
 
-          return Form(
-            key: _formKey,
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
+            return Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
                 DropdownButtonFormField<String>(
                   value: selected,
                   isExpanded: true,
@@ -177,10 +179,11 @@ class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
                         )
                       : const Text('Place Order'),
                 ),
-              ],
-            ),
-          );
-        },
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

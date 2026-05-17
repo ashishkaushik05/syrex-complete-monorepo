@@ -4,8 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/sales_client.dart';
 import '../../core/auth/session_controller.dart';
-import '../../core/outlet/outlet_context.dart';
-import '../../shared/widgets/error_view.dart';
+import '../../modules/field/providers/field_providers.dart';
+import '../../shared/widgets/premium_surfaces.dart';
 
 class OutletSummaryRow {
   const OutletSummaryRow({
@@ -49,80 +49,124 @@ class DashboardPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionControllerProvider);
+    final user = ref.watch(sessionControllerProvider).user;
     final asyncRows = ref.watch(_dashboardProvider);
+    final shiftAsync = ref.watch(activeShiftProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sales Dashboard'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => ref.read(sessionControllerProvider.notifier).logout(),
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: () => ref.refresh(_dashboardProvider.future),
+    return PremiumGradientBackground(
+      child: RefreshIndicator(
+        onRefresh: () async {
+          ref.invalidate(_dashboardProvider);
+          ref.invalidate(activeShiftProvider);
+        },
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 90),
           children: [
-            Text('Welcome, ${session.user?.email ?? ''}', style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 16),
-            _NavTile(
-              icon: Icons.receipt_long,
-              label: 'My Orders',
-              onTap: () => context.push('/orders/history'),
-            ),
-            _NavTile(
-              icon: Icons.description,
-              label: 'Invoices',
-              onTap: () => context.push('/invoices/history'),
-            ),
-            _NavTile(
-              icon: Icons.storefront,
-              label: 'Browse Catalog',
-              onTap: () => context.push('/catalog'),
-            ),
-            const SizedBox(height: 16),
             Text(
-              'Outlets Outstanding',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+              'Home',
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: AppPalette.ink,
+                  ),
             ),
-            const SizedBox(height: 8),
-            asyncRows.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => ErrorView(
-                message: 'Could not load outlet summary.',
-                onRetry: () => ref.refresh(_dashboardProvider.future),
+            const SizedBox(height: 4),
+            Text('Welcome back, ${user?.email ?? ''}', style: const TextStyle(color: Color(0xFF60707F))),
+            const SizedBox(height: 14),
+            QuickActionRail(
+              actions: [
+                QuickActionItem(
+                  label: 'Create Order',
+                  icon: Icons.add_shopping_cart,
+                  onTap: () => context.push('/orders/create'),
+                ),
+                QuickActionItem(
+                  label: 'Log Visit',
+                  icon: Icons.add_location_alt_rounded,
+                  onTap: () => context.push('/field/visit'),
+                ),
+                QuickActionItem(
+                  label: 'Start/End Stop',
+                  icon: Icons.pause_circle_filled_rounded,
+                  onTap: () => context.push('/field/stop'),
+                ),
+                QuickActionItem(
+                  label: 'Mark Attendance',
+                  icon: Icons.event_available_rounded,
+                  onTap: () => context.push('/field/attendance'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            PremiumCard(
+              child: shiftAsync.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (_, __) => const Text('Shift status unavailable.'),
+                data: (shift) => Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Shift Snapshot', style: TextStyle(fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 2),
+                        Text(
+                          shift == null ? 'No active shift' : 'Active since ${_readableTime(shift.startedAt)}',
+                          style: const TextStyle(color: Color(0xFF5E6E7B)),
+                        ),
+                      ],
+                    ),
+                    StateBadge(
+                      label: shift == null ? 'OFF SHIFT' : 'ACTIVE',
+                      color: shift == null ? AppPalette.amber : AppPalette.mint,
+                    ),
+                  ],
+                ),
               ),
+            ),
+            PremiumCard(
+              child: asyncRows.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (_, __) => const Text('Could not load daily summary.'),
+                data: (rows) {
+                  final totalDue = rows.fold<double>(0, (sum, row) => sum + row.outstanding);
+                  final atRisk = rows.where((row) => row.openInvoices > 0).length;
+                  return Row(
+                    children: [
+                      Expanded(child: _MetricTile(label: 'Outstanding', value: '₹${totalDue.toStringAsFixed(0)}')),
+                      Expanded(child: _MetricTile(label: 'Pending Outlets', value: '$atRisk')),
+                      Expanded(child: _MetricTile(label: 'Outlets', value: '${rows.length}')),
+                    ],
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 2),
+            const Text('Pending Tasks', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 10),
+            asyncRows.when(
+              loading: () => const PremiumCard(child: LinearProgressIndicator()),
+              error: (_, __) => const PremiumCard(child: Text('Unable to load tasks.')),
               data: (rows) {
-                if (rows.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(child: Text('No outlets found.')),
+                final dueRows = rows.where((row) => row.openInvoices > 0).toList();
+                if (dueRows.isEmpty) {
+                  return const PremiumCard(
+                    child: EmptyStateView(
+                      title: 'No pending financial tasks',
+                      subtitle: 'All tracked outlets are clear for now.',
+                      icon: Icons.done_all,
+                    ),
                   );
                 }
                 return Column(
-                  children: rows
+                  children: dueRows
                       .map(
-                        (row) => Card(
+                        (row) => PremiumCard(
                           child: ListTile(
-                            title: Text(row.outlet.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                            subtitle: Text('${row.outlet.outletCode} • ${row.outlet.ownerName}'),
-                            trailing: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text('₹${row.outstanding.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 2),
-                                Text('${row.openInvoices} open invoices', style: Theme.of(context).textTheme.bodySmall),
-                              ],
-                            ),
-                            onTap: () {
-                              ref.read(selectedOutletIdProvider.notifier).state = row.outlet.id;
-                              context.push('/orders/create');
-                            },
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(row.outlet.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            subtitle: Text('${row.openInvoices} invoices pending'),
+                            trailing: Text('₹${row.outstanding.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.w700)),
                           ),
                         ),
                       )
@@ -133,32 +177,33 @@ class DashboardPage extends ConsumerWidget {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push('/orders/create'),
-        icon: const Icon(Icons.add_shopping_cart),
-        label: const Text('New Order'),
-      ),
     );
+  }
+
+  static String _readableTime(String iso) {
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return iso;
+    final hour = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $ampm';
   }
 }
 
-class _NavTile extends StatelessWidget {
-  const _NavTile({required this.icon, required this.label, required this.onTap});
+class _MetricTile extends StatelessWidget {
+  const _MetricTile({required this.label, required this.value});
 
-  final IconData icon;
   final String label;
-  final VoidCallback onTap;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
-        title: Text(label),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
-      ),
+    return Column(
+      children: [
+        Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppPalette.ink)),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF6A7885))),
+      ],
     );
   }
 }

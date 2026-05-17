@@ -12,6 +12,8 @@ const visitSchema = z.object({
   lng: z.number(),
   description: z.string().nullable(),
   audioUrl: z.string().nullable(),
+  outletId: z.string().nullable(),
+  customerId: z.string().nullable(),
   recordedAt: z.string(),
   createdAt: z.string()
 });
@@ -25,6 +27,8 @@ const VISIT_SELECT = {
   lng: true,
   description: true,
   audioUrl: true,
+  outletId: true,
+  customerId: true,
   recordedAt: true,
   createdAt: true
 } as const;
@@ -38,6 +42,8 @@ function toVisit(v: {
   lng: number;
   description: string | null;
   audioUrl: string | null;
+  outletId: string | null;
+  customerId: string | null;
   recordedAt: Date;
   createdAt: Date;
 }) {
@@ -56,6 +62,8 @@ export const fieldVisitsRouter = createTRPCRouter({
         lng: z.number(),
         description: z.string().optional(),
         audioUrl: z.string().url().optional(),
+        outletId: z.string().uuid().optional(),
+        customerId: z.string().uuid().optional(),
         recordedAt: z.string().datetime().optional()
       })
     )
@@ -69,6 +77,25 @@ export const fieldVisitsRouter = createTRPCRouter({
       });
       if (!shift) throw apiError("BAD_REQUEST", "No active shift — visits require an active shift");
 
+      if (input.outletId) {
+        const outlet = await ctx.prisma.outlet.findFirst({
+          where: { id: input.outletId, isActive: true },
+          select: { id: true, userId: true }
+        });
+        if (!outlet) throw apiError("BAD_REQUEST", "Outlet not found or inactive");
+
+        if (input.customerId) {
+          const customer = await ctx.prisma.user.findFirst({
+            where: { id: input.customerId, isActive: true, userType: "outlet" },
+            select: { id: true }
+          });
+          if (!customer) throw apiError("BAD_REQUEST", "Customer not found or inactive");
+          if (customer.id !== outlet.userId) {
+            throw apiError("BAD_REQUEST", "Customer does not belong to selected outlet");
+          }
+        }
+      }
+
       const visit = await ctx.prisma.fieldVisit.create({
         data: {
           agentId,
@@ -78,6 +105,8 @@ export const fieldVisitsRouter = createTRPCRouter({
           lng: input.lng,
           description: input.description ?? null,
           audioUrl: input.audioUrl ?? null,
+          outletId: input.outletId ?? null,
+          customerId: input.customerId ?? null,
           recordedAt: input.recordedAt ? new Date(input.recordedAt) : new Date()
         },
         select: VISIT_SELECT

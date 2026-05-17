@@ -3,15 +3,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/auth/session_controller.dart';
+import '../../core/permissions/permission_service.dart';
 import '../../modules/auth/login_page.dart';
 import '../../modules/catalog/catalog_page.dart';
 import '../../modules/dashboard/dashboard_page.dart';
-import '../../modules/invoices/invoice_history_page.dart';
+import '../../modules/dashboard/more_page.dart';
+import '../../modules/field/screens/agent_map_page.dart';
+import '../../modules/field/screens/attendance_page.dart';
+import '../../modules/field/screens/create_visit_page.dart';
+import '../../modules/field/screens/field_home_page.dart';
+import '../../modules/field/screens/report_stop_page.dart';
 import '../../modules/invoices/invoice_detail_page.dart';
+import '../../modules/invoices/invoice_history_page.dart';
 import '../../modules/orders/create_order_page.dart';
+import '../../modules/orders/dispatch_detail_page.dart';
 import '../../modules/orders/order_detail_page.dart';
 import '../../modules/orders/orders_history_page.dart';
-import '../../core/permissions/permission_service.dart';
+import 'app_shell.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   final session = ref.watch(sessionControllerProvider);
@@ -26,8 +34,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final isUnauthorizedPath = path == '/unauthorized';
       final salesAuthorized = ref.read(isSalesAuthorizedProvider);
 
-      if (authStatus == SessionStatus.unknown ||
-          authStatus == SessionStatus.refreshing) {
+      if (authStatus == SessionStatus.unknown || authStatus == SessionStatus.refreshing) {
         return isSplashPath ? null : '/splash';
       }
 
@@ -35,7 +42,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         if (!salesAuthorized) {
           return isUnauthorizedPath ? null : '/unauthorized';
         }
-        if (isAuthPath || isSplashPath) return '/dashboard';
+        if (isAuthPath || isSplashPath || path == '/dashboard') return '/home';
         return null;
       }
 
@@ -53,42 +60,90 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/dashboard',
-        builder: (_, __) => const DashboardPage(),
+        redirect: (_, __) => '/home',
+      ),
+      GoRoute(
+        path: '/orders/history',
+        redirect: (_, __) => '/orders',
+      ),
+      GoRoute(
+        path: '/invoices/history',
+        redirect: (_, __) => '/finance',
       ),
       GoRoute(
         path: '/unauthorized',
         builder: (_, __) => const _UnauthorizedPage(),
       ),
-      GoRoute(
-        path: '/orders/history',
-        builder: (_, __) => const OrdersHistoryPage(),
-      ),
-      GoRoute(
-        path: '/orders/create',
-        builder: (_, __) => const CreateOrderPage(),
-      ),
-      GoRoute(
-        path: '/orders/:orderId',
-        builder: (_, state) {
-          final orderId = state.pathParameters['orderId']!;
-          return OrderDetailPage(orderId: orderId);
-        },
-      ),
-      GoRoute(
-        path: '/invoices/history',
-        builder: (_, __) => const InvoiceHistoryPage(),
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) => AppShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/home', builder: (_, __) => const DashboardPage()),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/orders',
+                builder: (_, __) => const OrdersHistoryPage(),
+                routes: [
+                  GoRoute(
+                    path: 'create',
+                    builder: (_, __) => const CreateOrderPage(),
+                  ),
+                  GoRoute(
+                    path: ':orderId',
+                    builder: (_, state) => OrderDetailPage(orderId: state.pathParameters['orderId']!),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/field',
+                builder: (_, __) => const FieldHomePage(),
+                routes: [
+                  GoRoute(path: 'visit', builder: (_, __) => const CreateVisitPage()),
+                  GoRoute(path: 'stop', builder: (_, __) => const ReportStopPage()),
+                  GoRoute(path: 'attendance', builder: (_, __) => const AttendancePage()),
+                  GoRoute(path: 'map', builder: (_, __) => const AgentMapPage()),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/finance',
+                builder: (_, __) => const InvoiceHistoryPage(),
+                routes: [
+                  GoRoute(
+                    path: 'invoices/:invoiceId',
+                    builder: (_, state) => InvoiceDetailPage(invoiceId: state.pathParameters['invoiceId']!),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/more', builder: (_, __) => const MorePage()),
+            ],
+          ),
+        ],
       ),
       GoRoute(
         path: '/invoices/:invoiceId',
-        builder: (_, state) {
-          final invoiceId = state.pathParameters['invoiceId']!;
-          return InvoiceDetailPage(invoiceId: invoiceId);
-        },
+        redirect: (_, state) => '/finance/invoices/${state.pathParameters['invoiceId']}',
       ),
       GoRoute(
-        path: '/catalog',
-        builder: (_, __) => const CatalogPage(),
+        path: '/dispatches/:dispatchId',
+        builder: (_, state) => DispatchDetailPage(dispatchId: state.pathParameters['dispatchId']!),
       ),
+      GoRoute(path: '/catalog', builder: (_, __) => const CatalogPage()),
     ],
   );
 });
@@ -98,9 +153,7 @@ class _SplashPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
-    );
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
 

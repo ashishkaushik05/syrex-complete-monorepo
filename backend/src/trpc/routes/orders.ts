@@ -316,7 +316,11 @@ export const ordersRouter = createTRPCRouter({
           },
         });
 
-        if (input.action === "approve") {
+        if (
+          input.action === "approve" &&
+          !updatedOrder.suppressAutoInvoice &&
+          updatedOrder.orderType !== "warranty_replacement"
+        ) {
           const existingInvoice = await tx.invoice.findUnique({
             where: { orderId: updatedOrder.id },
           });

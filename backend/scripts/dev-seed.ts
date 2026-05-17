@@ -80,7 +80,8 @@ async function main() {
       passwordHash: outletPasswordHash,
       userType: UserType.outlet,
       roleId: IDS.salesRole,
-      isActive: true
+      isActive: true,
+      isFieldEnabled: true
     },
     create: {
       id: IDS.outletUser,
@@ -89,7 +90,8 @@ async function main() {
       passwordHash: outletPasswordHash,
       userType: UserType.outlet,
       roleId: IDS.salesRole,
-      isActive: true
+      isActive: true,
+      isFieldEnabled: true
     }
   });
 

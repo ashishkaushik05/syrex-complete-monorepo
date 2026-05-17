@@ -14,7 +14,12 @@ class AuthRepository {
   Future<LoginResult> login(LoginInput input) async {
     final response = await dio.post(
       '/auth.login',
-      data: '{"json":{"email":"${input.email}","password":"${input.password}"}}',
+      data: {
+        'json': {
+          'email': input.email,
+          'password': input.password,
+        },
+      },
       options: Options(headers: {'Content-Type': 'application/json'}),
     );
 
@@ -66,7 +71,11 @@ class AuthRepository {
 
     final response = await dio.post(
       '/auth.refresh',
-      data: '{"json":{"refreshToken":"${current.refreshToken}"}}',
+      data: {
+        'json': {
+          'refreshToken': current.refreshToken,
+        },
+      },
       options: Options(headers: {
         'Content-Type': 'application/json',
         'Authorization': null,
