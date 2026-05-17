@@ -12,7 +12,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
       - name: Deploy to VPS
@@ -26,42 +25,42 @@ jobs:
           script: |
             set -e
 
-            # ── Pull latest ──────────────────────────────────────────────
+            # Pull latest
             cd /srv/syrex-api
             git pull origin master
 
-            # ── Backend deps ─────────────────────────────────────────────
+            # Backend deps
             cd /srv/syrex-api/backend
             /home/ashish/.bun/bin/bun install --frozen-lockfile
 
-            # ── Prisma generate (needs temp package.json at repo root) ───
+            # Prisma generate (needs temp package.json at repo root)
             cd /srv/syrex-api
             echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
             backend/node_modules/.bin/prisma generate --schema schema.prisma
             rm -f package.json
 
-            # ── DB migrate ───────────────────────────────────────────────
+            # DB migrate
             cd /srv/syrex-api/backend
             PRISMA_GENERATE_SKIP_AUTOINSTALL=1 \
               /home/ashish/.bun/bin/bunx prisma db push \
               --schema ../schema.prisma --skip-generate --accept-data-loss
 
-            # ── Web build ────────────────────────────────────────────────
+            # Web build
             cd /srv/syrex-api/web
             npm ci
             VITE_API_URL=https://strideit.syrexbatteries.in npm run build
 
-            # ── Restart service ──────────────────────────────────────────
+            # Restart service
             sudo systemctl restart syrex-api
 
-            # ── Health check (wait up to 30s) ────────────────────────────
+            # Health check (wait up to 30s)
             for i in $(seq 1 10); do
               sleep 3
               STATUS=$(curl -sf http://localhost:3000/health 2>/dev/null || true)
               if echo "$STATUS" | grep -q '"ok"'; then
-                echo "Health check passed: $STATUS"
+                echo "Health check passed"
                 exit 0
               fi
-              echo "Waiting for service... attempt $i"
+              echo "Waiting... attempt $i/10"
             done
             echo "Health check failed after 30s" && exit 1
