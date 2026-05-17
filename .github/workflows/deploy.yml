@@ -3,11 +3,6 @@ name: Deploy to Production
 on:
   push:
     branches: [master]
-    paths:
-      - 'backend/**'
-      - 'web/**'
-      - 'schema.prisma'
-      - '.github/workflows/deploy.yml'
 
 jobs:
   deploy:
