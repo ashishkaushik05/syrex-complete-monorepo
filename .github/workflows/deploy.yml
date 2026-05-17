@@ -1,0 +1,67 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+      - 'web/**'
+      - 'schema.prisma'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 45.195.159.172
+          port: 2222
+          username: ashish
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+
+            # ── Pull latest ──────────────────────────────────────────────
+            cd /srv/syrex-api
+            git pull origin master
+
+            # ── Backend deps ─────────────────────────────────────────────
+            cd /srv/syrex-api/backend
+            /home/ashish/.bun/bin/bun install --frozen-lockfile
+
+            # ── Prisma generate (needs temp package.json at repo root) ───
+            cd /srv/syrex-api
+            echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
+            backend/node_modules/.bin/prisma generate --schema schema.prisma
+            rm -f package.json
+
+            # ── DB migrate ───────────────────────────────────────────────
+            cd /srv/syrex-api/backend
+            PRISMA_GENERATE_SKIP_AUTOINSTALL=1 \
+              /home/ashish/.bun/bin/bunx prisma db push \
+              --schema ../schema.prisma --skip-generate --accept-data-loss
+
+            # ── Web build ────────────────────────────────────────────────
+            cd /srv/syrex-api/web
+            npm ci
+            VITE_API_URL=https://strideit.syrexbatteries.in npm run build
+
+            # ── Restart service ──────────────────────────────────────────
+            sudo systemctl restart syrex-api
+
+            # ── Health check (wait up to 30s) ────────────────────────────
+            for i in $(seq 1 10); do
+              sleep 3
+              STATUS=$(curl -sf http://localhost:3000/health 2>/dev/null || true)
+              if echo "$STATUS" | grep -q '"ok"'; then
+                echo "Health check passed: $STATUS"
+                exit 0
+              fi
+              echo "Waiting for service... attempt $i"
+            done
+            echo "Health check failed after 30s" && exit 1

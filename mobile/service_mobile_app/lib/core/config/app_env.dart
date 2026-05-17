@@ -4,7 +4,7 @@ class AppConfig {
   final String baseUrl;
 
   factory AppConfig.fromDartDefine() {
-    const raw = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://localhost:3000/trpc');
+    const raw = String.fromEnvironment('API_BASE_URL', defaultValue: 'https://strideit.syrexbatteries.in/trpc');
     return AppConfig(baseUrl: raw);
   }
 }

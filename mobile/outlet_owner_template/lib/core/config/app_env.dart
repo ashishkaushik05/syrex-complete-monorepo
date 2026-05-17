@@ -10,7 +10,7 @@ class AppConfig {
     const envRaw = String.fromEnvironment('APP_ENV', defaultValue: 'dev');
     const baseUrl = String.fromEnvironment(
       'API_BASE_URL',
-      defaultValue: 'https://overprecise-nestor-raspingly.ngrok-free.dev/trpc',
+      defaultValue: 'https://strideit.syrexbatteries.in/trpc',
     );
 
     switch (envRaw) {
