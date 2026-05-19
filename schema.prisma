@@ -5,6 +5,7 @@
 
 generator client {
   provider = "prisma-client-js"
+  output   = "./backend/node_modules/.prisma/client"
 }
 
 datasource db {
@@ -85,6 +86,11 @@ enum ServiceWarrantyDecisionStatus {
 enum ServiceMachineClientStatus {
   active
   revoked
+}
+
+enum ChargeType {
+  percentage
+  fixed
 }
 
 // =============================================================================
@@ -541,6 +547,7 @@ model Invoice {
   order       SaleOrder                 @relation(fields: [orderId],  references: [id])
   outlet      Outlet                    @relation(fields: [outletId], references: [id])
   lines       InvoiceLine[]
+  charges     InvoiceCharge[]
   allocations OutletPaymentAllocation[]
 
   // Fast FIFO query: unpaid invoices per outlet ordered by invoiceDate ASC
@@ -599,6 +606,41 @@ model OutletPaymentAllocation {
 }
 
 
+
+// Admin-managed tax/charge configurations applied globally to every invoice.
+model TaxCharge {
+  id           String     @id @default(uuid())
+  name         String
+  type         ChargeType
+  rate         Decimal
+  isActive     Boolean    @default(true)
+  displayOrder Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  invoiceCharges InvoiceCharge[]
+
+  @@index([isActive, displayOrder])
+  @@map("tax_charges")
+}
+
+// Snapshot of charges applied to an invoice at generation time — immutable.
+model InvoiceCharge {
+  id           String     @id @default(uuid())
+  invoiceId    String
+  taxChargeId  String?   // null = ad-hoc charge not from global config
+  name         String
+  type         ChargeType
+  rate         Decimal
+  amount       Decimal
+  displayOrder Int        @default(0)
+
+  invoice   Invoice    @relation(fields: [invoiceId],   references: [id])
+  taxCharge TaxCharge? @relation(fields: [taxChargeId], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_charges")
+}
 
 // =============================================================================
 // NOTIFICATIONS

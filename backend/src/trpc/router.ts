@@ -28,6 +28,7 @@ import { serviceSerialsRouter } from "./routes/service-serials";
 import { serviceTestsRouter } from "./routes/service-tests";
 import { serviceWarrantyRouter } from "./routes/service-warranty";
 import { systemRouter } from "./routes/system";
+import { taxChargesRouter } from "./routes/tax-charges";
 import { usersRouter } from "./routes/users";
 import { warehousesRouter } from "./routes/warehouses";
 
@@ -46,6 +47,7 @@ export const appRouter = createTRPCRouter({
   dispatches: dispatchesRouter,
   invoices: invoicesRouter,
   payments: paymentsRouter,
+  taxCharges: taxChargesRouter,
   outlets: outletsRouter,
   warehouses: warehousesRouter,
   orders: ordersRouter,

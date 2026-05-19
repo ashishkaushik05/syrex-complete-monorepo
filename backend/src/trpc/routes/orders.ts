@@ -105,6 +105,9 @@ export const ordersRouter = createTRPCRouter({
       if (!outlet) {
         throw apiError("BAD_REQUEST", "Invalid outletId");
       }
+      if (!outlet.isActive) {
+        throw apiError("CONFLICT", "Outlet is inactive");
+      }
       if (!outlet.warehouseId) {
         throw apiError("BAD_REQUEST", "Outlet has no assigned warehouse");
       }
@@ -327,16 +330,42 @@ export const ordersRouter = createTRPCRouter({
 
           if (!existingInvoice) {
             const invoiceNumber = await nextInvoiceNumber(tx, now);
+
+            const subtotal = updatedOrder.totalValue;
+            const activeCharges = await tx.taxCharge.findMany({
+              where: { isActive: true },
+              orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+            });
+            const chargesData = activeCharges.map((c) => {
+              const amount =
+                c.type === "percentage"
+                  ? subtotal.mul(c.rate).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+                  : c.rate.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+              return {
+                taxChargeId: c.id,
+                name: c.name,
+                type: c.type,
+                rate: c.rate,
+                amount,
+                displayOrder: c.displayOrder,
+              };
+            });
+            const chargesTotal = chargesData.reduce(
+              (sum, c) => sum.add(c.amount),
+              new Prisma.Decimal(0)
+            );
+            const total = subtotal.add(chargesTotal);
+
             await tx.invoice.create({
               data: {
                 invoiceNumber,
                 orderId: updatedOrder.id,
                 outletId: updatedOrder.outletId,
                 invoiceDate: now,
-                subtotal: updatedOrder.totalValue,
-                total: updatedOrder.totalValue,
+                subtotal,
+                total,
                 amountPaid: new Prisma.Decimal(0),
-                amountDue: updatedOrder.totalValue,
+                amountDue: total,
                 lines: {
                   create: updatedOrder.lines.map((line) => ({
                     productId: line.productId,
@@ -345,6 +374,9 @@ export const ordersRouter = createTRPCRouter({
                     unitPrice: line.unitPrice,
                     lineTotal: line.lineTotal,
                   })),
+                },
+                charges: {
+                  create: chargesData,
                 },
               },
             });

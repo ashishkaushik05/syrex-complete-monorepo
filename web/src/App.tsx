@@ -45,6 +45,7 @@ import { FieldSenseAttendancePage } from '@/pages/dashboard/FieldSenseAttendance
 import { FieldSenseShiftsPage } from '@/pages/dashboard/FieldSenseShiftsPage'
 import { FieldSenseVisitsPage } from '@/pages/dashboard/FieldSenseVisitsPage'
 import { FieldSenseStopsPage } from '@/pages/dashboard/FieldSenseStopsPage'
+import { BillingSettingsPage } from '@/pages/dashboard/BillingSettingsPage'
 
 function FullScreenLoader() {
   return (
@@ -160,6 +161,7 @@ export default function App() {
             <Route path="dispatch/invoices" element={<Navigate to="/dashboard/accounts/invoices" replace />} />
             <Route path="dispatch/invoices/:id" element={<InvoiceDetailPage />} />
             <Route path="distribution/warehouse-assignment" element={<Navigate to="/dashboard/dispatch/queue" replace />} />
+            <Route path="settings/billing" element={<BillingSettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

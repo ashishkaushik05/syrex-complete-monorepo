@@ -37,6 +37,49 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260519-024
+- Decision ID: `DEC-20260519-024`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master`
+- Task: `Add GST and other charges to the payments/invoices module`
+- Decision: `Introduce global TaxCharge configuration table and InvoiceCharge snapshot table. Charges (percentage or fixed) are applied at invoice generation time and snapshotted immutably. Web UI manages charges in a new Billing Settings page. Order creation Step 3 previews charges live. Invoice detail shows charges breakdown with a downloadable PDF.`
+- Rationale: `Accounting requirement: Indian GST (CGST/SGST/IGST) must appear on invoices. Snapshotting charges per-invoice ensures historical invoices are not affected by rate changes.`
+- Alternatives Considered:
+  - `Per-outlet or per-product tax variation` rejected — user requirement is global charges only.
+  - `Server-side PDF generation (pdfkit/puppeteer)` rejected — adds server complexity; @react-pdf/renderer generates the PDF client-side from already-loaded data.
+  - `Browser print-to-PDF route` rejected — not a true file download; user selected @react-pdf/renderer.
+- Scope:
+  - `schema.prisma` — new enum ChargeType, new models TaxCharge and InvoiceCharge, Invoice.charges relation, generator output path set to backend/node_modules/.prisma/client
+  - `backend/src/rbac/modules/billing.ts` (new)
+  - `backend/src/rbac/catalog.ts`
+  - `backend/src/trpc/routes/tax-charges.ts` (new)
+  - `backend/src/trpc/routes/invoices.ts` — charges included, previewCharges procedure added
+  - `backend/src/trpc/routes/orders.ts` — invoice generation now applies active TaxCharges
+  - `backend/src/trpc/router.ts`
+  - `web/src/lib/api.ts` — billing/charges REST-to-tRPC bridge
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx` — Step 3 charges preview
+  - `web/src/pages/dashboard/InvoiceDetailPage.tsx` — charges table + PDF download button
+  - `web/src/pages/dashboard/BillingSettingsPage.tsx` (new)
+  - `web/src/components/InvoicePDF.tsx` (new)
+  - `web/src/components/InvoicePDFButton.tsx` (new)
+  - `web/src/App.tsx` — billing route added
+  - `web/src/pages/dashboard/DashboardLayout.tsx` — Billing Config nav item
+- Status: `completed`
+- Completion Notes:
+  - Done: Schema pushed (db push), Prisma client regenerated to backend/node_modules/.prisma/client, backend typecheck passes (only pre-existing products.ts errors unrelated to this change), web build passes with zero TS errors.
+  - Not Done: FIFO payment allocation is intentionally untouched — it reads amountDue which already includes GST after this change.
+- Impact/Risk:
+  - Breaking: future invoice totals will include all active TaxCharges. Existing invoices in DB are unaffected. Outstanding balance recalculation on approval reads live amountDue — no logic change needed.
+  - The generator output path in schema.prisma now points to backend/node_modules/.prisma/client — must use `bun run prisma:generate` (from backend/) after any schema change.
+- Cleanup Required:
+  - Add billing:read and billing:manage to the Admin role seed in backend/scripts/dev-seed.ts so the Billing Config nav item is visible in dev without manual role editing.
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-19`
+
+---
+
 ## DEC-20260515-022
 - Decision ID: `DEC-20260515-022`
 - Model: `codex`
@@ -3781,3 +3824,151 @@ Use `DECISION_TEMPLATE.md` for every new entry.
   - `Conflicting Implementations:` none active; legacy deep-link paths are redirected into the new router tree for compatibility.
   - `Cleanup Required (owner):` codex + repo owner in next chunk to add automated test coverage (backend contract + Flutter integration + e2e), optional tile-based map rendering, and richer outlet-contact customer selection.
   - `Timestamp correction:` final status note above was recorded at `2026-05-15T11:48:51Z`.
+
+---
+
+## DEC-20260519-001
+- Decision ID: `DEC-20260519-001`
+- Model: `codex`
+- Branch/Commit: `master@93a9dc9`
+- Task: `Fix order-create outlet activity validation false failures in web UI and align backend enforcement`
+- Decision: `Update web order-create validation to check outlet activity directly and avoid false inactive-warehouse failures when scoped warehouse list omits the assigned warehouse; add backend orders.create enforcement that outlet must be active.`
+- Rationale: `Current frontend check can fail valid selections because warehouse list visibility is role-scoped; backend currently enforces warehouse assignment/activity but not outlet activity.`
+- Alternatives Considered:
+  - `Keep frontend validation as-is` rejected because it creates false negatives for valid outlets.
+  - `Frontend-only fix without backend outlet activity enforcement` rejected because business rule must be guaranteed server-side.
+- Scope:
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `backend/src/trpc/routes/orders.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Frontend and backend validation patches pending.`
+- Impact/Risk:
+  - `Low: validation behavior is tightened for inactive outlets and relaxed for false warehouse-list misses.`
+- Cleanup Required:
+  - `If warehouse-list scoping rules are changed later, re-verify that order-create prechecks still mirror backend behavior without false negatives.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-19T00:00:00Z`
+
+### DEC-20260519-001 Final Update
+- Decision ID: `DEC-20260519-001`
+- Model: `codex`
+- Branch/Commit: `master@93a9dc9`
+- Task: `Fix order-create outlet activity validation false failures in web UI and align backend enforcement`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated `web/src/pages/dashboard/SalesOrdersPage.tsx` to request only active outlets for order creation (`isActive: true`), added explicit inactive-outlet guards in both next-step and submit flows, and changed warehouse precheck to fail only when the assigned warehouse is present and explicitly inactive (avoids false negatives when scoped warehouse list omits records). Added backend enforcement in `backend/src/trpc/routes/orders.ts` create mutation to reject inactive outlets with `CONFLICT`.`
+  - Not Done: `No additional route-level tests were added in this change.`
+- Impact/Risk:
+  - `Order creation now consistently blocks inactive outlets in both frontend and backend.`
+  - `Frontend no longer falsely blocks valid outlets when warehouse list visibility is scoped; inactive-warehouse enforcement remains guaranteed by backend create validation.`
+- Cleanup Required:
+  - `Add focused regression tests for order-create validation matrix (inactive outlet, missing warehouse, inactive warehouse).`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `backend/frontend owner in next test pass`
+- Owner Timestamp: `codex @ 2026-05-19T00:20:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd web && bun run build`
+  - `Validation attempted: cd backend && npx tsc --noEmit (fails on pre-existing errors in backend/src/trpc/routes/products.ts:30 and :44)`
+
+---
+
+## DEC-20260519-002
+- Decision ID: `DEC-20260519-002`
+- Model: `codex`
+- Branch/Commit: `master@93a9dc9`
+- Task: `Create a dedicated seed file with 2 warehouses, 3 outlets, and 6-7 internal users`
+- Decision: `Add a standalone backend seed script that upserts required roles and creates deterministic demo records: 7 internal users, 3 outlet users (schema-required for outlet ownership), 2 warehouses, and 3 outlets.`
+- Rationale: `Request is for a reusable seed artifact; keeping it separate from existing dev/phase seeds avoids changing existing smoke flows.`
+- Alternatives Considered:
+  - `Modify existing dev-seed.ts` rejected because it would alter established db:seed behavior used by current scripts.
+  - `Seed outlets without outlet users` rejected because schema requires each outlet to reference a unique userId.
+- Scope:
+  - `backend/scripts/demo-seed.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Seed script implementation pending.`
+- Impact/Risk:
+  - `Low: standalone script does not alter default seed command behavior.`
+- Cleanup Required:
+  - `If this script should become default seed later, update backend/package.json db:seed intentionally in a separate decision entry.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-19T04:08:36Z`
+
+### DEC-20260519-002 Final Update
+- Decision ID: `DEC-20260519-002`
+- Model: `codex`
+- Branch/Commit: `master@93a9dc9`
+- Task: `Create a dedicated seed file with 2 warehouses, 3 outlets, and 6-7 internal users`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added `backend/scripts/demo-seed.ts` as a standalone seed script. It upserts roles (`Admin`, `Sales`, `Warehouse Manager`), seeds 7 internal users, seeds 3 outlet users (required for outlet ownership), creates 2 active warehouses with distinct assigned managers, and creates 3 active outlets mapped to the seeded warehouses and outlet users. Script prints a credential summary with shared demo password and emails.`
+  - Not Done: `No package.json script alias was added; run directly with `bun run scripts/demo-seed.ts`.`
+- Impact/Risk:
+  - `Low: no change to existing default seed flow (`db:seed` remains unchanged).`
+- Cleanup Required:
+  - `If desired, add a dedicated npm/bun script alias for this seed in backend/package.json in a separate decision-scoped change.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `repo owner if script aliasing is requested`
+- Owner Timestamp: `codex @ 2026-05-19T04:15:00Z`
+- Follow-up Notes:
+  - `Validation attempted: cd backend && npx tsc --noEmit -p tsconfig.json`
+  - `Typecheck still fails on pre-existing backend/src/trpc/routes/products.ts:30 and :44 (unrelated to this seed file).`
+
+---
+
+## DEC-20260519-003
+- Decision ID: `DEC-20260519-003`
+- Model: `codex`
+- Branch/Commit: `master@93a9dc9`
+- Task: `Extend demo seed to include 2 brands, 4 battery categories, and 8 products`
+- Decision: `Augment `backend/scripts/demo-seed.ts` to upsert brands `Syrex` and `Salmon`, create two battery categories per brand, and seed eight active products mapped across those categories.`
+- Rationale: `User requested richer catalog coverage in the same seed artifact used for demo data setup.`
+- Alternatives Considered:
+  - `Create a separate catalog-only seed` rejected because requested change is specifically to include this data in the existing seed file.
+  - `Seed categories/products without deterministic IDs` rejected to keep reruns idempotent and predictable.
+- Scope:
+  - `backend/scripts/demo-seed.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Catalog seed extension pending.`
+- Impact/Risk:
+  - `Low: extends standalone demo seed only; no production path changes.`
+- Cleanup Required:
+  - `If catalog naming/taxonomy standard changes, align these seeded categories/products in a follow-up update.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-19T04:29:17Z`
+
+### DEC-20260519-003 Final Update
+- Decision ID: `DEC-20260519-003`
+- Model: `codex`
+- Branch/Commit: `master@93a9dc9`
+- Task: `Extend demo seed to include 2 brands, 4 battery categories, and 8 products`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated `backend/scripts/demo-seed.ts` to add deterministic catalog IDs and idempotent upserts for 2 active brands (`Syrex`, `Salmon`), 4 active battery categories (2 per brand: `Inverter Batteries`, `Automotive Batteries`), and 8 active products (2 per category). Extended seed output summary to include brand/category/product counts and product SKU listing.`
+  - Not Done: `No package script alias changes were made; execution remains via direct script run.`
+- Impact/Risk:
+  - `Low: only affects standalone demo seed data volume and coverage.`
+- Cleanup Required:
+  - `If product taxonomy or pricing baseline changes, refresh seeded product specs/prices accordingly.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `repo owner on future catalog revisions`
+- Owner Timestamp: `codex @ 2026-05-19T04:31:00Z`
+- Follow-up Notes:
+  - `Validation passed: cd backend && bun run scripts/demo-seed.ts`

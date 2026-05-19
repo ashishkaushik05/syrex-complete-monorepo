@@ -38,6 +38,7 @@ type OutletOption = {
   outletCode: string
   phone: string
   address: string
+  isActive: boolean
   warehouseId?: string | null
 }
 
@@ -269,7 +270,7 @@ export function SalesOrdersPage() {
     enabled: createModalOpen,
     queryFn: async () => {
       const response = await api.get<MaybeNested<PaginatedResponse<OutletOption>>>('/outlets', {
-        params: { page: 1, limit: 200 },
+        params: { page: 1, limit: 200, isActive: true },
       })
       const payload = response.data as MaybeNested<PaginatedResponse<OutletOption>> | undefined
       const pageData = normalizePaginated(payload, 1, 200)
@@ -322,12 +323,15 @@ export function SalesOrdersPage() {
       if (!outlet) {
         throw new Error('Please select an outlet')
       }
+      if (outlet.isActive === false) {
+        throw new Error('Selected outlet is inactive. Activate the outlet before creating an order.')
+      }
       if (!outlet.warehouseId) {
         throw new Error('Selected outlet has no assigned warehouse. Assign a warehouse before creating an order.')
       }
 
       const warehouse = (warehousesQuery.data ?? []).find((item) => item.id === outlet.warehouseId)
-      if (!warehouse || !warehouse.isActive) {
+      if (warehouse && !warehouse.isActive) {
         throw new Error('Selected outlet is linked to an inactive warehouse. Activate the warehouse before creating an order.')
       }
 
@@ -455,6 +459,19 @@ export function SalesOrdersPage() {
     }, 0)
   }, [selectedLineItems])
 
+  const chargesPreviewQuery = useQuery({
+    queryKey: ['order-charges-preview', runningTotal],
+    enabled: createStep === 3 && runningTotal > 0,
+    queryFn: async () => {
+      const resp = await api.post('/settings/billing/charges/preview', { subtotal: String(runningTotal) })
+      return (resp as any).data.data as {
+        charges: Array<{ taxChargeId: string; name: string; type: 'percentage' | 'fixed'; rate: string; amount: string; displayOrder: number }>
+        subtotal: string
+        total: string
+      }
+    },
+  })
+
   const setProductQty = (productId: string, qty: number) => {
     setQtyByProductId((prev) => {
       if (qty <= 0) {
@@ -476,12 +493,16 @@ export function SalesOrdersPage() {
         setCreateError('Select an outlet to continue')
         return
       }
+      if (selectedOutlet.isActive === false) {
+        setCreateError('Selected outlet is inactive. Activate the outlet before creating an order.')
+        return
+      }
       if (!selectedOutlet.warehouseId) {
         setCreateError('Selected outlet has no assigned warehouse. Assign a warehouse before creating an order.')
         return
       }
       const selectedWarehouse = (warehousesQuery.data ?? []).find((warehouse) => warehouse.id === selectedOutlet.warehouseId)
-      if (!selectedWarehouse || !selectedWarehouse.isActive) {
+      if (selectedWarehouse && !selectedWarehouse.isActive) {
         setCreateError('Selected outlet is linked to an inactive warehouse. Activate the warehouse before creating an order.')
         return
       }
@@ -873,10 +894,31 @@ export function SalesOrdersPage() {
                       )
                     })}
                     <TableRow>
+                      <TableCell colSpan={4} className="text-right text-slate-600">
+                        Subtotal
+                      </TableCell>
+                      <TableCell className="text-slate-600">{formatCurrencyINR(runningTotal)}</TableCell>
+                    </TableRow>
+                    {chargesPreviewQuery.data?.charges.map((charge) => (
+                      <TableRow key={charge.taxChargeId}>
+                        <TableCell colSpan={4} className="text-right text-slate-500 text-xs">
+                          {charge.name}
+                          {charge.type === 'percentage' ? ` (${charge.rate}%)` : ' (fixed)'}
+                        </TableCell>
+                        <TableCell className="text-slate-500 text-xs">
+                          {formatCurrencyINR(Number(charge.amount))}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    <TableRow>
                       <TableCell colSpan={4} className="text-right font-semibold text-slate-900">
                         Total
                       </TableCell>
-                      <TableCell className="font-semibold text-slate-900">{formatCurrencyINR(runningTotal)}</TableCell>
+                      <TableCell className="font-semibold text-slate-900">
+                        {chargesPreviewQuery.data
+                          ? formatCurrencyINR(Number(chargesPreviewQuery.data.total))
+                          : formatCurrencyINR(runningTotal)}
+                      </TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>

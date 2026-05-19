@@ -1,5 +1,6 @@
 import { aggregatePermissionCatalog, SUPER_ADMIN_PERMISSION } from "./core";
 import { ATTACHMENTS_P, attachmentsManifest } from "./modules/attachments";
+import { BILLING_P, billingManifest } from "./modules/billing";
 import { CATALOG_P, catalogManifest } from "./modules/catalog";
 import { DISPATCHES_P, dispatchesManifest } from "./modules/dispatches";
 import { FIELD_P, fieldManifest } from "./modules/field";
@@ -15,6 +16,7 @@ import { WAREHOUSES_P, warehousesManifest } from "./modules/warehouses";
 
 const manifests = [
   attachmentsManifest,
+  billingManifest,
   catalogManifest,
   dispatchesManifest,
   fieldManifest,
@@ -37,6 +39,7 @@ export const permissionCatalogKeySet = catalog.keySet;
 
 export const P = {
   attachments: ATTACHMENTS_P,
+  billing: BILLING_P,
   catalog: CATALOG_P,
   dispatches: DISPATCHES_P,
   field: FIELD_P,

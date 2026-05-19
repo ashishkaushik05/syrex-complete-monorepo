@@ -268,6 +268,14 @@ const navItems: NavItem[] = [
     requiredPermission: "roles:read",
   },
   {
+    section: "Administration",
+    label: "Billing Config",
+    to: "/dashboard/settings/billing",
+    icon: Receipt,
+    exact: false,
+    requiredPermission: "billing:manage",
+  },
+  {
     section: "Field Sense",
     label: "Field Schedule",
     to: "/dashboard/field-schedule",

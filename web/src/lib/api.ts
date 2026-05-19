@@ -1197,6 +1197,11 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     return { data: { data: clients } }
   }
 
+  if (url === '/settings/billing/charges') {
+    const result = await trpcQuery<{ items: any[] }>('taxCharges.list', undefined)
+    return { data: { data: result.items } }
+  }
+
   if (url === '/notifications/unread-count') {
     return { data: { data: { count: 0 } } }
   }
@@ -2052,6 +2057,33 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: result } }
   }
 
+  if (/^\/invoices\/[^/]+\/charges$/.test(url)) {
+    const id = url.split('/')[2]
+    const result = await trpcMutation<any>('invoices.updateCharges', { invoiceId: id, charges: body.charges })
+    return { data: { data: result } }
+  }
+
+  if (url === '/settings/billing/charges/preview') {
+    const result = await trpcQuery<any>('invoices.previewCharges', { subtotal: body?.subtotal ?? '0' })
+    return { data: { data: result } }
+  }
+
+  if (url === '/settings/billing/charges') {
+    const charge = await trpcMutation<any>('taxCharges.create', {
+      name: body.name,
+      type: body.type,
+      rate: String(body.rate ?? '0'),
+      isActive: body.isActive ?? true,
+      displayOrder: body.displayOrder ?? 0,
+    })
+    return { data: { data: charge } }
+  }
+
+  if (url === '/settings/billing/charges/reorder') {
+    const result = await trpcMutation<any>('taxCharges.reorder', { orderedIds: body.orderedIds })
+    return { data: { data: result.items } }
+  }
+
   if (url === '/notifications/read-all') {
     return { data: { ok: true } }
   }
@@ -2215,6 +2247,19 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     return { data: outlet }
   }
 
+  if (/^\/settings\/billing\/charges\/[^/]+$/.test(url)) {
+    const id = url.split('/')[4]
+    const charge = await trpcMutation<any>('taxCharges.update', {
+      id,
+      name: body.name,
+      type: body.type,
+      rate: body.rate !== undefined ? String(body.rate) : undefined,
+      isActive: body.isActive,
+      displayOrder: body.displayOrder,
+    })
+    return { data: { data: charge } }
+  }
+
   if (/^\/tickets\/[^/]+\/priority$/.test(url)) {
     const id = url.split('/')[2]
     const updated = await trpcMutation<any>('serviceComplaints.update', {
@@ -2237,6 +2282,11 @@ async function phase1Delete(url: string): Promise<unknown | null> {
   }
   if (/^\/roles\/[^/]+$/.test(url)) {
     throw makeApiError('Role delete is not available in Phase 1 backend.', 400)
+  }
+  if (/^\/settings\/billing\/charges\/[^/]+$/.test(url)) {
+    const id = url.split('/')[4]
+    await trpcMutation<any>('taxCharges.delete', { id })
+    return { data: { ok: true } }
   }
   return null
 }
