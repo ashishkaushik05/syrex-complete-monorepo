@@ -212,6 +212,16 @@ model Outlet {
   isActive           Boolean  @default(true)
   createdAt          DateTime @default(now())
 
+  // Billing / GST details
+  legalName       String?
+  gstin           String?
+  billingAddress1 String?
+  billingAddress2 String?
+  billingCity     String?
+  billingState    String?
+  billingPincode  String?
+  billingCountry  String   @default("India")
+
   // Single warehouse that serves this outlet
   warehouseId String?
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
@@ -622,6 +632,26 @@ model TaxCharge {
 
   @@index([isActive, displayOrder])
   @@map("tax_charges")
+}
+
+// Singleton — one record holds the seller's (org's) billing identity shown on every invoice.
+model OrgBillingProfile {
+  id           String   @id @default(uuid())
+  companyName  String   @default("")
+  addressLine1 String   @default("")
+  addressLine2 String   @default("")
+  city         String   @default("")
+  state        String   @default("")
+  pincode      String   @default("")
+  country      String   @default("India")
+  gstin        String   @default("")
+  pan          String   @default("")
+  sacCode      String   @default("")
+  logoUrl      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("org_billing_profile")
 }
 
 // Snapshot of charges applied to an invoice at generation time — immutable.

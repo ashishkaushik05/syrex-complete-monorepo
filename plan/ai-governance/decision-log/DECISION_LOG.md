@@ -37,6 +37,43 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260519-001
+- Decision ID: `DEC-20260519-001`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master`
+- Task: `GST invoice template match — org billing profile, outlet billing details, InvoicePDF redesign`
+- Decision: `Add OrgBillingProfile singleton model for seller identity; add billing/GST fields to Outlet; redesign InvoicePDF to match Indian GST invoice template.`
+- Rationale: `Generated invoices lacked seller block (company name, GSTIN, PAN, SAC Code), buyer GSTIN/address, GST charge breakdown, amount in words, and PAID stamp. Template from reference invoice (MilesWeb) adopted as the standard.`
+- Alternatives Considered:
+  - `Per-org multi-tenant profile` rejected — single-tenant platform, a singleton is sufficient.
+  - `E-invoice IRN/QR fields` deferred to a future compliance pass per user direction.
+- Scope:
+  - `schema.prisma` — new OrgBillingProfile model; 8 billing fields on Outlet
+  - `backend/src/trpc/routes/org-billing-profile.ts` (new)
+  - `backend/src/trpc/router.ts` — register orgBillingProfile
+  - `backend/src/trpc/routes/outlets.ts` — billing fields in schemas + updateBilling mutation
+  - `web/src/lib/api.ts` — URL handlers for /settings/billing/profile, /outlets/:id/billing
+  - `web/src/pages/dashboard/BillingSettingsPage.tsx` — Company Details card
+  - `web/src/pages/dashboard/OutletDetailPage.tsx` — Billing & GST Details card
+  - `web/src/components/InvoicePDF.tsx` — full redesign (seller block, template columns, amount in words, PAID stamp)
+  - `web/src/components/InvoicePDFButton.tsx` — added orgProfile prop
+  - `web/src/pages/dashboard/InvoiceDetailPage.tsx` — fetches org profile + outlet, passes to PDF button
+- Status: `completed`
+- Completion Notes:
+  - Done: Schema migrated (prisma db push). Backend typechecks clean. Frontend builds clean (tsc + vite).
+  - Not Done: Order detail quick-save billing modal deferred — outlet detail page covers the use case.
+- Impact/Risk:
+  - Outlet billing fields are optional — no data migration required. OrgBillingProfile auto-creates with empty defaults on first read.
+  - InvoicePDF now accepts orgProfile prop; falls back gracefully if null/undefined.
+- Cleanup Required:
+  - Consider adding "Edit Billing Info" quick-save on order/invoice detail page for salespeople.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: n/a
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-19`
+
+---
+
 ## DEC-20260519-024
 - Decision ID: `DEC-20260519-024`
 - Model: `claude-sonnet-4-6`

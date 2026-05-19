@@ -42,12 +42,27 @@ type InvoiceCharge = {
   displayOrder: number
 }
 
+type OrgProfile = {
+  companyName: string
+  addressLine1: string
+  addressLine2: string
+  city: string
+  state: string
+  pincode: string
+  country: string
+  gstin: string
+  pan: string
+  sacCode: string
+  logoUrl: string | null
+}
+
 type InvoiceRecord = {
   id: string
   orderId: string
   outletId: string
   invoiceNumber: string
   invoiceDate: string
+  dueDate?: string | null
   subtotal?: string | number
   total: number | string
   paidAmount?: number | string
@@ -56,7 +71,18 @@ type InvoiceRecord = {
   isOverdue?: boolean
   paymentDate?: string | null
   createdAt: string
-  outlet?: { id: string; name: string }
+  outlet?: {
+    id: string
+    name: string
+    legalName?: string | null
+    gstin?: string | null
+    billingAddress1?: string | null
+    billingAddress2?: string | null
+    billingCity?: string | null
+    billingState?: string | null
+    billingPincode?: string | null
+    billingCountry?: string | null
+  }
   lines: InvoiceLine[]
   charges?: InvoiceCharge[]
 }
@@ -138,6 +164,25 @@ export function InvoiceDetailPage() {
         params: { page: 1, limit: 500 },
       })
       return response.data.data
+    },
+  })
+
+  const orgProfileQuery = useQuery({
+    queryKey: ['org-billing-profile'],
+    queryFn: async () => {
+      const resp = await api.get<{ data: { data: OrgProfile } }>('/settings/billing/profile')
+      return (resp as any).data?.data as OrgProfile | null
+    },
+  })
+
+  const outletQuery = useQuery({
+    queryKey: ['outlet-detail', invoiceQuery.data?.outletId],
+    enabled: Boolean(invoiceQuery.data?.outletId),
+    queryFn: async () => {
+      const outletId = invoiceQuery.data?.outletId
+      if (!outletId) return null
+      const resp = await api.get<{ data: { data: unknown } }>(`/outlets/${outletId}`)
+      return (resp as any).data?.data as Record<string, unknown> | null
     },
   })
 
@@ -264,7 +309,27 @@ export function InvoiceDetailPage() {
                     </Button>
                   ) : null}
                   <Suspense fallback={<Button variant="outline" size="sm" disabled>Download PDF</Button>}>
-                    <InvoicePDFButton invoice={invoice} productNameById={productNameById} paymentStatus={paymentStatus} />
+                    <InvoicePDFButton
+                      invoice={{
+                        ...invoice,
+                        outlet: outletQuery.data
+                          ? {
+                              name: String(outletQuery.data.name ?? invoice.outlet?.name ?? invoice.outletId),
+                              legalName: outletQuery.data.legalName as string | null | undefined,
+                              gstin: outletQuery.data.gstin as string | null | undefined,
+                              billingAddress1: outletQuery.data.billingAddress1 as string | null | undefined,
+                              billingAddress2: outletQuery.data.billingAddress2 as string | null | undefined,
+                              billingCity: outletQuery.data.billingCity as string | null | undefined,
+                              billingState: outletQuery.data.billingState as string | null | undefined,
+                              billingPincode: outletQuery.data.billingPincode as string | null | undefined,
+                              billingCountry: outletQuery.data.billingCountry as string | null | undefined,
+                            }
+                          : invoice.outlet,
+                      }}
+                      productNameById={productNameById}
+                      paymentStatus={paymentStatus}
+                      orgProfile={orgProfileQuery.data}
+                    />
                   </Suspense>
                 </div>
               </div>

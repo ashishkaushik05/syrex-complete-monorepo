@@ -1202,6 +1202,11 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     return { data: { data: result.items } }
   }
 
+  if (url === '/settings/billing/profile') {
+    const profile = await trpcQuery<any>('orgBillingProfile.get', undefined)
+    return { data: { data: profile } }
+  }
+
   if (url === '/notifications/unread-count') {
     return { data: { data: { count: 0 } } }
   }
@@ -2079,6 +2084,11 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: charge } }
   }
 
+  if (url === '/settings/billing/profile') {
+    const profile = await trpcMutation<any>('orgBillingProfile.upsert', body)
+    return { data: { data: profile } }
+  }
+
   if (url === '/settings/billing/charges/reorder') {
     const result = await trpcMutation<any>('taxCharges.reorder', { orderedIds: body.orderedIds })
     return { data: { data: result.items } }
@@ -2232,6 +2242,22 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     return { data: warehouse }
   }
 
+  if (/^\/outlets\/[^/]+\/billing$/.test(url)) {
+    const id = url.split('/')[2]
+    const outlet = await trpcMutation('outlets.updateBilling', {
+      id,
+      legalName: body.legalName ?? undefined,
+      gstin: body.gstin ?? undefined,
+      billingAddress1: body.billingAddress1 ?? undefined,
+      billingAddress2: body.billingAddress2 ?? undefined,
+      billingCity: body.billingCity ?? undefined,
+      billingState: body.billingState ?? undefined,
+      billingPincode: body.billingPincode ?? undefined,
+      billingCountry: body.billingCountry ?? undefined,
+    })
+    return { data: outlet }
+  }
+
   if (/^\/outlets\/[^/]+$/.test(url)) {
     const id = url.split('/')[2]
     const outlet = await trpcMutation('outlets.update', {
@@ -2243,6 +2269,14 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
       address: body.address,
       creditLimit: body.creditLimit !== undefined ? String(body.creditLimit) : undefined,
       isActive: body.isActive,
+      legalName: body.legalName ?? undefined,
+      gstin: body.gstin ?? undefined,
+      billingAddress1: body.billingAddress1 ?? undefined,
+      billingAddress2: body.billingAddress2 ?? undefined,
+      billingCity: body.billingCity ?? undefined,
+      billingState: body.billingState ?? undefined,
+      billingPincode: body.billingPincode ?? undefined,
+      billingCountry: body.billingCountry ?? undefined,
     })
     return { data: outlet }
   }

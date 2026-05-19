@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Pencil, Trash2 } from 'lucide-react'
 
@@ -13,10 +13,54 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/http'
 import { usePermission } from '@/context/PermissionContext'
+
+type OrgBillingProfile = {
+  id: string
+  companyName: string
+  addressLine1: string
+  addressLine2: string
+  city: string
+  state: string
+  pincode: string
+  country: string
+  gstin: string
+  pan: string
+  sacCode: string
+  logoUrl: string | null
+}
+
+type ProfileFormState = {
+  companyName: string
+  addressLine1: string
+  addressLine2: string
+  city: string
+  state: string
+  pincode: string
+  country: string
+  gstin: string
+  pan: string
+  sacCode: string
+  logoUrl: string
+}
+
+const DEFAULT_PROFILE_FORM: ProfileFormState = {
+  companyName: '',
+  addressLine1: '',
+  addressLine2: '',
+  city: '',
+  state: '',
+  pincode: '',
+  country: 'India',
+  gstin: '',
+  pan: '',
+  sacCode: '',
+  logoUrl: '',
+}
 
 type TaxCharge = {
   id: string
@@ -49,6 +93,59 @@ export function BillingSettingsPage() {
   const { can } = usePermission()
   const qc = useQueryClient()
 
+  // --- Org billing profile state ---
+  const [profileForm, setProfileForm] = useState<ProfileFormState>(DEFAULT_PROFILE_FORM)
+  const [profileMessage, setProfileMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  const profileQuery = useQuery({
+    queryKey: ['org-billing-profile'],
+    queryFn: async () => {
+      const resp = await api.get<{ data: { data: OrgBillingProfile } }>('/settings/billing/profile')
+      return (resp as any).data?.data as OrgBillingProfile
+    },
+  })
+
+  useEffect(() => {
+    const p = profileQuery.data
+    if (!p) return
+    setProfileForm({
+      companyName: p.companyName ?? '',
+      addressLine1: p.addressLine1 ?? '',
+      addressLine2: p.addressLine2 ?? '',
+      city: p.city ?? '',
+      state: p.state ?? '',
+      pincode: p.pincode ?? '',
+      country: p.country ?? 'India',
+      gstin: p.gstin ?? '',
+      pan: p.pan ?? '',
+      sacCode: p.sacCode ?? '',
+      logoUrl: p.logoUrl ?? '',
+    })
+  }, [profileQuery.data])
+
+  const saveProfileMutation = useMutation({
+    mutationFn: (payload: ProfileFormState) =>
+      api.post('/settings/billing/profile', {
+        ...payload,
+        logoUrl: payload.logoUrl.trim() || null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['org-billing-profile'] })
+      setProfileMessage({ text: 'Company details saved.', type: 'success' })
+    },
+    onError: (err) => setProfileMessage({ text: apiErrorMessage(err, 'Failed to save'), type: 'error' }),
+  })
+
+  function saveProfile() {
+    setProfileMessage(null)
+    if (!profileForm.companyName.trim()) {
+      setProfileMessage({ text: 'Company name is required.', type: 'error' })
+      return
+    }
+    saveProfileMutation.mutate(profileForm)
+  }
+
+  // --- Tax charges state ---
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<ChargeFormState>(DEFAULT_FORM)
@@ -141,6 +238,156 @@ export function BillingSettingsPage() {
 
   return (
     <div className="space-y-4">
+      {/* Company / Seller Details */}
+      <Card className="border-slate-200 bg-white shadow-sm">
+        <CardHeader>
+          <CardTitle>Company / Seller Details</CardTitle>
+          <p className="text-sm text-slate-500 mt-1">
+            This information appears as the seller block on every generated invoice.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {profileQuery.isLoading ? <p className="text-sm text-slate-500">Loading...</p> : null}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label htmlFor="bp-companyName">Company Name</Label>
+              <Input
+                id="bp-companyName"
+                placeholder="e.g. Syrex Distribution Pvt Ltd"
+                value={profileForm.companyName}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, companyName: e.target.value }))}
+              />
+            </div>
+
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label htmlFor="bp-addr1">Address Line 1</Label>
+              <Input
+                id="bp-addr1"
+                placeholder="Street / Building"
+                value={profileForm.addressLine1}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, addressLine1: e.target.value }))}
+              />
+            </div>
+
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label htmlFor="bp-addr2">Address Line 2 <span className="text-slate-400">(optional)</span></Label>
+              <Input
+                id="bp-addr2"
+                placeholder="Area / Landmark"
+                value={profileForm.addressLine2}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, addressLine2: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-city">City</Label>
+              <Input
+                id="bp-city"
+                value={profileForm.city}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, city: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-state">State</Label>
+              <Input
+                id="bp-state"
+                value={profileForm.state}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, state: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-pincode">Pincode</Label>
+              <Input
+                id="bp-pincode"
+                value={profileForm.pincode}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, pincode: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-country">Country</Label>
+              <Input
+                id="bp-country"
+                value={profileForm.country}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, country: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-gstin">GSTIN</Label>
+              <Input
+                id="bp-gstin"
+                placeholder="27AAKCM0202D1Z2"
+                value={profileForm.gstin}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, gstin: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-pan">PAN</Label>
+              <Input
+                id="bp-pan"
+                placeholder="AAKCM0202D"
+                value={profileForm.pan}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, pan: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bp-sac">SAC Code</Label>
+              <Input
+                id="bp-sac"
+                placeholder="998315"
+                value={profileForm.sacCode}
+                disabled={!canManage}
+                onChange={(e) => setProfileForm((f) => ({ ...f, sacCode: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="bp-logo">Logo URL <span className="text-slate-400">(optional)</span></Label>
+            <Input
+              id="bp-logo"
+              placeholder="https://…/logo.png"
+              value={profileForm.logoUrl}
+              disabled={!canManage}
+              onChange={(e) => setProfileForm((f) => ({ ...f, logoUrl: e.target.value }))}
+            />
+          </div>
+
+          {profileMessage ? (
+            <p className={`text-sm ${profileMessage.type === 'error' ? 'text-red-600' : 'text-emerald-600'}`}>
+              {profileMessage.text}
+            </p>
+          ) : null}
+
+          {canManage ? (
+            <div className="flex justify-end">
+              <Button onClick={saveProfile} disabled={saveProfileMutation.isPending}>
+                {saveProfileMutation.isPending ? 'Saving…' : 'Save Company Details'}
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
       <Card className="border-slate-200 bg-white shadow-sm">
         <CardHeader>
           <div className="flex items-center justify-between">

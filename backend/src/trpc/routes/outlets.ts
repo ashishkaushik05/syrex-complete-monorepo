@@ -16,7 +16,27 @@ const outletSchema = z.object({
   creditLimit: z.string(),
   outstandingBalance: z.string(),
   isActive: z.boolean(),
-  createdAt: z.string()
+  createdAt: z.string(),
+  // Billing / GST details
+  legalName: z.string().nullable(),
+  gstin: z.string().nullable(),
+  billingAddress1: z.string().nullable(),
+  billingAddress2: z.string().nullable(),
+  billingCity: z.string().nullable(),
+  billingState: z.string().nullable(),
+  billingPincode: z.string().nullable(),
+  billingCountry: z.string(),
+});
+
+const billingFieldsSchema = z.object({
+  legalName: z.string().optional().nullable(),
+  gstin: z.string().optional().nullable(),
+  billingAddress1: z.string().optional().nullable(),
+  billingAddress2: z.string().optional().nullable(),
+  billingCity: z.string().optional().nullable(),
+  billingState: z.string().optional().nullable(),
+  billingPincode: z.string().optional().nullable(),
+  billingCountry: z.string().optional(),
 });
 
 const createOutletSchema = z.object({
@@ -28,8 +48,8 @@ const createOutletSchema = z.object({
   phone: z.string().min(1),
   address: z.string().min(1),
   creditLimit: z.string().min(1),
-  isActive: z.boolean().default(true)
-});
+  isActive: z.boolean().default(true),
+}).merge(billingFieldsSchema);
 
 const updateOutletSchema = z.object({
   id: z.string().uuid(),
@@ -40,8 +60,12 @@ const updateOutletSchema = z.object({
   phone: z.string().min(1).optional(),
   address: z.string().min(1).optional(),
   creditLimit: z.string().min(1).optional(),
-  isActive: z.boolean().optional()
-});
+  isActive: z.boolean().optional(),
+}).merge(billingFieldsSchema);
+
+const updateBillingSchema = z.object({
+  id: z.string().uuid(),
+}).merge(billingFieldsSchema);
 
 const listOutletsInputSchema = paginationInputSchema.extend({
   warehouseId: z.string().uuid().optional(),
@@ -62,6 +86,14 @@ function toOutlet(outlet: {
   outstandingBalance: { toString(): string };
   isActive: boolean;
   createdAt: Date;
+  legalName?: string | null;
+  gstin?: string | null;
+  billingAddress1?: string | null;
+  billingAddress2?: string | null;
+  billingCity?: string | null;
+  billingState?: string | null;
+  billingPincode?: string | null;
+  billingCountry?: string;
 }) {
   return {
     id: outlet.id,
@@ -75,7 +107,15 @@ function toOutlet(outlet: {
     creditLimit: outlet.creditLimit.toString(),
     outstandingBalance: outlet.outstandingBalance.toString(),
     isActive: outlet.isActive,
-    createdAt: outlet.createdAt.toISOString()
+    createdAt: outlet.createdAt.toISOString(),
+    legalName: outlet.legalName ?? null,
+    gstin: outlet.gstin ?? null,
+    billingAddress1: outlet.billingAddress1 ?? null,
+    billingAddress2: outlet.billingAddress2 ?? null,
+    billingCity: outlet.billingCity ?? null,
+    billingState: outlet.billingState ?? null,
+    billingPincode: outlet.billingPincode ?? null,
+    billingCountry: outlet.billingCountry ?? "India",
   };
 }
 
@@ -142,7 +182,15 @@ export const outletsRouter = createTRPCRouter({
         phone: input.phone,
         address: input.address,
         creditLimit: input.creditLimit,
-        isActive: input.isActive
+        isActive: input.isActive,
+        legalName: input.legalName,
+        gstin: input.gstin,
+        billingAddress1: input.billingAddress1,
+        billingAddress2: input.billingAddress2,
+        billingCity: input.billingCity,
+        billingState: input.billingState,
+        billingPincode: input.billingPincode,
+        billingCountry: input.billingCountry,
       }
     });
     return toOutlet(outlet);
@@ -170,9 +218,41 @@ export const outletsRouter = createTRPCRouter({
         phone: input.phone,
         address: input.address,
         creditLimit: input.creditLimit,
-        isActive: input.isActive
+        isActive: input.isActive,
+        legalName: input.legalName,
+        gstin: input.gstin,
+        billingAddress1: input.billingAddress1,
+        billingAddress2: input.billingAddress2,
+        billingCity: input.billingCity,
+        billingState: input.billingState,
+        billingPincode: input.billingPincode,
+        billingCountry: input.billingCountry,
       }
     });
     return toOutlet(outlet);
-  })
+  }),
+
+  updateBilling: perm(P.outlets.write)
+    .input(updateBillingSchema)
+    .output(outletSchema)
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.outlet.findUnique({ where: { id: input.id } });
+      if (!existing) {
+        throw apiError("NOT_FOUND", "Outlet not found");
+      }
+      const outlet = await ctx.prisma.outlet.update({
+        where: { id: input.id },
+        data: {
+          legalName: input.legalName,
+          gstin: input.gstin,
+          billingAddress1: input.billingAddress1,
+          billingAddress2: input.billingAddress2,
+          billingCity: input.billingCity,
+          billingState: input.billingState,
+          billingPincode: input.billingPincode,
+          billingCountry: input.billingCountry,
+        }
+      });
+      return toOutlet(outlet);
+    }),
 });

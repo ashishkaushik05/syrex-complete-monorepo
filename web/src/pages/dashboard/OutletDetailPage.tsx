@@ -37,6 +37,15 @@ type OutletRecord = {
   isActive: boolean
   createdAt: string
   transitDaysToOutlet?: number
+  // Billing / GST details
+  legalName?: string | null
+  gstin?: string | null
+  billingAddress1?: string | null
+  billingAddress2?: string | null
+  billingCity?: string | null
+  billingState?: string | null
+  billingPincode?: string | null
+  billingCountry?: string | null
 }
 
 type WarehouseOption = {
@@ -146,6 +155,16 @@ export function OutletDetailPage() {
   const [creditLimitDraft, setCreditLimitDraft] = useState('')
   const [creditMessage, setCreditMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
+  const [editLegalName, setEditLegalName] = useState('')
+  const [editGstin, setEditGstin] = useState('')
+  const [editBillingAddr1, setEditBillingAddr1] = useState('')
+  const [editBillingAddr2, setEditBillingAddr2] = useState('')
+  const [editBillingCity, setEditBillingCity] = useState('')
+  const [editBillingState, setEditBillingState] = useState('')
+  const [editBillingPincode, setEditBillingPincode] = useState('')
+  const [editBillingCountry, setEditBillingCountry] = useState('India')
+  const [billingMessage, setBillingMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
   const [userName, setUserName] = useState('')
   const [userEmail, setUserEmail] = useState('')
   const [userPassword, setUserPassword] = useState('')
@@ -180,6 +199,14 @@ export function OutletDetailPage() {
     setCreditLimitDraft(String(asNumber(outlet.creditLimit)))
     setEditTransitDays(String(outlet.transitDaysToOutlet ?? 3))
     setEditWarehouseId(outlet.warehouseId ?? '')
+    setEditLegalName(outlet.legalName ?? '')
+    setEditGstin(outlet.gstin ?? '')
+    setEditBillingAddr1(outlet.billingAddress1 ?? '')
+    setEditBillingAddr2(outlet.billingAddress2 ?? '')
+    setEditBillingCity(outlet.billingCity ?? '')
+    setEditBillingState(outlet.billingState ?? '')
+    setEditBillingPincode(outlet.billingPincode ?? '')
+    setEditBillingCountry(outlet.billingCountry ?? 'India')
   }, [outletQuery.data])
 
   const pointsQuery = useQuery({
@@ -255,6 +282,15 @@ export function OutletDetailPage() {
     },
   })
 
+  const updateBillingMutation = useMutation({
+    mutationFn: async (payload: Record<string, string | null | undefined>) => {
+      await api.patch(`/outlets/${id}/billing`, payload)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['outlet-detail', id] })
+    },
+  })
+
   const createUserMutation = useMutation({
     mutationFn: async (payload: {
       name: string
@@ -326,6 +362,25 @@ export function OutletDetailPage() {
       setCreditMessage({ text: 'Credit limit updated.', type: 'success' })
     } catch (error) {
       setCreditMessage({ text: apiErrorMessage(error, 'Unable to update credit limit.'), type: 'error' })
+    }
+  }
+
+  const handleSaveBilling = async () => {
+    setBillingMessage(null)
+    try {
+      await updateBillingMutation.mutateAsync({
+        legalName: editLegalName.trim() || null,
+        gstin: editGstin.trim() || null,
+        billingAddress1: editBillingAddr1.trim() || null,
+        billingAddress2: editBillingAddr2.trim() || null,
+        billingCity: editBillingCity.trim() || null,
+        billingState: editBillingState.trim() || null,
+        billingPincode: editBillingPincode.trim() || null,
+        billingCountry: editBillingCountry.trim() || 'India',
+      })
+      setBillingMessage({ text: 'Billing details saved successfully.', type: 'success' })
+    } catch (error) {
+      setBillingMessage({ text: apiErrorMessage(error, 'Unable to save billing details.'), type: 'error' })
     }
   }
 
@@ -635,6 +690,84 @@ export function OutletDetailPage() {
                 className="w-full"
               >
                 {updateMutation.isPending ? 'Saving...' : 'Save Profile'}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Billing & GST Details */}
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Billing &amp; GST Details</CardTitle>
+              <p className="text-xs text-slate-400 mt-0.5">Saved here and printed on invoices for this outlet.</p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="b-legalName">Legal Name <span className="text-slate-400">(if different from outlet name)</span></Label>
+                <Input
+                  id="b-legalName"
+                  value={editLegalName}
+                  onChange={(e) => setEditLegalName(e.target.value)}
+                  placeholder="YBK INDUSTRIES PRIVATE LIMITED"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="b-gstin">GSTIN</Label>
+                <Input
+                  id="b-gstin"
+                  value={editGstin}
+                  onChange={(e) => setEditGstin(e.target.value)}
+                  placeholder="06AABCY1869P1ZN"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="b-addr1">Billing Address Line 1</Label>
+                <Input
+                  id="b-addr1"
+                  value={editBillingAddr1}
+                  onChange={(e) => setEditBillingAddr1(e.target.value)}
+                  placeholder="Street / House / Plot"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="b-addr2">Billing Address Line 2 <span className="text-slate-400">(optional)</span></Label>
+                <Input
+                  id="b-addr2"
+                  value={editBillingAddr2}
+                  onChange={(e) => setEditBillingAddr2(e.target.value)}
+                  placeholder="Area / Landmark"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="b-city">City</Label>
+                  <Input id="b-city" value={editBillingCity} onChange={(e) => setEditBillingCity(e.target.value)} placeholder="City" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="b-state">State</Label>
+                  <Input id="b-state" value={editBillingState} onChange={(e) => setEditBillingState(e.target.value)} placeholder="State" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="b-pin">Pincode</Label>
+                  <Input id="b-pin" value={editBillingPincode} onChange={(e) => setEditBillingPincode(e.target.value)} placeholder="125001" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="b-country">Country</Label>
+                  <Input id="b-country" value={editBillingCountry} onChange={(e) => setEditBillingCountry(e.target.value)} placeholder="India" />
+                </div>
+              </div>
+
+              {billingMessage && (
+                <div className={`rounded-md border px-3 py-2 text-sm ${billingMessage.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}`}>
+                  {billingMessage.text}
+                </div>
+              )}
+
+              <Button
+                onClick={handleSaveBilling}
+                disabled={updateBillingMutation.isPending}
+                className="w-full"
+              >
+                {updateBillingMutation.isPending ? 'Saving...' : 'Save Billing Details'}
               </Button>
             </CardContent>
           </Card>
