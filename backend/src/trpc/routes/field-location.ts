@@ -246,8 +246,27 @@ export const fieldLocationRouter = createTRPCRouter({
     .output(ingestV2AckSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
-      const orgId = ctx.actor.orgId;
-      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
+
+      // Prefer orgId from x-org-id header; if absent, infer it from the shift
+      // so mobile clients that don't send the header still work.
+      let orgId = ctx.actor.orgId;
+      if (!orgId) {
+        const hint = await ctx.prisma.shift.findFirst({
+          where: { agentId, clientShiftId: input.clientShiftId },
+          select: { orgId: true }
+        });
+        if (!hint) {
+          return {
+            serverShiftId: null,
+            clientShiftId: input.clientShiftId,
+            accepted: [],
+            duplicates: [],
+            rejected: [],
+            retryable: true
+          };
+        }
+        orgId = hint.orgId;
+      }
 
       const shift = input.shiftId
         ? await ctx.prisma.shift.findFirst({
