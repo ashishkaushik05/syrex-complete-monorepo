@@ -10,7 +10,7 @@
     "rbac:preflight": "bun run scripts/rbac-preflight.ts",
     "prisma:generate": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma generate --schema ../schema.prisma",
     "db:reset": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate",
-    "db:seed": "bun run rbac:preflight && bun run scripts/dev-seed.ts",
+    "db:seed": "bun run rbac:preflight && bun run scripts/demo-seed.ts",
     "db:prepare": "bun run db:reset && bun run db:seed",
     "ci:preflight": "bun run typecheck && bun run rbac:preflight"
   },

@@ -202,7 +202,8 @@ jobs:
 
             cd /srv/syrex-api/backend
             PRISMA_GENERATE_SKIP_AUTOINSTALL=1 /home/ashish/.bun/bin/bunx prisma db push \
-              --schema ../schema.prisma --skip-generate --accept-data-loss
+              --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate
+            /home/ashish/.bun/bin/bun run scripts/demo-seed.ts
 
             cd /srv/syrex-api/web
             npm ci
