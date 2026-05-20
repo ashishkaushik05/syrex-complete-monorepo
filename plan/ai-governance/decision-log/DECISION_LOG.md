@@ -4,6 +4,144 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260520-002
+- Decision ID: `DEC-20260520-002`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master@ea260db`
+- Task: `GitHub Actions CI pipeline — backend typecheck + web build gate, VPS log file, deploy-on-green`
+- Decision: `4-job pipeline: backend-check (bun typecheck + rbac:preflight), web-check (tsc + vite build + eslint), report (always — SCP CI report to VPS, regenerate deployed_logs.md), deploy (only when both pass — git pull, write .env from secret, prisma db push + seed, web build, nginx reload, systemd restart, health check).`
+- Rationale: `No CI existed; every push deployed blindly. Needed a gate that catches TypeScript errors and ESLint regressions before they hit production. Log persistence on VPS keeps ops context without email.`
+- Alternatives Considered:
+  - `Email notifications via dawidd6/action-send-mail` rejected by user — replaced with VPS file-based log.
+  - `Single-job pipeline` rejected — parallel backend/web checks are faster and each has distinct failure modes.
+  - `Deploy via rsync` rejected — server already has git clone; pull + rebuild is simpler and keeps history.
+- Scope:
+  - `.github/workflows/deploy.yml` — full rewrite (4 jobs)
+  - `scripts/gen_deployed_logs.sh` (new) — generates `/home/ashish/deployed_logs.md` from last 2 CI reports on VPS
+- Status: `completed`
+- Completion Notes:
+  - Done: deploy.yml with backend-check, web-check, report, deploy jobs.
+  - Done: report job always runs; uploads per-commit CI report to `/srv/syrex-api/logs/ci-<sha>.txt`; appends to `ci-summary.log`; runs `gen_deployed_logs.sh`.
+  - Done: deploy job writes `.env` from `PROD_DATABASE_URL` GitHub secret (never from git).
+  - Done: `sudo nginx -s reload` added after web build in deploy script.
+  - Done: DB reset + demo-seed on every deploy (`prisma db push --force-reset` + `bun run scripts/demo-seed.ts`).
+  - Not Done: GitHub secret `PROD_DATABASE_URL` must be set manually in repo Settings → Secrets.
+- Impact/Risk:
+  - Every push to master resets the production database and re-seeds. Acceptable for current demo-only stage; must be removed before real customer data is live.
+  - `sudo nginx -s reload` and `sudo systemctl restart syrex-api` require passwordless sudo for the `ashish` user on the VPS — already configured.
+- Cleanup Required:
+  - Remove `--force-reset --accept-data-loss` from prisma db push in deploy script before any real customer data enters production.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: `ashish — before first real customer onboarding`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-20T06:00:00Z`
+
+---
+
+## DEC-20260520-003
+- Decision ID: `DEC-20260520-003`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master@318c529`
+- Task: `Canonicalise demo-seed.ts as the only seed, untrack backend/.env from git`
+- Decision: `Rewrite demo-seed.ts with a single credential pattern (name@syrex.local / name123), wire it as the default db:seed script, run it on every deploy. Remove backend/.env from git tracking and write it from a GitHub Actions secret at deploy time.`
+- Rationale: `Old dev-seed.ts used inconsistent credentials and was not wired into db:seed. backend/.env contained dev DB credentials committed to git — security risk, and caused git pull conflicts on the VPS every deploy.`
+- Alternatives Considered:
+  - `Keep dev-seed.ts + demo-seed.ts as separate seeds` rejected — two competing seeds caused confusion about which is canonical.
+  - `Store prod .env in a secrets manager` deferred — GitHub Actions secret is sufficient for current single-VPS setup.
+- Scope:
+  - `backend/scripts/demo-seed.ts` — full rewrite (7 internal + 3 outlet users, 2 brands, 4 categories, 8 products, 2 warehouses, 3 outlets, sequences)
+  - `backend/package.json` — `db:seed` now calls `rbac:preflight && bun run scripts/demo-seed.ts`
+  - `.gitignore` — added `backend/.env`
+  - `.github/workflows/deploy.yml` — deploy job writes `.env` from `PROD_DATABASE_URL` secret
+- Status: `completed`
+- Completion Notes:
+  - Done: demo-seed.ts rewritten; credential pattern `email.split("@")[0] + "123"` is the single source of truth.
+  - Done: `backend/.env` removed from git tracking via `git rm --cached backend/.env`.
+  - Done: Deploy script writes production .env before every install+build cycle.
+  - Done: VPS prod .env manually written to unblock existing deployment after untracking.
+  - Not Done: Old `backend/scripts/dev-seed.ts` still exists in repo — it is unreferenced but not deleted.
+- Impact/Risk:
+  - Production DB credentials are now only in the GitHub secret and the running process — not in git history going forward.
+  - Any new developer cloning the repo must create `backend/.env` manually (documented in VPS_CONFIG.md).
+- Cleanup Required:
+  - Delete `backend/scripts/dev-seed.ts` — it is orphaned and confusing.
+- Dead Paths Introduced: `backend/scripts/dev-seed.ts` (orphaned, unreferenced)
+- Conflicting Implementations: none
+- Next Cleanup Owner: `ashish — next housekeeping pass`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-20T07:00:00Z`
+
+---
+
+## DEC-20260520-004
+- Decision ID: `DEC-20260520-004`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master@7d91a80`
+- Task: `Fix ingestV2 orgId requirement — infer from shift when x-org-id header absent`
+- Decision: `When ctx.actor.orgId is null (mobile client didn't send x-org-id), look up the shift by agentId + clientShiftId to resolve orgId before processing the payload.`
+- Rationale: `Mobile V2 sync worker omitted x-org-id header. Backend hard-required it, returning 400 and blocking all V2 location ingestion. Header is optional context — the shift itself carries orgId.`
+- Alternatives Considered:
+  - `Require mobile to always send x-org-id` rejected — forces a mobile release for a server-only fix; server can infer it safely.
+  - `Return empty accepted list silently` rejected — would hide the failure; retryable flag is better.
+- Scope:
+  - `backend/src/trpc/routes/field-location.ts` — ingestV2 procedure, orgId inference block
+- Status: `completed`
+- Completion Notes:
+  - Done: orgId falls back to shift lookup; returns `retryable: true` (not hard error) when shift not yet created.
+  - Done: rest of ingestV2 handler uses the resolved orgId throughout.
+- Impact/Risk:
+  - Marginal extra DB query per ingestV2 call when header absent. Acceptable — location ingest is not on hot path.
+- Cleanup Required: none
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: n/a
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-20T08:00:00Z`
+
+---
+
+## DEC-20260520-005
+- Decision ID: `DEC-20260520-005`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master@5689d27`
+- Task: `Build release APKs for both Flutter apps and serve them publicly via nginx on the VPS`
+- Decision: `Build release APKs with prod API URL baked in via --dart-define. Fix Android build config for both apps (AGP 8.1.0, Gradle 8.4, Kotlin 1.9.0, Java 17, debug signing fallback, tools:replace manifest fix). Upload to /srv/downloads/ on VPS. Add nginx location /downloads/ block.`
+- Rationale: `No distributable APKs existed. Field sales team needs installable builds pointing at production. Public download from the same domain avoids a separate CDN.`
+- Alternatives Considered:
+  - `Firebase App Distribution` rejected — adds Firebase dependency, requires Google account per tester, overkill for small team.
+  - `GitHub Release artifact` rejected — requires GitHub auth to download; self-hosted URL is simpler for end users.
+  - `Production keystore signing` deferred — no keystore available locally; debug signing fallback used; APKs are functional but not Play Store ready.
+- Scope:
+  - `mobile/sales_mobile_app/android/app/build.gradle` — Java 17, Kotlin jvmTarget 17, debug signing fallback
+  - `mobile/sales_mobile_app/android/app/src/main/AndroidManifest.xml` — xmlns:tools, tools:replace on BackgroundService
+  - `mobile/sales_mobile_app/android/settings.gradle` — AGP 8.1.0, Kotlin 1.9.0
+  - `mobile/sales_mobile_app/android/gradle/wrapper/gradle-wrapper.properties` — Gradle 8.4
+  - `mobile/sales_mobile_app/lib/modules/field/screens/agent_map_page.dart` — fix latlong2 import
+  - `mobile/outlet_owner_template/android/app/build.gradle` — same as sales app
+  - `mobile/outlet_owner_template/android/app/src/main/AndroidManifest.xml` — same manifest fix
+  - `mobile/outlet_owner_template/android/settings.gradle` — Kotlin updated 1.7.10 → 1.9.0
+  - `mobile/outlet_owner_template/android/gradle/wrapper/gradle-wrapper.properties` — Gradle 8.4
+  - VPS: `/srv/downloads/syrex-sales.apk`, `/srv/downloads/syrex-outlet.apk`
+  - VPS: `/etc/nginx/sites-available/strideit.syrexbatteries.in` — added `location /downloads/`
+- Status: `completed`
+- Completion Notes:
+  - Done: sales_mobile_app APK built (23MB, signed with debug key).
+  - Done: outlet_owner_template APK built (22.5MB, signed with debug key).
+  - Done: Both uploaded to `/srv/downloads/` on VPS.
+  - Done: nginx `location /downloads/ { alias /srv/downloads/; add_header Content-Disposition "attachment"; }` added and reloaded.
+  - Done: Public URLs verified HTTP 200: `https://strideit.syrexbatteries.in/downloads/syrex-sales.apk` and `.../syrex-outlet.apk`.
+  - Not Done: Production keystore signing — APKs use debug key; not Play Store submittable.
+- Impact/Risk:
+  - APKs are publicly accessible without authentication — any URL holder can download. Acceptable for internal field team distribution.
+  - Debug-signed APKs cannot be updated via Play Store; sideloading requires "Install unknown sources" enabled on device.
+- Cleanup Required:
+  - Generate production keystore and re-sign before any Play Store submission.
+  - Consider adding HTTP Basic Auth to `/downloads/` location if broader exposure becomes a concern.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: `ashish — before Play Store submission`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-20T12:30:00Z`
+
+---
+
 ## DEC-20260515-023
 - Decision ID: `DEC-20260515-023`
 - Model: `codex`
