@@ -188,9 +188,14 @@ jobs:
           script_stop: true
           script: |
             set -e
+            export PATH="/home/ashish/.bun/bin:/home/ashish/.nvm/versions/node/v24.15.0/bin:$PATH"
 
             cd /srv/syrex-api
             git pull origin master
+
+            # Always write the production .env from the secret — never rely on git for this
+            printf 'NODE_ENV=production\nPORT=3000\nDATABASE_URL=%s\n' \
+              '${{ secrets.PROD_DATABASE_URL }}' > /srv/syrex-api/backend/.env
 
             cd /srv/syrex-api/backend
             /home/ashish/.bun/bin/bun install --frozen-lockfile
@@ -209,6 +214,7 @@ jobs:
             npm ci
             VITE_API_URL=https://strideit.syrexbatteries.in npm run build
 
+            sudo nginx -s reload
             sudo systemctl restart syrex-api
 
             for i in $(seq 1 10); do
