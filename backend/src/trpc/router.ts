@@ -9,6 +9,7 @@ import { fieldLocationRouter } from "./routes/field-location";
 import { fieldScheduleRouter } from "./routes/field-schedule";
 import { fieldShiftsRouter } from "./routes/field-shifts";
 import { fieldStopsRouter } from "./routes/field-stops";
+import { fieldSyncStatusRouter } from "./routes/field-sync-status";
 import { fieldVisitsRouter } from "./routes/field-visits";
 import { imagesRouter } from "./routes/images";
 import { inventoryRouter } from "./routes/inventory";
@@ -60,6 +61,7 @@ export const appRouter = createTRPCRouter({
   fieldStops: fieldStopsRouter,
   fieldAttendance: fieldAttendanceRouter,
   fieldSchedule: fieldScheduleRouter,
+  fieldSyncStatus: fieldSyncStatusRouter,
   serviceComplaints: serviceComplaintsRouter,
   serviceAssignments: serviceAssignmentsRouter,
   serviceForms: serviceFormsRouter,

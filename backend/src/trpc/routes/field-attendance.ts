@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
+import { resolveReadOrgId } from "./field-helpers";
 
 const attendanceStatusSchema = z.enum(["present", "absent", "half_day", "leave"]);
 
@@ -38,7 +39,7 @@ function toAttendance(row: {
   markedBy: string | null;
   note: string | null;
   markedAt: Date;
-  user: { name: string };
+    user?: { name: string } | null;
 }) {
   return {
     id: row.id,
@@ -49,7 +50,7 @@ function toAttendance(row: {
     markedBy: row.markedBy,
     note: row.note,
     markedAt: row.markedAt.toISOString(),
-    userName: row.user.name
+    userName: row.user?.name ?? null
   };
 }
 
@@ -74,7 +75,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
         throw apiError("FORBIDDEN", "Admin override requires field:admin");
       }
 
-      const orgId = input.orgId ?? ctx.actor.orgId;
+      const orgId = resolveReadOrgId(ctx, input.orgId);
       if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
 
       const date = input.date ?? new Date().toISOString().slice(0, 10);
@@ -114,6 +115,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
     )
     .output(z.array(attendanceSchema))
     .query(async ({ ctx, input }) => {
+      const orgId = resolveReadOrgId(ctx, input.orgId);
       const dateFilter: Record<string, unknown> = {};
       if (input.date) {
         dateFilter.date = input.date;
@@ -126,7 +128,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
             await ctx.prisma.dailyAttendance.findMany({
               where: {
                 userId: input.userId,
-                orgId: input.orgId,
+                orgId,
                 status: input.status,
                 date: d as { gte?: string; lte?: string }
               },
@@ -141,7 +143,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
       const rows = await ctx.prisma.dailyAttendance.findMany({
         where: {
           userId: input.userId,
-          orgId: input.orgId,
+          orgId,
           date: input.date,
           status: input.status
         },
@@ -169,6 +171,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
         where: { id: input.id }
       });
       if (!existing) throw apiError("NOT_FOUND", "Attendance record not found");
+      resolveReadOrgId(ctx, existing.orgId);
 
       const row = await ctx.prisma.dailyAttendance.update({
         where: { id: input.id },

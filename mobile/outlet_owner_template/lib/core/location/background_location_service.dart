@@ -1,25 +1,27 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:uuid/uuid.dart';
 
 import '../config/app_env.dart';
+import '../db/field_local_store.dart';
+import '../db/local_models.dart';
 
 // ── message keys sent between main isolate and background service ────────────
 
 const _kStopService = 'stopService';
 const _kSyncToken = 'syncToken';
 const _kTokenKey = 'token';
+const _kClientShiftId = 'clientShiftId';
 
 // ── configure & lifecycle (call from main isolate) ───────────────────────────
 
 class BackgroundLocationService {
   static final _service = FlutterBackgroundService();
 
-  /// Must be called once during app startup before starting the service.
+  /// Must be called once during app startup.
   static Future<void> configure() async {
     await _service.configure(
       androidConfiguration: AndroidConfiguration(
@@ -42,9 +44,12 @@ class BackgroundLocationService {
 
   static Future<bool> get isRunning async => _service.isRunning();
 
-  static Future<void> start() async {
+  static Future<void> start({String? clientShiftId}) async {
     if (!await _service.isRunning()) {
       await _service.startService();
+    }
+    if (clientShiftId != null) {
+      _service.invoke(_kClientShiftId, {_kTokenKey: clientShiftId});
     }
   }
 
@@ -58,7 +63,7 @@ class BackgroundLocationService {
   }
 }
 
-// ── iOS background handler (required by plugin) ──────────────────────────────
+// ── iOS background handler ───────────────────────────────────────────────────
 
 @pragma('vm:entry-point')
 Future<bool> _onIosBackground(ServiceInstance service) async {
@@ -66,109 +71,73 @@ Future<bool> _onIosBackground(ServiceInstance service) async {
 }
 
 // ── background isolate entry point ───────────────────────────────────────────
+// Points are persisted directly to SQLite — no in-memory buffer.
+// Network upload is NOT done here; FieldSyncWorker on the main isolate handles sync.
 
 @pragma('vm:entry-point')
 void _onStart(ServiceInstance service) async {
-  // Obtain base URL from dart-define constants (evaluated at compile time,
-  // so they are available in every isolate).
-  final baseUrl = AppConfig.fromDartDefine().baseUrl; // e.g. …/trpc
+  AppConfig.fromDartDefine(); // ensure compile-time constants are evaluated.
 
-  // Dedicated Dio — no Riverpod in background isolate.
-  final dio = Dio(
-    BaseOptions(
-      baseUrl: baseUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 15),
-    ),
-  );
-
-  // Read the access token from secure storage.
   const storage = FlutterSecureStorage();
-  var accessToken = await storage.read(key: 'access_token') ?? '';
-
-  void setAuthHeader() {
-    if (accessToken.isNotEmpty) {
-      dio.options.headers['Authorization'] = 'Bearer $accessToken';
-    } else {
-      dio.options.headers.remove('Authorization');
-    }
-  }
-
-  setAuthHeader();
-
-  // Listen for token refresh from main isolate.
-  service.on(_kSyncToken).listen((event) {
-    if (event == null) return;
-    final token = event[_kTokenKey] as String? ?? '';
-    if (token.isNotEmpty) {
-      accessToken = token;
-      setAuthHeader();
-    }
-  });
+  String? clientShiftId = await storage.read(key: 'active_client_shift_id');
 
   // Listen for stop signal.
   service.on(_kStopService).listen((_) async {
     await service.stopSelf();
   });
 
-  // Accumulated GPS points waiting to be flushed.
-  final buffer = <Map<String, dynamic>>[];
+  // Listen for clientShiftId update from main isolate.
+  service.on(_kClientShiftId).listen((event) {
+    if (event == null) return;
+    final id = event[_kTokenKey] as String?;
+    if (id != null && id.isNotEmpty) clientShiftId = id;
+  });
 
-  // ── GPS stream ────────────────────────────────────────────────────────────
-  StreamSubscription<Position>? positionSub;
+  // Token sync is kept for compatibility but upload no longer happens here.
+  service.on(_kSyncToken).listen((_) {});
 
-  LocationPermission permission = await Geolocator.checkPermission();
+  final permission = await Geolocator.checkPermission();
   if (permission == LocationPermission.denied ||
       permission == LocationPermission.deniedForever) {
-    // Cannot track without permission — shut down gracefully.
     await service.stopSelf();
     return;
   }
 
-  positionSub = Geolocator.getPositionStream(
+  const uuid = Uuid();
+
+  Geolocator.getPositionStream(
     locationSettings: const LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 10, // metres between updates
+      distanceFilter: 10,
     ),
-  ).listen((position) {
-    buffer.add({
-      'lat': position.latitude,
-      'lng': position.longitude,
-      'accuracy': position.accuracy,
-      // Must be ISO-8601 datetime (zod .datetime() validation on backend)
-      'recordedAt': position.timestamp.toUtc().toIso8601String(),
-    });
-  });
+  ).listen(
+    (position) async {
+      final shiftId = clientShiftId;
+      if (shiftId == null || shiftId.isEmpty) return;
 
-  // ── flush loop: every 10 seconds ─────────────────────────────────────────
-  Timer.periodic(const Duration(seconds: 10), (_) async {
-    if (buffer.isEmpty) return;
+      final now = DateTime.now().toUtc().toIso8601String();
+      final point = LocalLocationPoint(
+        clientPointId: uuid.v4(),
+        clientShiftId: shiftId,
+        lat: position.latitude,
+        lng: position.longitude,
+        accuracy: position.accuracy,
+        recordedAt: position.timestamp.toUtc().toIso8601String(),
+        capturedAt: now,
+        source: 'background',
+        altitude: position.altitude,
+        speed: position.speed >= 0 ? position.speed : null,
+        heading: position.heading >= 0 ? position.heading : null,
+        isMocked: position.isMocked,
+        syncStatus: SyncStatus.pending,
+        syncAttempts: 0,
+        createdAt: now,
+        updatedAt: now,
+      );
 
-    // Drain the buffer (max 500 per call — backend hard limit).
-    const maxBatch = 500;
-    while (buffer.isNotEmpty) {
-      final end = buffer.length < maxBatch ? buffer.length : maxBatch;
-      final batch = List<Map<String, dynamic>>.from(buffer.sublist(0, end));
-      buffer.removeRange(0, end);
-
-      try {
-        await dio.post(
-          '/fieldLocation.ingest',
-          data: jsonEncode({'json': {'locations': batch}}),
-          options: Options(headers: {'Content-Type': 'application/json'}),
-        );
-      } on DioException catch (e) {
-        if (e.response?.statusCode == 401) {
-          // Token expired and could not be refreshed — stop tracking.
-          await positionSub?.cancel();
-          await service.stopSelf();
-          return;
-        }
-        // 400 (e.g. no active shift): drop the batch and keep running.
-        // Network errors: points already removed — they are lost; acceptable.
-      } catch (_) {
-        // Unexpected error — keep running, batch already removed.
-      }
-    }
-  });
+      await FieldLocalStore.instance.insertLocationPoint(point);
+    },
+    onError: (_) {},
+    cancelOnError: false,
+  );
 }

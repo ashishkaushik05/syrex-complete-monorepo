@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
-import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
+import { assertCanReadAgent, resolveReadOrgId } from "./field-helpers";
 
 const stopSchema = z.object({
   id: z.string(),
@@ -139,6 +140,8 @@ export const fieldStopsRouter = createTRPCRouter({
     )
     .output(z.array(stopSchema))
     .query(async ({ ctx, input }) => {
+      if (input.agentId) assertCanReadAgent(ctx, input.agentId);
+      const orgId = resolveReadOrgId(ctx);
       const timeFilter: Record<string, Date> = {};
       if (input.from) timeFilter.gte = new Date(input.from);
       if (input.to) timeFilter.lte = new Date(input.to);
@@ -157,6 +160,7 @@ export const fieldStopsRouter = createTRPCRouter({
 
       const stops = await ctx.prisma.fieldStop.findMany({
         where: {
+          orgId,
           agentId: input.agentId,
           shiftId: input.shiftId,
           endedAt: input.openOnly ? null : undefined,
@@ -179,15 +183,11 @@ export const fieldStopsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const callerId = ctx.actor.id!;
       const targetAgentId = input.agentId ?? callerId;
-      const canViewOthers =
-        ctx.permissions.includes(SUPER_ADMIN_PERMISSION) ||
-        ctx.permissions.includes(P.field.admin);
-      if (targetAgentId !== callerId && !canViewOthers) {
-        throw apiError("FORBIDDEN", "Viewing another user's active stop requires field:admin");
-      }
+      assertCanReadAgent(ctx, targetAgentId);
+      const orgId = resolveReadOrgId(ctx);
 
       const stop = await ctx.prisma.fieldStop.findFirst({
-        where: { agentId: targetAgentId, endedAt: null },
+        where: { agentId: targetAgentId, orgId, endedAt: null },
         select: STOP_SELECT,
         orderBy: { startedAt: "desc" }
       });

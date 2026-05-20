@@ -125,6 +125,7 @@ model User {
   managedWarehouse       Warehouse?         @relation("WarehouseManager")
   authSessions           AuthSession[]
   shifts                 Shift[]
+  fieldSyncStatuses      FieldSyncStatus[]
   fieldVisits            FieldVisit[] @relation("FieldVisitAgent")
   fieldVisitsAsCustomer  FieldVisit[] @relation("FieldVisitCustomer")
   fieldStops             FieldStop[]
@@ -796,44 +797,87 @@ enum AttendanceStatus {
 }
 
 model Shift {
-  id        String         @id @default(uuid())
-  agentId   String
-  orgId     String
-  startedAt DateTime       @default(now())
-  endedAt   DateTime?
-  startType ShiftStartType
-  endType   ShiftEndType?
-  status    ShiftStatus    @default(active)
+  id              String         @id @default(uuid())
+  agentId         String
+  orgId           String
+  clientShiftId   String?
+  syncState       String?
+  clientStartedAt DateTime?
+  clientEndedAt   DateTime?
+  startedAt       DateTime       @default(now())
+  endedAt         DateTime?
+  startType       ShiftStartType
+  endType         ShiftEndType?
+  status          ShiftStatus    @default(active)
 
   agent     User            @relation(fields: [agentId], references: [id])
   locations FieldLocation[]
   visits    FieldVisit[]
   stops     FieldStop[]
 
+  @@unique([orgId, agentId, clientShiftId])
   @@index([agentId, status])
   @@index([orgId, status])
   @@index([agentId, startedAt])
+  @@index([orgId, agentId, clientShiftId])
   @@map("shifts")
 }
 
 model FieldLocation {
-  id         String   @id @default(uuid())
-  agentId    String
-  shiftId    String
-  orgId      String
-  lat        Float
-  lng        Float
-  accuracy   Float
-  recordedAt DateTime
-  receivedAt DateTime @default(now())
+  id            String   @id @default(uuid())
+  agentId       String
+  shiftId       String
+  orgId         String
+  clientPointId String?
+  clientShiftId String?
+  lat           Float
+  lng           Float
+  accuracy      Float
+  recordedAt    DateTime
+  capturedAt    DateTime?
+  source        String?
+  platform      String?
+  appVersion    String?
+  altitude      Float?
+  speed         Float?
+  heading       Float?
+  isMocked      Boolean?
+  receivedAt    DateTime @default(now())
 
   shift Shift @relation(fields: [shiftId], references: [id])
 
+  @@unique([orgId, agentId, clientPointId])
   @@index([agentId, recordedAt])
   @@index([shiftId, recordedAt])
   @@index([orgId, recordedAt])
   @@index([orgId, receivedAt])
+  @@index([orgId, agentId, clientPointId])
   @@map("field_locations")
+}
+
+model FieldSyncStatus {
+  id                 String   @id @default(uuid())
+  orgId              String
+  agentId            String
+  deviceId           String
+  shiftId            String?
+  clientShiftId      String?
+  appVersion         String?
+  platform           String?
+  lastCapturedAt     DateTime?
+  lastReceivedAt     DateTime?
+  lastSyncAttemptAt  DateTime?
+  lastSyncErrorCode  String?
+  pendingQueueDepth  Int?
+  permissionsSummary Json?
+  updatedAt          DateTime @updatedAt
+
+  agent User @relation(fields: [agentId], references: [id])
+
+  @@unique([orgId, agentId, deviceId])
+  @@index([orgId, updatedAt])
+  @@index([agentId, updatedAt])
+  @@map("field_sync_statuses")
 }
 
 model ShiftSchedule {

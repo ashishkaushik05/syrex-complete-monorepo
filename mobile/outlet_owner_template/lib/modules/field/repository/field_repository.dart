@@ -145,6 +145,72 @@ class FieldRepository {
     }
   }
 
+  // ── V2 shift sync ─────────────────────────────────────────────────────────
+
+  /// Idempotent shift start sync. Returns serverShiftId.
+  /// Throws if backend V2 not deployed (caller handles fallback).
+  Future<String> syncStart({
+    required String clientShiftId,
+    required String startedAt,
+    String platform = 'flutter',
+  }) async {
+    final res = await _dio.post(
+      '/fieldShifts.syncStart',
+      data: jsonEncode({
+        'json': {
+          'clientShiftId': clientShiftId,
+          'startedAt': startedAt,
+          'platform': platform,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+    final data = _extract(res.data);
+    return (data['serverShiftId'] ?? data['shift']?['id']) as String;
+  }
+
+  /// Idempotent shift end sync.
+  Future<void> syncEnd({
+    required String clientShiftId,
+    required String endedAt,
+  }) async {
+    await _dio.post(
+      '/fieldShifts.syncEnd',
+      data: jsonEncode({
+        'json': {
+          'clientShiftId': clientShiftId,
+          'endedAt': endedAt,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+  }
+
+  // ── V2 location ingest ────────────────────────────────────────────────────
+
+  /// Batch ingest with per-point idempotency keys.
+  /// Returns structured ack from backend.
+  Future<Map<String, dynamic>> ingestV2({
+    required String clientShiftId,
+    String? serverShiftId,
+    required List<Map<String, dynamic>> points,
+    String platform = 'flutter',
+  }) async {
+    final res = await _dio.post(
+      '/fieldLocation.ingestV2',
+      data: jsonEncode({
+        'json': {
+          'clientShiftId': clientShiftId,
+          if (serverShiftId != null) 'shiftId': serverShiftId,
+          'platform': platform,
+          'points': points,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+    return _extract(res.data);
+  }
+
   // ── visits ────────────────────────────────────────────────────────────────
 
   /// Logs a field visit at the current GPS position.

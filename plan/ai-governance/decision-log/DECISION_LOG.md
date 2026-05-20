@@ -67,6 +67,60 @@ Use `DECISION_TEMPLATE.md` for every new entry.
   - InvoicePDF now accepts orgProfile prop; falls back gracefully if null/undefined.
 - Cleanup Required:
   - Consider adding "Edit Billing Info" quick-save on order/invoice detail page for salespeople.
+
+---
+
+## DEC-20260520-001
+- Decision ID: `DEC-20260520-001`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master@ba33ecd`
+- Task: `Field Sense mobile — offline-first SQLite queue, durable location capture, V2 sync worker, contextual permissions (Phases A–D)`
+- Decision: `Replace in-memory location buffer and online-only shift lifecycle with SQLite-backed local store (sqflite), a FieldSyncWorker that calls V2 backend contracts, and contextual permission UX at shift-start instead of app bootstrap.`
+- Rationale: `Current BackgroundLocationService drops all location points on network error or app kill. Shift start/end requires live server. Permission request at bootstrap is context-free and confusing. All four problems are fixed together because the local store is the shared foundation.`
+- Alternatives Considered:
+  - `SharedPreferences queue` rejected — not transactional; concurrent writes from background isolate cause corruption.
+  - `Hive/Isar` rejected — sqflite has mature background-isolate support with no native compilation issues on Android and iOS.
+  - `Keep old ingest endpoint` — retained as fallback path; V2 is the primary path when backend deploys it.
+- Scope:
+  - `mobile/outlet_owner_template/pubspec.yaml` — add sqflite, path, uuid, connectivity_plus
+  - `mobile/outlet_owner_template/lib/core/db/local_models.dart` (new) — LocalShift, LocalLocationPoint, LocalFieldEvent
+  - `mobile/outlet_owner_template/lib/core/db/field_local_store.dart` (new) — SQLite store, all CRUD
+  - `mobile/outlet_owner_template/lib/core/field/field_shift_controller.dart` (new) — offline shift lifecycle Riverpod controller
+  - `mobile/outlet_owner_template/lib/core/field/location_capture_service.dart` (new) — GPS → SQLite, no network dependency
+  - `mobile/outlet_owner_template/lib/core/field/field_sync_worker.dart` (new) — syncStart / ingestV2 / syncEnd with retry/backoff
+  - `mobile/outlet_owner_template/lib/core/permissions/field_permission_coordinator.dart` (new) — contextual permission UX
+  - `mobile/outlet_owner_template/lib/core/location/background_location_service.dart` — replace in-memory buffer with SQLite
+  - `mobile/outlet_owner_template/lib/modules/field/repository/field_repository.dart` — add syncStart, ingestV2, syncEnd methods
+  - `mobile/outlet_owner_template/lib/app/bootstrap/app_bootstrap.dart` — remove eager permission request; wire sync worker on startup
+  - `mobile/outlet_owner_template/lib/modules/field/shift/shift_screen.dart` — use FieldShiftController, show sync/local status
+  - `mobile/outlet_owner_template/ios/Runner/Info.plist` — add background location + audio keys
+- Status: `completed`
+- Completion Notes:
+  - Done: pubspec.yaml — sqflite 2.3.3+1, path 1.9.0, uuid 4.5.3, connectivity_plus 6.1.5 added.
+  - Done: lib/core/db/local_models.dart — LocalShift, LocalLocationPoint, LocalFieldEvent with enums and map serialization.
+  - Done: lib/core/db/field_local_store.dart — SQLite singleton with 3 tables, CRUD, in-flight reset for crash recovery.
+  - Done: lib/core/field/location_capture_service.dart — GPS stream to SQLite; no network dependency.
+  - Done: lib/core/field/field_sync_worker.dart — syncStart/ingestV2/syncEnd with V1 fallback, exponential backoff, auth-error queue preservation.
+  - Done: lib/core/field/field_shift_controller.dart — offline shift lifecycle StateNotifier; restores from SQLite on startup.
+  - Done: lib/core/permissions/field_permission_coordinator.dart — contextual permission UX at shift-start with explanation dialogs.
+  - Done: lib/core/location/background_location_service.dart — in-memory buffer replaced with SQLite inserts in background isolate.
+  - Done: lib/modules/field/repository/field_repository.dart — syncStart, syncEnd, ingestV2 methods added.
+  - Done: lib/app/bootstrap/app_bootstrap.dart — eager permission request removed; shift controller warmed on startup.
+  - Done: lib/modules/field/shift/shift_screen.dart — uses FieldShiftController; shows sync/offline/pending-points status.
+  - Done: ios/Runner/Info.plist — location usage descriptions and UIBackgroundModes added.
+  - Done: flutter analyze passes with no issues.
+- Impact/Risk:
+  - `sqflite` brings SQLite native dependency — no impact on Android (bundled); iOS requires no extra config.
+  - Background isolate uses its own FieldLocalStore instance (no Riverpod); safe because sqflite serialises writes.
+  - V2 backend routes do not exist yet; sync worker falls back to old ingest on `PROCEDURE_NOT_FOUND` errors.
+  - Old `fieldLocation.ingest` code in BackgroundLocationService is replaced; background service now persists to SQLite.
+- Cleanup Required:
+  - Remove V1 `fieldLocation.ingest` fallback in `FieldSyncWorker` once backend deploys V2.
+  - Remove `BackgroundLocationService.syncToken` shim once sync worker owns all upload.
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `mobile agent after backend V2 deploy`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-20T00:00:00Z`
 - Dead Paths Introduced: none
 - Conflicting Implementations: none
 - Next Cleanup Owner: n/a
@@ -4009,3 +4063,186 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Owner Timestamp: `codex @ 2026-05-19T04:31:00Z`
 - Follow-up Notes:
   - `Validation passed: cd backend && bun run scripts/demo-seed.ts`
+
+---
+
+## DEC-20260520-001
+- Decision ID: `DEC-20260520-001`
+- Model: `codex`
+- Branch/Commit: `master@fd26aa7`
+- Task: `Review Field Sense and sales mobile location flow and produce requirements plus implementation report`
+- Decision: `Perform a documentation-only architecture and implementation review before any production implementation, focused on sales-app location ingestion and backend readiness; defer web UI implementation changes to a later scoped task.`
+- Rationale: `The requested work needs a reliable requirements baseline and gap analysis before changing mobile background services or backend ingestion paths, especially because offline shift start and batch location upload affect data integrity and privacy-sensitive tracking behavior.`
+- Alternatives Considered:
+  - `Start implementing background tracking immediately` rejected because current field/client/server contracts must be audited first to avoid partial or conflicting ingestion paths.
+  - `Review web UI first` rejected because the user explicitly wants to focus first on complete data receipt from the sales application before web visualization implementation.
+- Scope:
+  - `backend/src/trpc/routes/field-location.ts`
+  - `backend/src/trpc/routes/field-shifts.ts`
+  - `backend/src/trpc/routes/field-attendance.ts`
+  - `backend/src/trpc/routes/field-visits.ts`
+  - `backend/src/trpc/routes/field-stops.ts`
+  - `backend/src/trpc/routes/field-schedule.ts`
+  - `backend/src/cron/field-auto-start.ts`
+  - `backend/src/cron/field-auto-close.ts`
+  - `backend/src/rbac/modules/field.ts`
+  - `schema.prisma`
+  - `mobile/sales_mobile_app/**`
+  - `web/src/pages/dashboard/FieldSense*.tsx`
+  - `plan/mobile/FIELD_SENSE_FLUTTER_PLAN.md`
+  - `plan/FIELD_SENSE_REQUIREMENTS.md`
+  - `plan/FIELD_SENSE_IMPLEMENTATION_REPORT.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before documentation/report edits.`
+  - Not Done: `Code inspection, requirements document, implementation report, and final decision update pending.`
+- Impact/Risk:
+  - `Low implementation risk: documentation-only scope, no runtime behavior changes intended.`
+  - `Review may identify production blockers that require later backend/mobile implementation decisions.`
+- Cleanup Required:
+  - `Finalize this same decision entry after report creation with completed/partial/blocked status and exact artifacts produced.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-20T10:56:00Z`
+
+### DEC-20260520-001 Final Update
+- Decision ID: `DEC-20260520-001`
+- Model: `codex`
+- Branch/Commit: `master@fd26aa7`
+- Task: `Review Field Sense and sales mobile location flow and produce requirements plus implementation report`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created `plan/FIELD_SENSE_REQUIREMENTS.md` with offline-first ingestion, background service, backend idempotency, shift reconciliation, privacy/security, and production acceptance requirements.`
+  - Done: `Created `plan/FIELD_SENSE_IMPLEMENTATION_REPORT.md` with current flow, implemented pieces, misconfigurations, production gaps, recommended architecture, implementation order, and test matrix.`
+  - Done: `Reviewed backend Field Sense routes/cron/SSE/RBAC, Prisma Field Sense models, Sales Mobile Field Sense/location/permission implementation, Android/iOS platform configuration, and current web Field Sense read surfaces.`
+  - Not Done: `No runtime code changes were made; production fixes are intentionally deferred to a separate implementation decision.`
+- Impact/Risk:
+  - `No runtime behavior changed.`
+  - `Report identifies critical data-loss and offline-readiness risks that should be addressed before production rollout.`
+- Cleanup Required:
+  - `Open a separate implementation decision before changing backend ingestion V2, mobile durable queue, offline shift sync, or web visualization behavior.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `repo owner/codex for next implementation phase`
+- Owner Timestamp: `codex @ 2026-05-20T11:04:00Z`
+
+---
+
+## DEC-20260520-002
+- Decision ID: `DEC-20260520-002`
+- Model: `codex`
+- Branch/Commit: `master@ba33ecd`
+- Task: `Create phased Field Sense remediation plan plus backend and sales mobile handoff reports`
+- Decision: `Produce documentation-only planning artifacts that split remediation into three phases, define backend-owned implementation scope, and create a mobile-agent handoff for Sales Mobile App changes.`
+- Rationale: `The prior review identified critical data-loss and offline-readiness gaps; separating backend and mobile responsibilities avoids mixed implementation paths and gives the mobile agent clear contracts to build against.`
+- Alternatives Considered:
+  - `Start backend implementation immediately` rejected because user requested planning/reports first and mobile ownership needs explicit contract alignment.
+  - `Single combined report only` rejected because backend and mobile work have different owners and acceptance criteria.
+- Scope:
+  - `plan/FIELD_SENSE_3_PHASE_REMEDIATION_PLAN.md`
+  - `plan/FIELD_SENSE_BACKEND_REPORT.md`
+  - `plan/FIELD_SENSE_SALES_APP_AGENT_PLAN.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before documentation edits.`
+  - Not Done: `Plan and reports pending.`
+- Impact/Risk:
+  - `No runtime behavior changes intended.`
+  - `Plan will define future implementation boundaries and may require follow-up decisions before code edits.`
+- Cleanup Required:
+  - `Finalize this entry after artifacts are created.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-20T11:05:36Z`
+
+### DEC-20260520-002 Final Update
+- Decision ID: `DEC-20260520-002`
+- Model: `codex`
+- Branch/Commit: `master@ba33ecd`
+- Task: `Create phased Field Sense remediation plan plus backend and sales mobile handoff reports`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created `plan/FIELD_SENSE_3_PHASE_REMEDIATION_PLAN.md` with Phase 1 backend ingestion/data safety, Phase 2 sales mobile offline queue/sync worker, and Phase 3 observability/web-readiness hardening.`
+  - Done: `Created `plan/FIELD_SENSE_BACKEND_REPORT.md` defining backend-owned schema, routes, idempotency, org scoping, implementation order, tests, risks, and definition of done.`
+  - Done: `Created `plan/FIELD_SENSE_SALES_APP_AGENT_PLAN.md` as the mobile handling agent plan covering local DB, offline shift lifecycle, durable location capture, sync worker, permission/platform hardening, QA matrix, and deliverables.`
+  - Not Done: `No backend or mobile runtime implementation was performed in this documentation task.`
+- Impact/Risk:
+  - `No runtime behavior changed.`
+  - `Future backend work should open a new implementation decision before schema/routes/tests are edited.`
+- Cleanup Required:
+  - `Use the backend report as the scoped basis for the next backend implementation decision.`
+  - `Provide the sales app agent plan to the mobile handling agent before mobile edits begin.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex for backend phase; mobile handling agent for sales app phase`
+- Owner Timestamp: `codex @ 2026-05-20T11:08:00Z`
+
+---
+
+## DEC-20260520-003
+- Decision ID: `DEC-20260520-003`
+- Model: `codex`
+- Branch/Commit: `master@ba33ecd`
+- Task: `Implement Field Sense backend idempotent offline ingestion and org-scoped read hardening`
+- Decision: `Add the backend Phase 1 ingestion contract as new V2/sync routes while preserving the existing location ingest compatibility route, then harden touched Field Sense read routes to default to the actor organization.`
+- Rationale: `The Sales Mobile App needs a durable, idempotent backend contract before mobile offline queue work can safely ship; keeping the current ingest route avoids breaking existing clients during migration.`
+- Alternatives Considered:
+  - `Replace fieldLocation.ingest directly` rejected because the backend report calls for a temporary compatibility path while mobile migrates to V2.
+  - `Allow backend to silently accept unknown client shifts by auto-creating shifts from point batches` rejected because the documented target contract requires explicit retryable SHIFT_NOT_SYNCED unless sync-start data is sufficient.
+- Scope:
+  - `schema.prisma`
+  - `backend/src/trpc/routes/field-shifts.ts`
+  - `backend/src/trpc/routes/field-location.ts`
+  - `backend/src/trpc/routes/field-visits.ts`
+  - `backend/src/trpc/routes/field-stops.ts`
+  - `backend/src/trpc/routes/field-attendance.ts`
+  - `backend/src/trpc/routes/field-schedule.ts`
+  - `backend/src/trpc/routes/field-sync-status.ts`
+  - `backend/src/trpc/router.ts`
+  - `backend/src/trpc/routes/field-helpers.ts`
+  - `backend/src/trpc/routes/field-ingestion.test.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before backend schema, route, and test edits.`
+  - Not Done: `Schema updates, syncStart/syncEnd, ingestV2, sync status route, org read hardening, tests, generation/typecheck, and final decision update pending.`
+- Impact/Risk:
+  - `Requires database schema migration/db push before V2 routes can be used against a live database.`
+  - `Read route hardening may reject cross-org reads that previously returned data when callers supplied arbitrary IDs.`
+- Cleanup Required:
+  - `Finalize this same decision entry after implementation with completed/partial/blocked status and exact gaps if any.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `fieldLocation.ingest remains as a documented compatibility path while fieldLocation.ingestV2 becomes the primary mobile sync path.`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-20T11:11:40Z`
+
+### DEC-20260520-003 Final Update
+- Decision ID: `DEC-20260520-003`
+- Model: `codex`
+- Branch/Commit: `master@ba33ecd`
+- Task: `Implement Field Sense backend idempotent offline ingestion and org-scoped read hardening`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added Prisma schema support for Shift client sync fields, FieldLocation client point/metadata fields, uniqueness constraints for client IDs, and FieldSyncStatus persistence.`
+  - Done: `Implemented fieldShifts.syncStart and fieldShifts.syncEnd with clientShiftId idempotency, active-shift reconciliation, field-enabled checks, and attendance upsert.`
+  - Done: `Implemented fieldLocation.ingestV2 with batch validation, retryable unknown-shift acknowledgement, duplicate detection, createMany skipDuplicates persistence, structured ack, sync health update, and post-persistence SSE broadcast.`
+  - Done: `Kept fieldLocation.ingest as the compatibility path and scoped its active-shift lookup by actor org when present.`
+  - Done: `Added fieldSyncStatus.upsert/list and included latest health metadata in activeAgents.`
+  - Done: `Hardened touched read routes for trail, agentTrail, activeAgents, visits, stops, attendance, schedules, and shifts to default to actor org and reject non-super-admin cross-org reads.`
+  - Done: `Added focused backend route tests for syncStart idempotency, ingestV2 duplicate retries, invalid coordinate rejection, and retryable SHIFT_NOT_SYNCED behavior.`
+  - Not Done: `No mobile app, web UI, or live database push was performed in this backend scope. No separate Prisma migration directory exists in the repo; schema changes are ready for the repo's current db push workflow.`
+- Impact/Risk:
+  - `Deployments must apply the updated Prisma schema before using syncStart, syncEnd, ingestV2, or fieldSyncStatus routes.`
+  - `Previously permissive cross-org field reads now fail unless the caller has the super-admin permission path.`
+  - `fieldLocation.ingest remains available temporarily, so old and new write APIs coexist by design until Sales Mobile App migrates to ingestV2.`
+- Cleanup Required:
+  - `After Sales Mobile App migrates to ingestV2, open a separate decision to deprecate and remove fieldLocation.ingest.`
+  - `If the repository adopts Prisma migrate, create a formal migration from the updated schema in that migration workflow.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `fieldLocation.ingest compatibility path and fieldLocation.ingestV2 primary path intentionally coexist during mobile migration.`
+- Next Cleanup Owner: `repo owner/codex after mobile migration validates V2 in production`
+- Owner Timestamp: `codex @ 2026-05-20T11:19:32Z`

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
+import { assertCanReadAgent, resolveReadOrgId } from "./field-helpers";
 
 const visitSchema = z.object({
   id: z.string(),
@@ -127,6 +128,8 @@ export const fieldVisitsRouter = createTRPCRouter({
     )
     .output(z.array(visitSchema))
     .query(async ({ ctx, input }) => {
+      if (input.agentId) assertCanReadAgent(ctx, input.agentId);
+      const orgId = resolveReadOrgId(ctx);
       const timeFilter: Record<string, Date> = {};
       if (input.from) timeFilter.gte = new Date(input.from);
       if (input.to) timeFilter.lte = new Date(input.to);
@@ -145,6 +148,7 @@ export const fieldVisitsRouter = createTRPCRouter({
 
       const visits = await ctx.prisma.fieldVisit.findMany({
         where: {
+          orgId,
           agentId: input.agentId,
           shiftId: input.shiftId,
           ...dateWhere
@@ -160,8 +164,9 @@ export const fieldVisitsRouter = createTRPCRouter({
     .input(z.object({ shiftId: z.string().uuid() }))
     .output(z.array(visitSchema))
     .query(async ({ ctx, input }) => {
+      const orgId = resolveReadOrgId(ctx);
       const visits = await ctx.prisma.fieldVisit.findMany({
-        where: { shiftId: input.shiftId },
+        where: { shiftId: input.shiftId, orgId },
         select: VISIT_SELECT,
         orderBy: { recordedAt: "asc" }
       });

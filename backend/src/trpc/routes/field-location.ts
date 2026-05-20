@@ -2,6 +2,12 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { broadcastLocationUpdate } from "../../infra/sse";
+import { apiError } from "../error";
+import {
+  assertCanReadAgent,
+  resolveReadOrgId,
+  validateLocationPoint
+} from "./field-helpers";
 
 // ---------------------------------------------------------------------------
 // Trail math helpers
@@ -98,6 +104,36 @@ const locationPointSchema = z.object({
   recordedAt: z.string().datetime()
 });
 
+const ingestV2PointSchema = z.object({
+  clientPointId: z.string().min(1),
+  lat: z.number(),
+  lng: z.number(),
+  accuracy: z.number(),
+  recordedAt: z.string(),
+  capturedAt: z.string().optional(),
+  altitude: z.number().optional(),
+  speed: z.number().optional(),
+  heading: z.number().optional(),
+  source: z.string().optional(),
+  isMocked: z.boolean().optional(),
+  platform: z.string().optional(),
+  appVersion: z.string().optional()
+});
+
+const ingestV2AckSchema = z.object({
+  serverShiftId: z.string().nullable(),
+  clientShiftId: z.string(),
+  accepted: z.array(z.string()),
+  duplicates: z.array(z.string()),
+  rejected: z.array(
+    z.object({
+      clientPointId: z.string(),
+      reason: z.string()
+    })
+  ),
+  retryable: z.boolean()
+});
+
 const trailPointSchema = z.object({
   lat: z.number(),
   lng: z.number(),
@@ -125,7 +161,19 @@ const activeAgentSchema = z.object({
   shiftStartedAt: z.string(),
   lastPingAt: z.string().nullable(),
   lat: z.number().nullable(),
-  lng: z.number().nullable()
+  lng: z.number().nullable(),
+  health: z
+    .object({
+      deviceId: z.string().nullable(),
+      platform: z.string().nullable(),
+      appVersion: z.string().nullable(),
+      pendingQueueDepth: z.number().nullable(),
+      lastCapturedAt: z.string().nullable(),
+      lastReceivedAt: z.string().nullable(),
+      lastSyncAttemptAt: z.string().nullable(),
+      lastSyncErrorCode: z.string().nullable()
+    })
+    .nullable()
 });
 
 // ---------------------------------------------------------------------------
@@ -145,7 +193,7 @@ export const fieldLocationRouter = createTRPCRouter({
       const orgId = ctx.actor.orgId;
 
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, status: "active" },
+        where: { agentId, status: "active", orgId: orgId ?? undefined },
         select: { id: true, orgId: true }
       });
       if (!shift) return { accepted: 0 };
@@ -186,6 +234,247 @@ export const fieldLocationRouter = createTRPCRouter({
       return { accepted: data.length };
     }),
 
+  ingestV2: perm(P.field.write)
+    .input(
+      z.object({
+        clientShiftId: z.string().min(1),
+        shiftId: z.string().uuid().optional(),
+        deviceId: z.string().optional(),
+        points: z.array(ingestV2PointSchema).min(1).max(500)
+      })
+    )
+    .output(ingestV2AckSchema)
+    .mutation(async ({ ctx, input }) => {
+      const agentId = ctx.actor.id!;
+      const orgId = ctx.actor.orgId;
+      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
+
+      const shift = input.shiftId
+        ? await ctx.prisma.shift.findFirst({
+            where: {
+              id: input.shiftId,
+              orgId,
+              agentId,
+              clientShiftId: input.clientShiftId
+            },
+            select: { id: true, orgId: true, agentId: true, clientShiftId: true }
+          })
+        : await ctx.prisma.shift.findUnique({
+            where: {
+              orgId_agentId_clientShiftId: {
+                orgId,
+                agentId,
+                clientShiftId: input.clientShiftId
+              }
+            },
+            select: { id: true, orgId: true, agentId: true, clientShiftId: true }
+          });
+
+      if (!shift) {
+        return {
+          serverShiftId: null,
+          clientShiftId: input.clientShiftId,
+          accepted: [],
+          duplicates: [],
+          rejected: [],
+          retryable: true
+        };
+      }
+
+      const rejected: Array<{ clientPointId: string; reason: string }> = [];
+      const validPoints: Array<{
+        clientPointId: string;
+        lat: number;
+        lng: number;
+        accuracy: number;
+        recordedAt: Date;
+        capturedAt: Date | null;
+        altitude?: number;
+        speed?: number;
+        heading?: number;
+        source?: string;
+        isMocked?: boolean;
+        platform?: string;
+        appVersion?: string;
+      }> = [];
+
+      const seenInBatch = new Set<string>();
+      for (const point of input.points) {
+        if (seenInBatch.has(point.clientPointId)) {
+          rejected.push({
+            clientPointId: point.clientPointId,
+            reason: "DUPLICATE_IN_BATCH"
+          });
+          continue;
+        }
+        seenInBatch.add(point.clientPointId);
+
+        const validation = validateLocationPoint(point);
+        if (!validation.ok) {
+          rejected.push({
+            clientPointId: point.clientPointId,
+            reason: validation.reason
+          });
+          continue;
+        }
+
+        validPoints.push({
+          ...point,
+          recordedAt: validation.recordedAt,
+          capturedAt: validation.capturedAt
+        });
+      }
+
+      const validIds = validPoints.map((point) => point.clientPointId);
+      const existing = validIds.length
+        ? await ctx.prisma.fieldLocation.findMany({
+            where: {
+              orgId,
+              agentId,
+              clientPointId: { in: validIds }
+            },
+            select: {
+              clientPointId: true,
+              lat: true,
+              lng: true,
+              accuracy: true,
+              recordedAt: true,
+              receivedAt: true
+            }
+          })
+        : [];
+      const existingIds = new Set(
+        existing
+          .map((point) => point.clientPointId)
+          .filter((id): id is string => Boolean(id))
+      );
+
+      const toInsert = validPoints.filter(
+        (point) => !existingIds.has(point.clientPointId)
+      );
+      if (toInsert.length > 0) {
+        await ctx.prisma.fieldLocation.createMany({
+          data: toInsert.map((point) => ({
+            agentId,
+            shiftId: shift.id,
+            orgId,
+            clientPointId: point.clientPointId,
+            clientShiftId: input.clientShiftId,
+            lat: point.lat,
+            lng: point.lng,
+            accuracy: point.accuracy,
+            recordedAt: point.recordedAt,
+            capturedAt: point.capturedAt,
+            altitude: point.altitude,
+            speed: point.speed,
+            heading: point.heading,
+            source: point.source,
+            isMocked: point.isMocked,
+            platform: point.platform,
+            appVersion: point.appVersion,
+            receivedAt: new Date()
+          })),
+          skipDuplicates: true
+        });
+      }
+
+      const persisted = validIds.length
+        ? await ctx.prisma.fieldLocation.findMany({
+            where: {
+              orgId,
+              agentId,
+              clientPointId: { in: validIds }
+            },
+            select: {
+              clientPointId: true,
+              lat: true,
+              lng: true,
+              accuracy: true,
+              recordedAt: true,
+              receivedAt: true
+            }
+          })
+        : [];
+      const persistedIds = new Set(
+        persisted
+          .map((point) => point.clientPointId)
+          .filter((id): id is string => Boolean(id))
+      );
+
+      const accepted = toInsert
+        .map((point) => point.clientPointId)
+        .filter((id) => persistedIds.has(id));
+      const acceptedSet = new Set(accepted);
+      const duplicates = [
+        ...new Set([
+          ...existingIds,
+          ...validIds.filter((id) => persistedIds.has(id) && !acceptedSet.has(id))
+        ])
+      ];
+
+      if (input.deviceId) {
+        const newestCapturedAt = validPoints.reduce<Date | null>((latest, point) => {
+          const candidate = point.capturedAt ?? point.recordedAt;
+          if (!latest || candidate.getTime() > latest.getTime()) return candidate;
+          return latest;
+        }, null);
+        await ctx.prisma.fieldSyncStatus.upsert({
+          where: {
+            orgId_agentId_deviceId: {
+              orgId,
+              agentId,
+              deviceId: input.deviceId
+            }
+          },
+          create: {
+            orgId,
+            agentId,
+            deviceId: input.deviceId,
+            shiftId: shift.id,
+            clientShiftId: input.clientShiftId,
+            lastCapturedAt: newestCapturedAt,
+            lastReceivedAt: new Date(),
+            lastSyncAttemptAt: new Date()
+          },
+          update: {
+            shiftId: shift.id,
+            clientShiftId: input.clientShiftId,
+            lastCapturedAt: newestCapturedAt ?? undefined,
+            lastReceivedAt: new Date(),
+            lastSyncAttemptAt: new Date(),
+            lastSyncErrorCode: null
+          }
+        });
+      }
+
+      const broadcastCandidate =
+        persisted
+          .filter((point) => acceptedSet.has(point.clientPointId ?? ""))
+          .sort((a, b) => b.recordedAt.getTime() - a.recordedAt.getTime())[0] ??
+        persisted.sort((a, b) => b.recordedAt.getTime() - a.recordedAt.getTime())[0];
+
+      if (broadcastCandidate) {
+        broadcastLocationUpdate(orgId, {
+          agentId,
+          shiftId: shift.id,
+          lat: broadcastCandidate.lat,
+          lng: broadcastCandidate.lng,
+          accuracy: broadcastCandidate.accuracy,
+          recordedAt: broadcastCandidate.recordedAt.toISOString(),
+          receivedAt: broadcastCandidate.receivedAt.toISOString()
+        });
+      }
+
+      return {
+        serverShiftId: shift.id,
+        clientShiftId: input.clientShiftId,
+        accepted,
+        duplicates,
+        rejected,
+        retryable: false
+      };
+    }),
+
   trail: perm(P.field.read)
     .input(
       z.object({
@@ -197,7 +486,10 @@ export const fieldLocationRouter = createTRPCRouter({
     .output(trailMetaSchema)
     .query(async ({ ctx, input }) => {
       const raw = await ctx.prisma.fieldLocation.findMany({
-        where: { shiftId: input.shiftId },
+        where: {
+          shiftId: input.shiftId,
+          shift: { orgId: resolveReadOrgId(ctx) }
+        },
         select: { lat: true, lng: true, recordedAt: true },
         orderBy: { recordedAt: "asc" }
       });
@@ -263,6 +555,8 @@ export const fieldLocationRouter = createTRPCRouter({
     )
     .output(trailMetaSchema)
     .query(async ({ ctx, input }) => {
+      assertCanReadAgent(ctx, input.agentId);
+      const orgId = resolveReadOrgId(ctx);
       let timeWhere: { gte?: Date; lt?: Date } = {};
       if (input.date) {
         timeWhere = {
@@ -277,6 +571,7 @@ export const fieldLocationRouter = createTRPCRouter({
       const raw = await ctx.prisma.fieldLocation.findMany({
         where: {
           agentId: input.agentId,
+          orgId,
           recordedAt: Object.keys(timeWhere).length > 0 ? timeWhere : undefined
         },
         select: { lat: true, lng: true, recordedAt: true },
@@ -333,7 +628,7 @@ export const fieldLocationRouter = createTRPCRouter({
     .input(z.object({ orgId: z.string().optional() }))
     .output(z.array(activeAgentSchema))
     .query(async ({ ctx, input }) => {
-      const orgId = input.orgId ?? ctx.actor.orgId;
+      const orgId = resolveReadOrgId(ctx, input.orgId);
 
       const activeShifts = await ctx.prisma.shift.findMany({
         where: {
@@ -356,6 +651,20 @@ export const fieldLocationRouter = createTRPCRouter({
             select: { lat: true, lng: true, receivedAt: true },
             orderBy: { receivedAt: "desc" }
           });
+          const health = await ctx.prisma.fieldSyncStatus.findFirst({
+            where: { orgId: shift.orgId, agentId: shift.agentId },
+            select: {
+              deviceId: true,
+              platform: true,
+              appVersion: true,
+              pendingQueueDepth: true,
+              lastCapturedAt: true,
+              lastReceivedAt: true,
+              lastSyncAttemptAt: true,
+              lastSyncErrorCode: true
+            },
+            orderBy: { updatedAt: "desc" }
+          });
           return {
             agentId: shift.agentId,
             agentName: shift.agent.name,
@@ -363,7 +672,20 @@ export const fieldLocationRouter = createTRPCRouter({
             shiftStartedAt: shift.startedAt.toISOString(),
             lastPingAt: lastLoc?.receivedAt.toISOString() ?? null,
             lat: lastLoc?.lat ?? null,
-            lng: lastLoc?.lng ?? null
+            lng: lastLoc?.lng ?? null,
+            health: health
+              ? {
+                  deviceId: health.deviceId,
+                  platform: health.platform,
+                  appVersion: health.appVersion,
+                  pendingQueueDepth: health.pendingQueueDepth,
+                  lastCapturedAt: health.lastCapturedAt?.toISOString() ?? null,
+                  lastReceivedAt: health.lastReceivedAt?.toISOString() ?? null,
+                  lastSyncAttemptAt:
+                    health.lastSyncAttemptAt?.toISOString() ?? null,
+                  lastSyncErrorCode: health.lastSyncErrorCode
+                }
+              : null
           };
         })
       );

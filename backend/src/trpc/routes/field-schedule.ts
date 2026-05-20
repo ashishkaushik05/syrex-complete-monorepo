@@ -2,6 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
+import { resolveReadOrgId } from "./field-helpers";
 
 const scheduleSchema = z.object({
   id: z.string(),
@@ -65,7 +66,7 @@ export const fieldScheduleRouter = createTRPCRouter({
     .output(scheduleSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.actor.id!;
-      const orgId = input.orgId ?? ctx.actor.orgId;
+      const orgId = resolveReadOrgId(ctx, input.orgId);
       if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
 
       const row = await ctx.prisma.shiftSchedule.upsert({
@@ -97,8 +98,9 @@ export const fieldScheduleRouter = createTRPCRouter({
     )
     .output(z.array(scheduleSchema))
     .query(async ({ ctx, input }) => {
+      const orgId = resolveReadOrgId(ctx, input.orgId);
       const rows = await ctx.prisma.shiftSchedule.findMany({
-        where: { orgId: input.orgId },
+        where: { orgId },
         select: SCHEDULE_SELECT,
         take: input.limit
       });
@@ -116,7 +118,7 @@ export const fieldScheduleRouter = createTRPCRouter({
       if (!ctx.permissions.includes(SUPER_ADMIN_PERMISSION) && !ctx.permissions.includes(P.field.admin)) {
         throw apiError("FORBIDDEN", "Setting schedule for another user requires field:admin");
       }
-      const orgId = input.orgId ?? ctx.actor.orgId;
+      const orgId = resolveReadOrgId(ctx, input.orgId);
       if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
 
       const target = await ctx.prisma.user.findUnique({
