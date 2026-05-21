@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Syrex Platform — Process Flowcharts</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --brand:    #1a56db;
+      --brand-lt: #ebf0fe;
+      --gray1:    #f9fafb;
+      --gray2:    #e5e7eb;
+      --gray3:    #6b7280;
+      --text:     #111827;
+      --white:    #ffffff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--gray1);
+      color: var(--text);
+      padding: 0;
+    }
+
+    /* ── Cover Banner ── */
+    .cover {
+      background: linear-gradient(135deg, #1a56db 0%, #0e3fa3 100%);
+      color: var(--white);
+      padding: 56px 64px 48px;
+    }
+    .cover .badge {
+      display: inline-block;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 4px 14px;
+      margin-bottom: 20px;
+    }
+    .cover h1 { font-size: 2.6rem; font-weight: 700; line-height: 1.2; }
+    .cover p  { margin-top: 14px; font-size: 1.05rem; opacity: .85; max-width: 640px; line-height: 1.7; }
+    .cover .meta { margin-top: 28px; font-size: .85rem; opacity: .7; }
+
+    /* ── TOC ── */
+    .toc {
+      background: var(--white);
+      border-bottom: 1px solid var(--gray2);
+      padding: 18px 64px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .toc-label { font-size: .78rem; font-weight: 600; color: var(--gray3); text-transform: uppercase; letter-spacing: .07em; margin-right: 8px; }
+    .toc a {
+      font-size: .82rem;
+      font-weight: 500;
+      color: var(--brand);
+      text-decoration: none;
+      background: var(--brand-lt);
+      border-radius: 6px;
+      padding: 4px 12px;
+      transition: background .15s;
+    }
+    .toc a:hover { background: #d1dffb; }
+
+    /* ── Main ── */
+    main { max-width: 1100px; margin: 0 auto; padding: 48px 32px 80px; }
+
+    /* ── Section ── */
+    .section {
+      background: var(--white);
+      border: 1px solid var(--gray2);
+      border-radius: 14px;
+      padding: 36px 40px;
+      margin-bottom: 48px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.05);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 18px;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--gray2);
+    }
+    .section-num {
+      flex-shrink: 0;
+      width: 44px; height: 44px;
+      background: var(--brand);
+      color: var(--white);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; font-weight: 700;
+    }
+    .section-header-text h2 { font-size: 1.35rem; font-weight: 700; color: var(--text); }
+    .section-header-text p  { margin-top: 5px; font-size: .9rem; color: var(--gray3); line-height: 1.6; }
+
+    /* ── Diagram wrapper ── */
+    .diagram-wrap {
+      overflow-x: auto;
+      padding: 24px 16px;
+      background: #fafbff;
+      border: 1px solid var(--gray2);
+      border-radius: 10px;
+    }
+    .diagram-wrap .mermaid {
+      min-width: 600px;
+    }
+
+    /* ── Legend / Notes ── */
+    .notes {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .note-card {
+      background: var(--gray1);
+      border: 1px solid var(--gray2);
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+    .note-card .nt { font-size: .75rem; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+    .note-card p   { font-size: .83rem; color: var(--gray3); line-height: 1.55; }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      font-size: .8rem;
+      color: var(--gray3);
+      padding: 32px 0 48px;
+      border-top: 1px solid var(--gray2);
+      margin-top: 16px;
+    }
+    footer strong { color: var(--brand); }
+
+    @media (max-width: 700px) {
+      .cover { padding: 36px 24px; }
+      .cover h1 { font-size: 1.8rem; }
+      .toc { padding: 14px 20px; }
+      main { padding: 28px 12px 60px; }
+      .section { padding: 22px 18px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════ COVER ═══════════════════════════════════════════ -->
+<div class="cover">
+  <div class="badge">Confidential — Client Reference</div>
+  <h1>Syrex Platform<br>Process Flowcharts</h1>
+  <p>
+    A visual walkthrough of how your distribution and service operations are handled —
+    from the moment a sales order is placed all the way through dispatch, invoicing,
+    payment collection, and post-sale service with warranty management.
+  </p>
+  <div class="meta">Version 1.0 &nbsp;·&nbsp; Syrex Engineering &nbsp;·&nbsp; 2026</div>
+</div>
+
+<!-- ═════════════════════════════════════════════ TOC ═════════════════════════════════════════════ -->
+<nav class="toc">
+  <span class="toc-label">Jump to</span>
+  <a href="#fc1">1 · Sales Order</a>
+  <a href="#fc2">2 · Dispatch</a>
+  <a href="#fc3">3 · Invoice &amp; Payments</a>
+  <a href="#fc4">4 · Service &amp; Warranty</a>
+  <a href="#fc5">5 · Field Sales Tracking</a>
+</nav>
+
+<!-- ═══════════════════════════════════════════ MAIN ════════════════════════════════════════════ -->
+<main>
+
+  <!-- ─────────────────── FC 1 — SALES ORDER ─────────────────── -->
+  <section class="section" id="fc1">
+    <div class="section-header">
+      <div class="section-num">1</div>
+      <div class="section-header-text">
+        <h2>Sales Order Lifecycle</h2>
+        <p>
+          How a sales order moves from creation by a sales rep through approval (or hold / rejection)
+          and into the fulfilment queue. Every order gets a unique sequential number
+          <em>(SO-YYYY-000001)</em> and is always tied to a specific outlet and its assigned warehouse.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+  A([Sales Rep / Mobile App]) -->|Creates order with\nline items & delivery address| B
+
+  B["📋 Sales Order Created\nStatus: pending_approval\nSO-YYYY-######"]
+
+  B --> C{Manager\nReviews}
+
+  C -->|Hold — needs\nmore info| D["⏸ Status: on_hold\nHold note recorded"]
+  D --> C
+
+  C -->|Reject| E["❌ Status: rejected\nRejection reason stored"]
+  C -->|Approve| F["✅ Status: approved\nApprover + timestamp\nrecorded"]
+  C -->|Cancel| G["🚫 Status: cancelled"]
+
+  F -->|Auto-triggered\non approval| H["🧾 Invoice Auto-Generated\nINV-YYYY-######\nSubtotal + Tax Charges"]
+
+  H --> I["📦 Order enters\nDispatch Queue"]
+
+  I --> J{Dispatch\nProgress}
+  J -->|Some lines dispatched| K["🔄 partially_dispatched"]
+  J -->|All lines dispatched| L["✅ fully_dispatched"]
+  K --> J
+
+  style B fill:#dbeafe,stroke:#1a56db,color:#1e3a8a
+  style F fill:#dcfce7,stroke:#16a34a,color:#14532d
+  style E fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+  style G fill:#fef3c7,stroke:#d97706,color:#78350f
+  style D fill:#fef9c3,stroke:#ca8a04,color:#713f12
+  style H fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+  style I fill:#f0fdf4,stroke:#16a34a,color:#14532d
+  style L fill:#dcfce7,stroke:#16a34a,color:#14532d
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note-card">
+        <div class="nt">Order Number</div>
+        <p>Auto-assigned sequential number per year: SO-2026-000001, SO-2026-000002…</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Outlet ↔ Warehouse</div>
+        <p>Every outlet is pre-mapped to a warehouse. The order inherits this mapping automatically.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Priority Levels</div>
+        <p>Low · Medium · High · Critical — used for dispatch queue prioritisation.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Hold Flow</div>
+        <p>An order on hold can be approved or rejected. It cannot be dispatched while held.</p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ─────────────────── FC 2 — DISPATCH ─────────────────── -->
+  <section class="section" id="fc2">
+    <div class="section-header">
+      <div class="section-num">2</div>
+      <div class="section-header-text">
+        <h2>Dispatch Flow</h2>
+        <p>
+          Once an order is approved, the warehouse manager packs and dispatches items with full
+          logistics details (transporter, vehicle, LR number). Each dispatch records serial numbers
+          per line and deducts stock from the warehouse in real time.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+  A["✅ Approved Order\nin Dispatch Queue"] --> B
+
+  B([Warehouse Manager\nopens Dispatch Plan])
+
+  B --> C["Select order lines\n+ quantities to dispatch"]
+  C --> D{Stock\nAvailable?}
+
+  D -->|No| E["⚠ Insufficient Stock\nError shown — cannot proceed"]
+  D -->|Yes| F["📦 Dispatch Record Created\n• Transporter name\n• Vehicle number\n• LR / GR number\n• Serial numbers per line"]
+
+  F --> G["📉 Warehouse Stock Decremented\nin real time"]
+  G --> H["📊 Order Line Status Updated\npending → partially_dispatched\nor fully_dispatched"]
+
+  H --> I{All Lines\nDispatched?}
+  I -->|No| J["🔄 Order: partially_dispatched\nRemaining lines\nstay in queue"]
+  I -->|Yes| K["✅ Order: fully_dispatched"]
+
+  J -->|Next dispatch\nbatch| B
+
+  style F fill:#dbeafe,stroke:#1a56db,color:#1e3a8a
+  style K fill:#dcfce7,stroke:#16a34a,color:#14532d
+  style E fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note-card">
+        <div class="nt">Idempotent Dispatch</div>
+        <p>Duplicate dispatch requests (same idempotency key) are safely rejected — no double-deductions.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Serial Number Tracking</div>
+        <p>Each dispatched unit can carry a serial number. Serials feed directly into the Service module for warranty lookups.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Partial Dispatch</div>
+        <p>You can dispatch a subset of ordered quantity. The remaining quantity stays pending for a follow-up dispatch.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Optimistic Locking</div>
+        <p>Concurrent dispatch attempts are safely blocked — the system uses row-level locking to prevent over-dispatching.</p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ─────────────────── FC 3 — INVOICE & PAYMENTS ─────────────────── -->
+  <section class="section" id="fc3">
+    <div class="section-header">
+      <div class="section-num">3</div>
+      <div class="section-header-text">
+        <h2>Invoice &amp; Payments Flow</h2>
+        <p>
+          Invoices are generated automatically when an order is approved. Tax charges are applied
+          from a central configurable rate card. Payments from outlets are recorded and automatically
+          allocated to the oldest outstanding invoices first (FIFO), keeping AR balances accurate.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+  A["✅ Order Approved"] -->|Auto-triggered| B
+
+  B["🧾 Invoice Created\nINV-YYYY-######\nStatus: unpaid / amount due > 0"]
+
+  B --> C["Line Items copied\nfrom order lines\n(product, qty, unit price)"]
+  C --> D["📊 Tax & Charges Applied\nfrom Rate Card\n(% or fixed — configurable)"]
+  D --> E["💰 Total = Subtotal + Charges\nAmount Due = Total\nAmount Paid = 0"]
+
+  E --> F["📤 Invoice visible to\nOutlet & Accounts team"]
+
+  F --> G([Outlet makes\nPayment])
+
+  G --> H["💳 Payment Recorded\n• Amount\n• Reference / UTR\n• Payment date"]
+
+  H --> I["🔄 Auto-Allocation\n(oldest invoice first — FIFO)"]
+
+  I --> J{Invoice\nFully Paid?}
+  J -->|Yes| K["✅ Invoice Cleared\nAmount Due = 0"]
+  J -->|No| L["🔄 Partial Payment\nAmount Due reduced"]
+
+  I --> M["📊 Outlet Outstanding\nBalance Updated in real time"]
+
+  M --> N["📈 AR Reports Available\n• Outstanding per outlet\n• Aging (30/60/90 days)\n• Approval queue\n• Payment history"]
+
+  style B fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+  style E fill:#dbeafe,stroke:#1a56db,color:#1e3a8a
+  style K fill:#dcfce7,stroke:#16a34a,color:#14532d
+  style N fill:#fef9c3,stroke:#ca8a04,color:#713f12
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note-card">
+        <div class="nt">Auto-Invoice</div>
+        <p>No manual step needed — approval triggers invoice creation instantly with the correct tax calculations.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Configurable Tax Rates</div>
+        <p>GST, freight, handling — any charge type (% or fixed) can be configured in the admin panel and applied globally.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">FIFO Allocation</div>
+        <p>A payment is always applied to the oldest unpaid invoice first, keeping AR aging clean automatically.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">PDF Export</div>
+        <p>Every invoice can be downloaded as a PDF directly from the dashboard for sharing with outlets.</p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ─────────────────── FC 4 — SERVICE & WARRANTY ─────────────────── -->
+  <section class="section" id="fc4">
+    <div class="section-header">
+      <div class="section-num">4</div>
+      <div class="section-header-text">
+        <h2>Service Complaint &amp; Warranty Flow</h2>
+        <p>
+          After-sales service is managed through a structured complaint lifecycle. Each complaint
+          is tracked from initial raising through field visits, test reports, and warranty decisions
+          (replacement or rejection). Warranty replacements automatically create a fulfillment order
+          that flows back through the dispatch pipeline.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+  A([Internal User\nraises complaint]) -->|Serial number + product details| B
+
+  B["📝 Complaint Created\nCMP-YYYY-######\nStatus: raised"]
+
+  B --> C{Manager\nAssigns}
+  C -->|Assign ASI / SE| D["👷 Status: assigned\nASI & Service Engineer\nlinked to complaint"]
+
+  D -->|Field visit\nscheduled| E["🔍 Status: visit\nVisit logged on site"]
+
+  E -->|Engineer submits\ntest report| F["🧪 Status: test_result_submitted\nVerdict + structured data\nattached to complaint"]
+
+  F --> G{Manager\nDecision}
+
+  G -->|Retest needed| H["🔁 Status: retest_requested\nBack to site visit"]
+  H --> E
+
+  G -->|Tests OK —\nno warranty claim| I["✅ Status: resolved\nClosed with resolution note"]
+
+  G -->|Warranty\nApproval| J["🛡 Warranty Approved\nSource warehouse selected\nReplacement serial assigned"]
+  J --> K["🆕 Replacement\nFulfillment Order Created\n(warranty_replacement type,\nno invoice generated)"]
+  K -->|Flows into standard\ndispatch pipeline| L["📦 Dispatched to outlet"]
+
+  G -->|Warranty\nRejected| N["❌ Warranty Rejected\nReason recorded\nComplaint closed → resolved"]
+
+  B -->|Phone call\nresolved it| O["📞 Telephonic Closure\nStatus: telephonic_closure\nReason mandatory"]
+
+  C -->|Cancel\n(at any stage)| P["🚫 Status: cancelled"]
+
+  style B fill:#dbeafe,stroke:#1a56db,color:#1e3a8a
+  style D fill:#fef9c3,stroke:#ca8a04,color:#713f12
+  style F fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+  style I fill:#dcfce7,stroke:#16a34a,color:#14532d
+  style J fill:#d1fae5,stroke:#059669,color:#064e3b
+  style L fill:#dbeafe,stroke:#1a56db,color:#1e3a8a
+  style N fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+  style O fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+  style P fill:#fef3c7,stroke:#d97706,color:#78350f
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note-card">
+        <div class="nt">Serial Lookup</div>
+        <p>Type any serial number to see its full history: which order it shipped on, which outlet received it, and all linked complaints.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Warranty Replacement</div>
+        <p>Approved warranty claims auto-create a zero-value sales order (no invoice). The replacement flows through the normal dispatch pipeline.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Full Audit Trail</div>
+        <p>Every action (assign, visit, test, decision) is logged with actor, timestamp, and status transition — nothing is ever lost.</p>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ─────────────────── FC 5 — FIELD SENSE ─────────────────── -->
+  <section class="section" id="fc5">
+    <div class="section-header">
+      <div class="section-num">5</div>
+      <div class="section-header-text">
+        <h2>Field Sales Agent Tracking (Field Sense)</h2>
+        <p>
+          Field Sense turns every sales agent's mobile device into a real-time tracking node.
+          Shifts start and close automatically. GPS trails are streamed live to the admin dashboard.
+          Outlet visits are logged with timestamps and location so managers get accurate field
+          activity reports without relying on manual check-ins.
+        </p>
+      </div>
+    </div>
+
+    <div class="diagram-wrap">
+      <div class="mermaid">
+flowchart TD
+  subgraph MOBILE ["📱 Sales Agent — Mobile App"]
+    MA([Agent opens app]) --> MB{Shift\nScheduled\ntoday?}
+    MB -->|Yes| MC["⏱ Shift auto-starts\n±2 min window\n(cron every minute)"]
+    MB -->|No shift| MD["Manual start\navailable"]
+    MC --> ME["📍 GPS tracking begins\nBackground location\nstreamed to server"]
+    ME --> MF["🏪 Agent visits outlet\nLogs visit in app\n(arrival + departure)"]
+    MF --> MG["📋 Activity continues\nthroughout day"]
+    MG --> MH["⏹ Shift auto-closes\n13:30 UTC / 19:00 IST\n(configurable)"]
+    MH --> MI["📊 Attendance record\nfinalized for the day"]
+  end
+
+  subgraph SERVER ["🖥 Backend — Real-time Processing"]
+    SA["📥 Location Ingested\n(RDP trail simplification\nremoves redundant GPS points)"]
+    SA --> SB["📡 SSE Broadcast\nto all connected\nadmin dashboards"]
+    SA --> SC["🗄 Location trail stored\nper shift"]
+  end
+
+  subgraph ADMIN ["🖥 Admin Dashboard — Web"]
+    AA["🗺 Live Map\nAll active agents shown\nwith real-time position"]
+    AA --> AB["👁 Manager sees:\n• Agent positions\n• Visit history\n• Trail playback"]
+    AB --> AC["📈 Reports:\n• Attendance\n• Shift history\n• Schedule vs actual\n• Visit counts per outlet"]
+  end
+
+  ME -->|HTTPS POST\nbatch GPS points| SA
+  SB -->|Server-Sent Events| AA
+
+  style MC fill:#dbeafe,stroke:#1a56db,color:#1e3a8a
+  style ME fill:#dcfce7,stroke:#16a34a,color:#14532d
+  style SA fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+  style AA fill:#fef9c3,stroke:#ca8a04,color:#713f12
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note-card">
+        <div class="nt">Auto Shift Management</div>
+        <p>Shifts start and close without any manual action. A cron job checks every minute; the ±2-min window handles clock drift on devices.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">GPS Trail Simplification</div>
+        <p>The Ramer-Douglas-Peucker (RDP) algorithm removes redundant GPS points before storage, cutting data volume without losing route fidelity.</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Live Map</div>
+        <p>Managers see all field agents on a real-time map the moment they open the dashboard — updates pushed via Server-Sent Events (SSE).</p>
+      </div>
+      <div class="note-card">
+        <div class="nt">Offline Resilience</div>
+        <p>The mobile app queues GPS points locally when offline and syncs the backlog automatically when connectivity is restored.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>Prepared by <strong>Syrex Engineering</strong> &nbsp;·&nbsp; Confidential — for client use only &nbsp;·&nbsp; 2026</p>
+</footer>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor:       '#dbeafe',
+      primaryTextColor:   '#1e3a8a',
+      primaryBorderColor: '#1a56db',
+      lineColor:          '#6b7280',
+      secondaryColor:     '#f0fdf4',
+      tertiaryColor:      '#fef9c3',
+      edgeLabelBackground: '#ffffff',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true }
+  });
+</script>
+</body>
+</html>

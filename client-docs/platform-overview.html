@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Syrex Platform — Overview &amp; Capabilities</title>
+  <style>
+    :root {
+      --brand:    #1a56db;
+      --brand-dk: #0e3fa3;
+      --brand-lt: #ebf0fe;
+      --green:    #16a34a;
+      --green-lt: #dcfce7;
+      --purple:   #7c3aed;
+      --purple-lt:#ede9fe;
+      --amber:    #d97706;
+      --amber-lt: #fef3c7;
+      --red:      #dc2626;
+      --red-lt:   #fee2e2;
+      --gray1:    #f9fafb;
+      --gray2:    #e5e7eb;
+      --gray3:    #6b7280;
+      --text:     #111827;
+      --white:    #ffffff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--gray1); color: var(--text); }
+
+    /* Cover */
+    .cover {
+      background: linear-gradient(135deg, #1a56db 0%, #0e3fa3 100%);
+      color: var(--white);
+      padding: 56px 64px 52px;
+    }
+    .cover .badge {
+      display: inline-block;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 20px;
+      font-size: 11px; font-weight: 600;
+      letter-spacing: .08em; text-transform: uppercase;
+      padding: 4px 14px; margin-bottom: 20px;
+    }
+    .cover h1 { font-size: 2.6rem; font-weight: 700; line-height: 1.2; }
+    .cover .sub { margin-top: 10px; font-size: 1.15rem; opacity: .8; font-weight: 400; }
+    .cover p  { margin-top: 18px; font-size: 1rem; opacity: .85; max-width: 680px; line-height: 1.75; }
+    .cover .meta { margin-top: 32px; font-size: .85rem; opacity: .65; }
+
+    /* Main */
+    main { max-width: 1000px; margin: 0 auto; padding: 52px 32px 80px; }
+
+    /* Section headings */
+    h2 {
+      font-size: 1.5rem; font-weight: 700; color: var(--text);
+      margin-bottom: 8px; margin-top: 56px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--brand-lt);
+    }
+    h2:first-child { margin-top: 0; }
+    h3 { font-size: 1.05rem; font-weight: 700; color: var(--brand-dk); margin: 20px 0 6px; }
+    p  { font-size: .94rem; line-height: 1.75; color: #374151; margin-bottom: 14px; }
+    p:last-child { margin-bottom: 0; }
+
+    /* Cards grid */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+      margin-top: 24px;
+    }
+    .card {
+      background: var(--white);
+      border: 1px solid var(--gray2);
+      border-radius: 12px;
+      padding: 22px 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.05);
+    }
+    .card .icon { font-size: 1.6rem; margin-bottom: 10px; }
+    .card h3   { margin: 0 0 8px; font-size: 1rem; color: var(--text); }
+    .card p    { font-size: .85rem; color: var(--gray3); line-height: 1.65; margin: 0; }
+    .card.blue  { border-left: 4px solid var(--brand); }
+    .card.green { border-left: 4px solid var(--green); }
+    .card.purple{ border-left: 4px solid var(--purple); }
+    .card.amber { border-left: 4px solid var(--amber); }
+    .card.red   { border-left: 4px solid var(--red); }
+
+    /* Highlight box */
+    .highlight {
+      background: var(--brand-lt);
+      border: 1px solid #c7d7f8;
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin: 20px 0;
+    }
+    .highlight p { color: #1e3a8a; font-size: .92rem; }
+
+    /* Status chip table */
+    .chip-table { width: 100%; border-collapse: collapse; margin: 18px 0; }
+    .chip-table th {
+      background: var(--gray1);
+      border: 1px solid var(--gray2);
+      padding: 9px 14px;
+      text-align: left;
+      font-size: .78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--gray3);
+    }
+    .chip-table td {
+      border: 1px solid var(--gray2);
+      padding: 9px 14px;
+      font-size: .86rem;
+      vertical-align: top;
+    }
+    .chip-table tr:nth-child(even) td { background: var(--gray1); }
+    .chip {
+      display: inline-block;
+      border-radius: 20px;
+      padding: 2px 10px;
+      font-size: .75rem;
+      font-weight: 600;
+    }
+    .chip-blue   { background: var(--brand-lt); color: var(--brand-dk); }
+    .chip-green  { background: var(--green-lt); color: #14532d; }
+    .chip-amber  { background: var(--amber-lt); color: #78350f; }
+    .chip-red    { background: var(--red-lt);   color: #7f1d1d; }
+    .chip-purple { background: var(--purple-lt); color: #3b0764; }
+    .chip-gray   { background: var(--gray2); color: #374151; }
+
+    /* Role table */
+    .role-table { width: 100%; border-collapse: collapse; margin: 18px 0; }
+    .role-table th {
+      background: var(--brand);
+      color: var(--white);
+      padding: 9px 14px;
+      text-align: left;
+      font-size: .82rem;
+      font-weight: 600;
+    }
+    .role-table td {
+      border: 1px solid var(--gray2);
+      padding: 9px 14px;
+      font-size: .86rem;
+      vertical-align: top;
+    }
+    .role-table tr:nth-child(even) td { background: var(--gray1); }
+
+    /* Callout */
+    .callout {
+      border-left: 4px solid var(--green);
+      background: var(--green-lt);
+      border-radius: 0 8px 8px 0;
+      padding: 14px 18px;
+      margin: 18px 0;
+    }
+    .callout p { color: #14532d; font-size: .88rem; margin: 0; }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      font-size: .8rem;
+      color: var(--gray3);
+      padding: 32px 0 48px;
+      border-top: 1px solid var(--gray2);
+      margin-top: 32px;
+    }
+    footer strong { color: var(--brand); }
+
+    @media (max-width: 700px) {
+      .cover { padding: 36px 20px; }
+      .cover h1 { font-size: 1.9rem; }
+      main { padding: 32px 14px 60px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Cover -->
+<div class="cover">
+  <div class="badge">Confidential — Client Reference</div>
+  <h1>Syrex Platform</h1>
+  <div class="sub">Overview &amp; Capabilities Document</div>
+  <p>
+    A complete guide to what the Syrex platform does, how its modules interconnect,
+    who uses each part, and what business problems each feature solves.
+    Use this alongside the Process Flowcharts document for a full picture.
+  </p>
+  <div class="meta">Version 1.0 &nbsp;·&nbsp; Syrex Engineering &nbsp;·&nbsp; 2026</div>
+</div>
+
+<main>
+
+  <!-- ═══ 1. WHAT IS SYREX ═══ -->
+  <h2>What is Syrex?</h2>
+  <p>
+    Syrex is an end-to-end distribution management platform built for
+    manufacturers and distributors who manage a network of trade outlets
+    (dealers, retailers, service partners). It replaces spreadsheets, WhatsApp
+    ordering, and disconnected ERPs with a single system that tracks every rupee
+    and every unit — from the moment an order is placed to after-sales service
+    and warranty resolution.
+  </p>
+  <p>
+    The platform has three access surfaces:
+  </p>
+
+  <div class="cards">
+    <div class="card blue">
+      <div class="icon">🖥️</div>
+      <h3>Web Admin Dashboard</h3>
+      <p>For internal teams — sales managers, warehouse staff, accounts, service managers. Full visibility and control over all operations.</p>
+    </div>
+    <div class="card green">
+      <div class="icon">📱</div>
+      <h3>Sales Mobile App</h3>
+      <p>For field sales agents. Place orders on the go, view order history, log outlet visits, and get real-time GPS tracked while in the field.</p>
+    </div>
+    <div class="card purple">
+      <div class="icon">🔌</div>
+      <h3>REST / tRPC API</h3>
+      <p>For integration with existing ERP, billing, or reporting tools. Every function available through the UI is also available as an API.</p>
+    </div>
+  </div>
+
+
+  <!-- ═══ 2. MODULES ═══ -->
+  <h2>Platform Modules</h2>
+  <p>
+    Syrex is built as a set of deeply integrated modules. Each module operates
+    independently but shares data with the others — so a serial number from a
+    dispatch automatically appears in the service module, and a payment
+    automatically closes the correct invoice.
+  </p>
+
+  <div class="cards">
+    <div class="card blue">
+      <div class="icon">📋</div>
+      <h3>Sales Orders</h3>
+      <p>Create, approve, hold, or reject orders. Full approval workflow with audit trail. Priority levels. Multi-line orders with product catalogue.</p>
+    </div>
+    <div class="card blue">
+      <div class="icon">📦</div>
+      <h3>Dispatch &amp; Logistics</h3>
+      <p>Plan and execute dispatches from warehouse to outlet. Track transporter, vehicle, LR number. Partial dispatch support. Serial number capture.</p>
+    </div>
+    <div class="card blue">
+      <div class="icon">🧾</div>
+      <h3>Invoicing</h3>
+      <p>Auto-generated on order approval. Configurable tax &amp; charge rates (GST, freight, etc.). PDF export. Full invoice editing with recalculation.</p>
+    </div>
+    <div class="card green">
+      <div class="icon">💳</div>
+      <h3>Payments &amp; AR</h3>
+      <p>Record outlet payments. Auto-allocate to oldest invoices. Track outstanding balances, AR aging reports, approval queues.</p>
+    </div>
+    <div class="card green">
+      <div class="icon">🏭</div>
+      <h3>Warehouse &amp; Inventory</h3>
+      <p>Real-time stock levels per warehouse. Goods receipt. Stock adjustment with reason codes. Automatic deduction on dispatch.</p>
+    </div>
+    <div class="card green">
+      <div class="icon">🏪</div>
+      <h3>Outlet Management</h3>
+      <p>Maintain outlet master data. Link outlets to warehouses. Track outstanding balance, order history, contacts, and credit status.</p>
+    </div>
+    <div class="card purple">
+      <div class="icon">🛠️</div>
+      <h3>Service &amp; Complaints</h3>
+      <p>End-to-end complaint lifecycle. Assignment to field engineers. Visit logging. Test reports. Warranty decisions. Full activity audit.</p>
+    </div>
+    <div class="card purple">
+      <div class="icon">🛡️</div>
+      <h3>Warranty Management</h3>
+      <p>Approve or reject warranty claims. Assign replacement serials. Auto-create fulfillment orders that flow through the standard dispatch pipeline.</p>
+    </div>
+    <div class="card amber">
+      <div class="icon">📍</div>
+      <h3>Field Sense (GPS Tracking)</h3>
+      <p>Real-time GPS tracking of field agents. Live admin map. Auto shift management. Visit logging. Attendance &amp; schedule reports.</p>
+    </div>
+    <div class="card amber">
+      <div class="icon">📊</div>
+      <h3>Reports &amp; Analytics</h3>
+      <p>Sales reports by outlet, period, product. AR aging. Dispatch summaries. Field visit counts. Shift attendance. All filterable and exportable.</p>
+    </div>
+    <div class="card red">
+      <div class="icon">🔐</div>
+      <h3>Role-Based Access Control</h3>
+      <p>Fine-grained permissions per module (read / write / manage / approve). Custom roles. Invitation-based onboarding. Audit log for every action.</p>
+    </div>
+    <div class="card red">
+      <div class="icon">📎</div>
+      <h3>Product Catalogue</h3>
+      <p>Manage brands, categories, and SKUs. Link products to prices. Products feed directly into order creation, dispatch, and service modules.</p>
+    </div>
+  </div>
+
+
+  <!-- ═══ 3. ORDER STATUS LIFECYCLE ═══ -->
+  <h2>Order Status Reference</h2>
+  <p>Each sales order passes through the following statuses. Every transition is recorded with the actor who made it and a timestamp.</p>
+
+  <table class="chip-table">
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Meaning</th>
+        <th>Who triggers it</th>
+        <th>What happens next</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="chip chip-blue">pending_approval</span></td>
+        <td>Order just created, awaiting review</td>
+        <td>Sales rep (web or mobile)</td>
+        <td>Manager reviews and approves / holds / rejects</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-amber">on_hold</span></td>
+        <td>Paused — additional information needed</td>
+        <td>Manager</td>
+        <td>Can be approved or rejected once resolved</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-green">approved</span></td>
+        <td>Approved — invoice auto-generated</td>
+        <td>Manager (orders:approve permission)</td>
+        <td>Enters dispatch queue</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-red">rejected</span></td>
+        <td>Declined — reason recorded</td>
+        <td>Manager</td>
+        <td>Terminal state — no further action</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-purple">partially_dispatched</span></td>
+        <td>Some lines shipped, others pending</td>
+        <td>System (auto on dispatch)</td>
+        <td>Remaining lines can be dispatched in batches</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-green">fully_dispatched</span></td>
+        <td>All ordered quantities shipped</td>
+        <td>System (auto on final dispatch)</td>
+        <td>Terminal state for the order</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-gray">cancelled</span></td>
+        <td>Order withdrawn</td>
+        <td>Any authorised user (orders:manage)</td>
+        <td>Cannot be cancelled once fully dispatched</td>
+      </tr>
+    </tbody>
+  </table>
+
+
+  <!-- ═══ 4. SERVICE STATUS LIFECYCLE ═══ -->
+  <h2>Service Complaint Status Reference</h2>
+  <p>Service complaints follow a strict linear workflow that cannot be skipped, ensuring proper documentation at every step.</p>
+
+  <table class="chip-table">
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Meaning</th>
+        <th>Entry action</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="chip chip-blue">raised</span></td>
+        <td>Complaint logged, not yet assigned</td>
+        <td>Internal user creates complaint with serial numbers</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-amber">assigned</span></td>
+        <td>ASI / Service Engineer linked</td>
+        <td>Manager assigns to field team</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-purple">visit</span></td>
+        <td>Field engineer is on site</td>
+        <td>Engineer logs visit from mobile or web</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-purple">test_result_submitted</span></td>
+        <td>Engineer submitted test report &amp; verdict</td>
+        <td>Engineer submits structured test report</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-amber">retest_requested</span></td>
+        <td>First test inconclusive — another visit needed</td>
+        <td>Manager requests retest</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-green">resolved</span></td>
+        <td>Complaint closed — issue fixed or warranty decision made</td>
+        <td>Tested OK close or warranty rejection</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-blue">telephonic_closure</span></td>
+        <td>Resolved over the phone without site visit</td>
+        <td>Manager closes with mandatory reason note</td>
+      </tr>
+      <tr>
+        <td><span class="chip chip-gray">cancelled</span></td>
+        <td>Complaint withdrawn / duplicate</td>
+        <td>Authorised user (service:cancel permission)</td>
+      </tr>
+    </tbody>
+  </table>
+
+
+  <!-- ═══ 5. WHO USES WHAT ═══ -->
+  <h2>Role &amp; Access Overview</h2>
+  <p>Access is controlled through custom roles. Each role has a set of permissions per module. Below is the typical role mapping for a distribution company.</p>
+
+  <table class="role-table">
+    <thead>
+      <tr>
+        <th>Role</th>
+        <th>Primary access</th>
+        <th>Typical user</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Admin</strong></td>
+        <td>Full access to all modules (wildcard permission)</td>
+        <td>Business owner, IT manager</td>
+      </tr>
+      <tr>
+        <td><strong>Sales Manager</strong></td>
+        <td>Orders (read + write + approve), Outlets, Invoices, Reports</td>
+        <td>Regional / zonal sales head</td>
+      </tr>
+      <tr>
+        <td><strong>Sales Rep</strong></td>
+        <td>Orders (write own), Catalogue (read), Field Sense</td>
+        <td>Field sales executive</td>
+      </tr>
+      <tr>
+        <td><strong>Warehouse Manager</strong></td>
+        <td>Inventory (read + write), Dispatches (write), Outlets (read)</td>
+        <td>Warehouse in-charge</td>
+      </tr>
+      <tr>
+        <td><strong>Accounts</strong></td>
+        <td>Invoices, Payments, AR reports, Outlets (read)</td>
+        <td>Finance / collections team</td>
+      </tr>
+      <tr>
+        <td><strong>Service Manager</strong></td>
+        <td>Service complaints (manage + assign + approve + cancel)</td>
+        <td>After-sales service head</td>
+      </tr>
+      <tr>
+        <td><strong>Service Engineer</strong></td>
+        <td>Service complaints (read + write), Serial lookup</td>
+        <td>Field service technician</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <p><strong>Custom roles:</strong> Every permission can be toggled individually. You can create roles like "read-only auditor", "outlet-scoped sales rep" (sees only their outlet's data), or "dispatch-only warehouse assistant" to match your exact org structure.</p>
+  </div>
+
+
+  <!-- ═══ 6. KEY BUSINESS RULES ═══ -->
+  <h2>Key Business Rules &amp; Safeguards</h2>
+
+  <h3>Orders</h3>
+  <p>An order cannot be created for an inactive outlet, or for an outlet with no assigned warehouse. Unit prices and quantities are locked at order creation time — they cannot be changed after the order is submitted.</p>
+
+  <h3>Invoices</h3>
+  <p>Invoices are auto-generated on approval and cannot be deleted. Tax rates applied at the time of invoice creation are stored immutably — a future rate change does not retroactively alter existing invoices. Charges can be manually adjusted by an authorised user (invoices:write permission).</p>
+
+  <h3>Dispatch</h3>
+  <p>A dispatch cannot exceed the remaining ordered quantity on any line. Stock is deducted atomically — if the warehouse has insufficient stock for even one line in a dispatch batch, the entire dispatch is rejected. Idempotency keys prevent duplicate dispatches from mobile or retry scenarios.</p>
+
+  <h3>Payments</h3>
+  <p>A payment amount must be greater than zero and must reference a valid outlet. Allocation is automatic (FIFO by invoice date) and cannot result in negative amounts due. The outlet's outstanding balance is always recalculated after every payment.</p>
+
+  <h3>Service</h3>
+  <p>Only internal users (not portal/outlet users) can raise complaints. The complaint workflow is strictly sequential — you cannot skip from "raised" to "test_result_submitted" without going through "assigned" and "visit". A serial number can only be used as a replacement serial in one complaint at a time.</p>
+
+  <h3>Warranty Replacement</h3>
+  <p>A warranty fulfillment order is created at zero value and skips invoice generation. It flows through the normal dispatch pipeline like any other order.</p>
+
+
+  <!-- ═══ 7. DATA INTEGRITY ═══ -->
+  <h2>Data Integrity &amp; Audit</h2>
+  <p>
+    Every significant action in the system is written to an immutable audit log: who did it,
+    when, what changed, and what the previous state was. This covers order transitions,
+    dispatch creation, payments, and all service complaint actions.
+  </p>
+  <p>
+    The service module additionally maintains a per-serial-number event ledger — every dispatch,
+    complaint creation and replacement assignment is recorded against the serial number.
+    This gives you a complete ownership and warranty history for any individual unit, traceable
+    across all outlets.
+  </p>
+
+  <div class="highlight">
+    <p>
+      <strong>Nothing is physically deleted.</strong> Orders, complaints, and invoices use
+      status-based soft lifecycle management. Outlets and products use an
+      <code>isActive</code> flag. Historical data is always available for reporting and audits.
+    </p>
+  </div>
+
+
+  <!-- ═══ 8. INTEGRATION ═══ -->
+  <h2>Integration &amp; Extensibility</h2>
+  <p>
+    Every feature in the platform is exposed as a typed API endpoint (tRPC over HTTP). This
+    means any external system — existing ERP, custom reporting tool, third-party logistics
+    tracker, or data warehouse — can read or write data through the same API the web dashboard uses.
+  </p>
+
+  <div class="cards">
+    <div class="card blue">
+      <div class="icon">🔗</div>
+      <h3>API-First Design</h3>
+      <p>All operations available via REST/tRPC. Suitable for ERP integration, automated workflows, and data exports.</p>
+    </div>
+    <div class="card green">
+      <div class="icon">📡</div>
+      <h3>Real-Time Events (SSE)</h3>
+      <p>Live GPS location stream. Any connected client receives instant updates without polling.</p>
+    </div>
+    <div class="card amber">
+      <div class="icon">🔒</div>
+      <h3>Token-Based Auth</h3>
+      <p>Bearer token authentication with automatic refresh. Role and permission context carried on every request.</p>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <p>Prepared by <strong>Syrex Engineering</strong> &nbsp;·&nbsp; Confidential — for client use only &nbsp;·&nbsp; 2026</p>
+</footer>
+
+</body>
+</html>
