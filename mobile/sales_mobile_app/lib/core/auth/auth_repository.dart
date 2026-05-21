@@ -35,6 +35,7 @@ class AuthRepository {
               as List<dynamic>)
           .map((e) => e.toString())
           .toList(),
+      isFieldEnabled: (result['user']?['isFieldEnabled'] as bool?) ?? false,
       managedWarehouseId: result['user']?['managedWarehouseId']?.toString(),
       outletId: result['user']?['outletId']?.toString(),
     );
@@ -58,6 +59,7 @@ class AuthRepository {
           ((result['role']?['permissions'] ?? <dynamic>[]) as List<dynamic>)
               .map((e) => e.toString())
               .toList(),
+      isFieldEnabled: (result['isFieldEnabled'] as bool?) ?? false,
       managedWarehouseId: result['managedWarehouseId']?.toString(),
       outletId: result['outletId']?.toString(),
     );

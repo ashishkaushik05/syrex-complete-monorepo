@@ -30,6 +30,7 @@ final canUseFieldProvider = Provider<bool>((ref) {
   final session = ref.watch(sessionControllerProvider);
   final user = session.user;
   if (user == null) return false;
+  if (!user.isFieldEnabled) return false;
   final service = ref.watch(permissionServiceProvider);
   return service.can(user, "field:read") || service.can(user, "field:write");
 });

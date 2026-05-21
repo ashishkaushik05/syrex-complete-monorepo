@@ -15,10 +15,13 @@ import '../../modules/field/screens/field_home_page.dart';
 import '../../modules/field/screens/report_stop_page.dart';
 import '../../modules/invoices/invoice_detail_page.dart';
 import '../../modules/invoices/invoice_history_page.dart';
+import '../../modules/field/screens/schedule_view_page.dart';
 import '../../modules/orders/create_order_page.dart';
 import '../../modules/orders/dispatch_detail_page.dart';
 import '../../modules/orders/order_detail_page.dart';
 import '../../modules/orders/orders_history_page.dart';
+import '../../modules/profile/profile_page.dart';
+import '../../modules/settings/settings_page.dart';
 import 'app_shell.dart';
 
 final appRouterProvider = Provider<GoRouter>((ref) {
@@ -110,6 +113,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(path: 'stop', builder: (_, __) => const ReportStopPage()),
                   GoRoute(path: 'attendance', builder: (_, __) => const AttendancePage()),
                   GoRoute(path: 'map', builder: (_, __) => const AgentMapPage()),
+                  GoRoute(path: 'schedule', builder: (_, __) => const ScheduleViewPage()),
                 ],
               ),
             ],
@@ -130,7 +134,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           StatefulShellBranch(
             routes: [
-              GoRoute(path: '/more', builder: (_, __) => const MorePage()),
+              GoRoute(
+                path: '/more',
+                builder: (_, __) => const MorePage(),
+                routes: [
+                  GoRoute(path: 'profile', builder: (_, __) => const ProfilePage()),
+                  GoRoute(path: 'settings', builder: (_, __) => const SettingsPage()),
+                ],
+              ),
             ],
           ),
         ],

@@ -22,11 +22,11 @@ class OutletSummaryRow {
 final _dashboardProvider = FutureProvider.autoDispose<List<OutletSummaryRow>>((ref) async {
   final client = ref.watch(salesClientProvider);
   final outlets = await client.outlets();
-  final invoices = await client.invoices();
+  final invoiceResult = await client.invoices();
 
   final invoiceCountByOutlet = <String, int>{};
   final outstandingByOutlet = <String, double>{};
-  for (final invoice in invoices) {
+  for (final invoice in invoiceResult.items) {
     final due = double.tryParse(invoice.amountDue) ?? 0;
     if (due <= 0) continue;
     invoiceCountByOutlet.update(invoice.outletId, (v) => v + 1, ifAbsent: () => 1);

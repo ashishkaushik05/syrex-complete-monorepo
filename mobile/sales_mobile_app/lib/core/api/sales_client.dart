@@ -346,16 +346,21 @@ class SalesClient {
         .toList();
   }
 
-  Future<PagedResult<SalesOrder>> myOrders({String? status, String? q}) async {
+  Future<PagedResult<SalesOrder>> myOrders({
+    String? status,
+    String? q,
+    String? cursor,
+  }) async {
     final res = await _dio.get(
       '/orders.list',
       queryParameters: {
         'input': jsonEncode({
           'json': {
-            'limit': 50,
+            'limit': 25,
             'mineOnly': true,
             if (status != null) 'status': status,
             if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+            if (cursor != null) 'cursor': cursor,
           }
         })
       },
@@ -405,23 +410,31 @@ class SalesClient {
     return SalesOrder.fromJson(_extract(res.data));
   }
 
-  Future<List<SalesInvoice>> invoices({String? outletId, String? q}) async {
+  Future<PagedResult<SalesInvoice>> invoices({
+    String? outletId,
+    String? q,
+    String? cursor,
+  }) async {
     final res = await _dio.get(
       '/invoices.list',
       queryParameters: {
         'input': jsonEncode({
           'json': {
-            'limit': 100,
+            'limit': 25,
             if (outletId != null && outletId.isNotEmpty) 'outletId': outletId,
             if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
+            if (cursor != null) 'cursor': cursor,
           }
         })
       },
     );
     final data = _extract(res.data);
-    return (data['items'] as List<dynamic>)
-        .map((e) => SalesInvoice.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return PagedResult(
+      items: (data['items'] as List<dynamic>)
+          .map((e) => SalesInvoice.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      nextCursor: data['nextCursor'] as String?,
+    );
   }
 
   Future<SalesInvoiceDetail> invoiceDetail(String id) async {

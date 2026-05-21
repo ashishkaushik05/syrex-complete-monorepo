@@ -42,6 +42,7 @@ type Stop = {
 
 type TrailMeta = {
   points: TrailPoint[]
+  rawPointCount: number
   totalDistanceMeters: number
   durationSeconds: number | null
   startedAt: string | null
@@ -164,8 +165,25 @@ export function FieldSenseLiveMapPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const trailRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const selectedAgentRef = useRef<AgentWithDetail | null>(null)
 
   const colorMap = useRef<Map<string, string>>(new Map())
+
+  // Keep ref in sync so the SSE callback can read latest selected agent
+  useEffect(() => { selectedAgentRef.current = selectedAgent }, [selectedAgent])
+
+  const refreshSelectedTrail = (shiftId: string) => {
+    if (trailRefreshTimer.current) clearTimeout(trailRefreshTimer.current)
+    trailRefreshTimer.current = setTimeout(async () => {
+      try {
+        const trailMeta = await trpcQuery<TrailMeta>('fieldLocation.trail', { shiftId, simplifyTolerance: 5 })
+        setSelectedAgent((prev) =>
+          prev?.shiftId === shiftId ? { ...prev, trail: trailMeta } : prev,
+        )
+      } catch { /* ignore — stale trail is better than crashing */ }
+    }, 500)
+  }
 
   useEffect(() => {
     setLoading(true)
@@ -202,6 +220,10 @@ export function FieldSenseLiveMapPage() {
             : a,
         ),
       )
+      const sel = selectedAgentRef.current
+      if (sel && sel.agentId === payload.agentId) {
+        refreshSelectedTrail(sel.shiftId)
+      }
     }, controller.signal)
 
     return () => { controller.abort() }
@@ -211,7 +233,7 @@ export function FieldSenseLiveMapPage() {
     setSelectedAgent({ ...agent, trailLoading: true })
     try {
       const [trailMeta, visitsData, stopsData] = await Promise.all([
-        trpcQuery<TrailMeta>('fieldLocation.trail', { shiftId: agent.shiftId }),
+        trpcQuery<TrailMeta>('fieldLocation.trail', { shiftId: agent.shiftId, simplifyTolerance: 5 }),
         trpcQuery<Visit[]>('fieldVisits.forShift', { shiftId: agent.shiftId }),
         trpcQuery<Stop[]>('fieldStops.list', { shiftId: agent.shiftId, limit: 100 }),
       ])
@@ -434,6 +456,11 @@ export function FieldSenseLiveMapPage() {
                     <Navigation className="ml-auto h-3.5 w-3.5 text-cyan-500" />
                     <span className="text-xs text-slate-600">
                       {selectedAgent.trail.points.length} trail pts
+                      {selectedAgent.trail.rawPointCount > selectedAgent.trail.points.length && (
+                        <span className="ml-1 text-slate-400">
+                          ({selectedAgent.trail.rawPointCount} raw)
+                        </span>
+                      )}
                     </span>
                   </div>
                 </>

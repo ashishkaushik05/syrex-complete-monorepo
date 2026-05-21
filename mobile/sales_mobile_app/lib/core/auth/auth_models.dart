@@ -4,6 +4,7 @@ class AuthUser {
     required this.email,
     required this.role,
     required this.permissions,
+    this.isFieldEnabled = false,
     this.managedWarehouseId,
     this.outletId,
   });
@@ -12,6 +13,7 @@ class AuthUser {
   final String email;
   final String role;
   final List<String> permissions;
+  final bool isFieldEnabled;
   final String? managedWarehouseId;
   final String? outletId;
 }

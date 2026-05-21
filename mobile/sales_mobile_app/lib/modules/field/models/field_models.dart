@@ -178,6 +178,39 @@ class AgentLite {
       );
 }
 
+class ShiftSchedule {
+  const ShiftSchedule({
+    required this.id,
+    required this.userId,
+    required this.orgId,
+    required this.autoStartTime,
+    required this.timezone,
+    required this.isEnabled,
+    required this.updatedAt,
+    this.updatedBy,
+  });
+
+  final String id;
+  final String userId;
+  final String orgId;
+  final String autoStartTime;
+  final String timezone;
+  final bool isEnabled;
+  final String updatedAt;
+  final String? updatedBy;
+
+  factory ShiftSchedule.fromJson(Map<String, dynamic> json) => ShiftSchedule(
+        id: json['id'] as String,
+        userId: json['userId'] as String,
+        orgId: json['orgId'] as String,
+        autoStartTime: json['autoStartTime'] as String,
+        timezone: json['timezone'] as String,
+        isEnabled: json['isEnabled'] as bool,
+        updatedAt: json['updatedAt'] as String,
+        updatedBy: json['updatedBy'] as String?,
+      );
+}
+
 class TrailPoint {
   const TrailPoint({
     required this.lat,
@@ -199,11 +232,13 @@ class TrailPoint {
 class TrailSnapshot {
   const TrailSnapshot({
     required this.points,
+    required this.rawPointCount,
     required this.totalDistanceMeters,
     required this.durationSeconds,
   });
 
   final List<TrailPoint> points;
+  final int rawPointCount;
   final int totalDistanceMeters;
   final int? durationSeconds;
 
@@ -211,6 +246,7 @@ class TrailSnapshot {
         points: (json['points'] as List<dynamic>)
             .map((e) => TrailPoint.fromJson(e as Map<String, dynamic>))
             .toList(),
+        rawPointCount: (json['rawPointCount'] as num?)?.toInt() ?? 0,
         totalDistanceMeters: (json['totalDistanceMeters'] as num?)?.toInt() ?? 0,
         durationSeconds: (json['durationSeconds'] as num?)?.toInt(),
       );

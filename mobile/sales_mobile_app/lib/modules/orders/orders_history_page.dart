@@ -21,13 +21,103 @@ class _FilterState {
 
   final String? status;
   final String? q;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _FilterState && other.status == status && other.q == q;
+
+  @override
+  int get hashCode => Object.hash(status, q);
 }
 
-final _filterProvider = StateProvider.autoDispose<_FilterState>((_) => const _FilterState());
+class _OrdersListState {
+  const _OrdersListState({
+    this.items = const [],
+    this.nextCursor,
+    this.isLoading = false,
+    this.isLoadingMore = false,
+    this.error,
+  });
 
-final _ordersProvider = FutureProvider.autoDispose.family<PagedResult<SalesOrder>, _FilterState>((ref, filter) async {
-  return ref.watch(salesClientProvider).myOrders(status: filter.status, q: filter.q);
-});
+  final List<SalesOrder> items;
+  final String? nextCursor;
+  final bool isLoading;
+  final bool isLoadingMore;
+  final String? error;
+
+  _OrdersListState copyWith({
+    List<SalesOrder>? items,
+    String? nextCursor,
+    bool clearCursor = false,
+    bool? isLoading,
+    bool? isLoadingMore,
+    String? error,
+    bool clearError = false,
+  }) =>
+      _OrdersListState(
+        items: items ?? this.items,
+        nextCursor: clearCursor ? null : (nextCursor ?? this.nextCursor),
+        isLoading: isLoading ?? this.isLoading,
+        isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+        error: clearError ? null : (error ?? this.error),
+      );
+}
+
+class _OrdersNotifier extends AutoDisposeFamilyNotifier<_OrdersListState, _FilterState> {
+  @override
+  _OrdersListState build(_FilterState arg) {
+    _fetch();
+    return const _OrdersListState(isLoading: true);
+  }
+
+  Future<void> _fetch() async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      final result = await ref
+          .read(salesClientProvider)
+          .myOrders(status: arg.status, q: arg.q);
+      state = state.copyWith(
+        items: result.items,
+        nextCursor: result.nextCursor,
+        clearCursor: result.nextCursor == null,
+        isLoading: false,
+      );
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: e.toString());
+    }
+  }
+
+  Future<void> loadMore() async {
+    if (state.nextCursor == null || state.isLoadingMore) return;
+    final cursor = state.nextCursor;
+    state = state.copyWith(isLoadingMore: true);
+    try {
+      final result = await ref
+          .read(salesClientProvider)
+          .myOrders(status: arg.status, q: arg.q, cursor: cursor);
+      state = state.copyWith(
+        items: [...state.items, ...result.items],
+        nextCursor: result.nextCursor,
+        clearCursor: result.nextCursor == null,
+        isLoadingMore: false,
+      );
+    } catch (_) {
+      state = state.copyWith(isLoadingMore: false);
+    }
+  }
+
+  Future<void> refresh() async {
+    state = const _OrdersListState(isLoading: true);
+    await _fetch();
+  }
+}
+
+final _ordersNotifierProvider = NotifierProvider.autoDispose
+    .family<_OrdersNotifier, _OrdersListState, _FilterState>(
+  _OrdersNotifier.new,
+);
+
+final _filterProvider = StateProvider.autoDispose<_FilterState>((_) => const _FilterState());
 
 class OrdersHistoryPage extends ConsumerStatefulWidget {
   const OrdersHistoryPage({super.key});
@@ -38,22 +128,38 @@ class OrdersHistoryPage extends ConsumerStatefulWidget {
 
 class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
   final _searchCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollCtrl.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 200) {
+      final filter = ref.read(_filterProvider);
+      ref.read(_ordersNotifierProvider(filter).notifier).loadMore();
+    }
+  }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final filter = ref.watch(_filterProvider);
-    final orders = ref.watch(_ordersProvider(filter));
+    final state = ref.watch(_ordersNotifierProvider(filter));
 
     return PremiumGradientBackground(
       child: RefreshIndicator(
-        onRefresh: () => ref.refresh(_ordersProvider(filter).future),
+        onRefresh: () => ref.read(_ordersNotifierProvider(filter).notifier).refresh(),
         child: CustomScrollView(
+          controller: _scrollCtrl,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverToBoxAdapter(
@@ -62,7 +168,11 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Orders', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppPalette.ink)),
+                    const Text(
+                      'Orders',
+                      style: TextStyle(
+                          fontSize: 28, fontWeight: FontWeight.w800, color: AppPalette.ink),
+                    ),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _searchCtrl,
@@ -75,7 +185,8 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                                 icon: const Icon(Icons.clear),
                                 onPressed: () {
                                   _searchCtrl.clear();
-                                  ref.read(_filterProvider.notifier).state = _FilterState(status: filter.status);
+                                  ref.read(_filterProvider.notifier).state =
+                                      _FilterState(status: filter.status);
                                   setState(() {});
                                 },
                               ),
@@ -97,13 +208,15 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                           _StatusFilterChip(
                             label: 'All',
                             selected: filter.status == null,
-                            onTap: () => ref.read(_filterProvider.notifier).state = _FilterState(q: filter.q),
+                            onTap: () => ref.read(_filterProvider.notifier).state =
+                                _FilterState(q: filter.q),
                           ),
                           ..._statuses.map(
                             (status) => _StatusFilterChip(
                               label: _label(status),
                               selected: filter.status == status,
-                              onTap: () => ref.read(_filterProvider.notifier).state = _FilterState(status: status, q: filter.q),
+                              onTap: () => ref.read(_filterProvider.notifier).state =
+                                  _FilterState(status: status, q: filter.q),
                             ),
                           ),
                         ],
@@ -128,14 +241,15 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                 ),
               ),
             ),
-            orders.when(
-              loading: () => const SliverToBoxAdapter(
+            if (state.isLoading)
+              const SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.all(24),
                   child: Center(child: CircularProgressIndicator()),
                 ),
-              ),
-              error: (_, __) => const SliverToBoxAdapter(
+              )
+            else if (state.error != null)
+              const SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.all(24),
                   child: EmptyStateView(
@@ -144,31 +258,47 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                     icon: Icons.sync_problem,
                   ),
                 ),
-              ),
-              data: (result) {
-                if (result.items.isEmpty) {
-                  return const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: EmptyStateView(
-                        title: 'No orders found',
-                        subtitle: 'Try removing filters or create a new order.',
-                        icon: Icons.inventory_2_outlined,
-                      ),
-                    ),
-                  );
-                }
-
-                return SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                  sliver: SliverList.separated(
-                    itemCount: result.items.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) => _OrderCard(order: result.items[i]),
+              )
+            else if (state.items.isEmpty)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: EmptyStateView(
+                    title: 'No orders found',
+                    subtitle: 'Try removing filters or create a new order.',
+                    icon: Icons.inventory_2_outlined,
                   ),
-                );
-              },
-            ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                sliver: SliverList.separated(
+                  itemCount: state.items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) => _OrderCard(order: state.items[i]),
+                ),
+              ),
+            if (state.isLoadingMore)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              )
+            else if (!state.isLoading && state.nextCursor != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                  child: OutlinedButton(
+                    onPressed: () =>
+                        ref.read(_ordersNotifierProvider(filter).notifier).loadMore(),
+                    child: const Text('Load More'),
+                  ),
+                ),
+              )
+            else
+              const SliverToBoxAdapter(child: SizedBox(height: 100)),
           ],
         ),
       ),
@@ -177,7 +307,8 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
 }
 
 class _StatusFilterChip extends StatelessWidget {
-  const _StatusFilterChip({required this.label, required this.selected, required this.onTap});
+  const _StatusFilterChip(
+      {required this.label, required this.selected, required this.onTap});
 
   final String label;
   final bool selected;
@@ -205,13 +336,15 @@ class _OrderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final date = DateTime.tryParse(order.orderDate);
-    final dateStr = date != null ? '${date.day}/${date.month}/${date.year}' : order.orderDate;
+    final dateStr =
+        date != null ? '${date.day}/${date.month}/${date.year}' : order.orderDate;
 
     return PremiumCard(
       margin: const EdgeInsets.only(bottom: 0),
       child: ListTile(
         contentPadding: EdgeInsets.zero,
-        title: Text(order.orderNumber, style: const TextStyle(fontWeight: FontWeight.w700)),
+        title: Text(order.orderNumber,
+            style: const TextStyle(fontWeight: FontWeight.w700)),
         subtitle: Text(dateStr),
         trailing: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -219,7 +352,8 @@ class _OrderCard extends StatelessWidget {
           children: [
             StatusChip(status: order.status),
             const SizedBox(height: 4),
-            Text('₹${order.totalValue}', style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text('₹${order.totalValue}',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
           ],
         ),
         onTap: () => context.push('/orders/${order.id}'),

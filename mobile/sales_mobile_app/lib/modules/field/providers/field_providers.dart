@@ -60,3 +60,7 @@ final trailForShiftProvider =
 final agentsProvider = FutureProvider.autoDispose<List<AgentLite>>((ref) async {
   return ref.read(fieldRepositoryProvider).listAgents();
 });
+
+final myScheduleProvider = FutureProvider.autoDispose<ShiftSchedule?>((ref) async {
+  return ref.read(fieldRepositoryProvider).getMySchedule();
+});

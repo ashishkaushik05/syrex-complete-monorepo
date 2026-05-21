@@ -17,7 +17,12 @@ class FieldPermissionService {
       );
     }
 
-    // Step 1: fine location (foreground).
+    // Step 1: notification permission (Android 13+, required for foreground service).
+    if (Platform.isAndroid) {
+      await Permission.notification.request();
+    }
+
+    // Step 2: fine location (foreground).
     final locationStatus = await Permission.location.request();
     if (!locationStatus.isGranted) {
       return FieldPermissionStatus(

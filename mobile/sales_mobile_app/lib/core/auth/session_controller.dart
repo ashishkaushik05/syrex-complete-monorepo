@@ -77,6 +77,14 @@ class SessionController extends Notifier<SessionState> {
     }
   }
 
+  Future<void> refreshSession() async {
+    final authRepository = ref.read(authRepositoryProvider);
+    try {
+      final user = await authRepository.me();
+      state = state.copyWith(user: user);
+    } catch (_) {}
+  }
+
   Future<void> logout() async {
     final authRepository = ref.read(authRepositoryProvider);
     await authRepository.logout();

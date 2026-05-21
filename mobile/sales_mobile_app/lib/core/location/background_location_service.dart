@@ -76,7 +76,7 @@ void _onStart(ServiceInstance service) async {
   Geolocator.getPositionStream(
     locationSettings: const LocationSettings(
       accuracy: LocationAccuracy.high,
-      distanceFilter: 10, // metres between updates
+      distanceFilter: 0,
     ),
   ).listen((pos) {
     buffer.add({
@@ -90,7 +90,7 @@ void _onStart(ServiceInstance service) async {
   // Flush every 10 seconds. Reads the token fresh each time so token
   // refreshes in the main isolate are picked up automatically.
   int consecutiveBadShift = 0;
-  Timer.periodic(const Duration(seconds: 10), (_) async {
+  Timer.periodic(const Duration(seconds: 5), (_) async {
     if (buffer.isEmpty) return;
 
     final token = await storage.read(key: 'access_token') ?? '';

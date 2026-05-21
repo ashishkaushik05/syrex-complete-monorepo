@@ -16,7 +16,10 @@ class MorePage extends ConsumerWidget {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 90),
         children: [
-          const Text('More', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppPalette.ink)),
+          const Text(
+            'More',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppPalette.ink),
+          ),
           const SizedBox(height: 6),
           Text(user?.email ?? '', style: const TextStyle(color: Color(0xFF5F6E7B))),
           const SizedBox(height: 14),
@@ -30,16 +33,18 @@ class MorePage extends ConsumerWidget {
                   onTap: () => context.push('/catalog'),
                 ),
                 const Divider(height: 1),
-                const _ActionTile(
+                _ActionTile(
                   icon: Icons.person_outline,
                   label: 'Profile',
                   subtitle: 'Role, permissions and session',
+                  onTap: () => context.push('/more/profile'),
                 ),
                 const Divider(height: 1),
-                const _ActionTile(
+                _ActionTile(
                   icon: Icons.settings_outlined,
                   label: 'App Settings',
-                  subtitle: 'Notifications and diagnostics',
+                  subtitle: 'API info, environment and diagnostics',
+                  onTap: () => context.push('/more/settings'),
                 ),
               ],
             ),
@@ -62,7 +67,12 @@ class MorePage extends ConsumerWidget {
 }
 
 class _ActionTile extends StatelessWidget {
-  const _ActionTile({required this.icon, required this.label, required this.subtitle, this.onTap});
+  const _ActionTile({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    this.onTap,
+  });
 
   final IconData icon;
   final String label;

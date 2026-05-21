@@ -143,7 +143,7 @@ class _AgentMapPageState extends ConsumerState<AgentMapPage> {
 
                           return FlutterMap(
                             mapController: _mapController,
-                            options: MapOptions(
+                            options: const MapOptions(
                               initialCenter: _indiaCenter,
                               initialZoom: 5,
                             ),
@@ -234,6 +234,11 @@ class _AgentMapPageState extends ConsumerState<AgentMapPage> {
                             Text(
                               'Distance: ${(trail.totalDistanceMeters / 1000).toStringAsFixed(2)} km',
                             ),
+                            Text(
+                              'Points: ${trail.points.length} shown / ${trail.rawPointCount} received',
+                              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+
                             const SizedBox(height: 8),
                             Row(
                               children: [

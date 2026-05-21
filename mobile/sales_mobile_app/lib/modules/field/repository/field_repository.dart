@@ -264,12 +264,40 @@ class FieldRepository {
         .toList();
   }
 
+  Future<ShiftSchedule?> getMySchedule() async {
+    final res = await _dio.get('/fieldSchedule.me', queryParameters: {
+      'input': jsonEncode({'json': {}}),
+    });
+    final inner = _extractRaw(res.data);
+    if (inner == null) return null;
+    return ShiftSchedule.fromJson(inner as Map<String, dynamic>);
+  }
+
+  Future<ShiftSchedule> upsertMySchedule({
+    required String autoStartTime,
+    String timezone = 'Asia/Kolkata',
+    bool isEnabled = true,
+  }) async {
+    final res = await _dio.post(
+      '/fieldSchedule.upsertMe',
+      data: jsonEncode({
+        'json': {
+          'autoStartTime': autoStartTime,
+          'timezone': timezone,
+          'isEnabled': isEnabled,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+    return ShiftSchedule.fromJson(_extract(res.data));
+  }
+
   Future<TrailSnapshot> trailForShift(String shiftId) async {
     final res = await _dio.get('/fieldLocation.trail', queryParameters: {
       'input': jsonEncode({
         'json': {
           'shiftId': shiftId,
-          'simplifyTolerance': 15,
+          'simplifyTolerance': 5,
           'maxPoints': 1000,
         }
       }),
