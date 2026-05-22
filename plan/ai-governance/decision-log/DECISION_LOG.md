@@ -4384,3 +4384,38 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Conflicting Implementations: `fieldLocation.ingest compatibility path and fieldLocation.ingestV2 primary path intentionally coexist during mobile migration.`
 - Next Cleanup Owner: `repo owner/codex after mobile migration validates V2 in production`
 - Owner Timestamp: `codex @ 2026-05-20T11:19:32Z`
+
+---
+
+## DEC-20260522-001
+- Decision ID: `DEC-20260522-001`
+- Model: `claude-code`
+- Branch/Commit: `master@709e844`
+- Task: `Configure Sales Mobile Field Sense API usage consistently for production VPS`
+- Decision: `Make only mobile-side consistency changes: keep the existing production tRPC default URL, add APP_ORG_ID/x-org-id propagation to the background Field Sense location uploader, and replace the generic Android launcher label with a professional Field Sense label.`
+- Rationale: `Backend Field Sense routers and production download hosting were already present; the remaining safe gap was that the background uploader bypassed the main API client's org-context header behavior while using the same base URL.`
+- Alternatives Considered:
+  - `Hardcode an organization id` rejected because builds should pass org context via APP_ORG_ID without embedding tenant-specific constants in source.
+  - `Change backend Field Sense routes` deferred/rejected because discovery did not show a backend registration/configuration gap.
+  - `Refactor all mobile API clients` rejected as too broad for this minimal configuration pass.
+- Scope:
+  - `mobile/sales_mobile_app/lib/core/location/background_location_service.dart`
+  - `mobile/sales_mobile_app/android/app/src/main/AndroidManifest.xml`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Confirmed sales mobile default API_BASE_URL remains https://strideit.syrexbatteries.in/trpc in AppConfig; no source URL change was required.`
+  - Done: `Updated the background Field Sense location service to construct Dio from AppConfig and include x-org-id when APP_ORG_ID is provided, matching the main API client behavior without hardcoding an org id.`
+  - Done: `Changed the Android launcher label from sales_mobile_app to Syrex Field Sense.`
+  - Done: `Confirmed Field Sense routers are registered in backend/src/trpc/router.ts; no backend code/config changes were needed in this pass.`
+  - Done: `Ran focused Flutter analysis successfully for background_location_service.dart; full app analyze was attempted and is blocked only by pre-existing info-level deprecation findings outside this change.`
+  - Not Done: `No APK build, publishing, server file update, or /root/decisions/logs server log update was performed because this pass made no server-side changes and final build/link is delegated separately.`
+- Impact/Risk:
+  - `Background location uploads will include x-org-id only when APP_ORG_ID is supplied at build/runtime via Dart define, matching the main API client.`
+  - `Launcher label change affects the installed Android app display name only.`
+  - `fieldLocation.ingest remains the existing compatibility endpoint; this pass did not migrate the background uploader to ingestV2 to avoid changing payload semantics without a broader mobile sync migration.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `fieldLocation.ingest compatibility path and fieldLocation.ingestV2 primary/offline path continue to coexist by prior backend decision; no new conflicting implementation introduced.`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `claude-code @ 2026-05-22T11:05:06Z`

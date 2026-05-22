@@ -24,7 +24,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
-        android:label="sales_mobile_app"
+        android:label="Syrex Field Sense"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

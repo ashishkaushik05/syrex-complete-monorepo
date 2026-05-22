@@ -49,15 +49,19 @@ Future<bool> _onIosBackground(ServiceInstance service) async => true;
 
 @pragma('vm:entry-point')
 void _onStart(ServiceInstance service) async {
-  final baseUrl = AppConfig.fromDartDefine().baseUrl;
+  final config = AppConfig.fromDartDefine();
+  final headers = <String, dynamic>{'ngrok-skip-browser-warning': '1'};
+  if (config.orgId != null && config.orgId!.isNotEmpty) {
+    headers['x-org-id'] = config.orgId;
+  }
   const storage = FlutterSecureStorage();
 
   final dio = Dio(
     BaseOptions(
-      baseUrl: baseUrl,
+      baseUrl: config.baseUrl,
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 15),
-      headers: const {'ngrok-skip-browser-warning': '1'},
+      headers: headers,
     ),
   );
 
