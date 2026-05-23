@@ -14,6 +14,7 @@ import { apiErrorMessage } from '@/lib/http'
 
 type ComplaintStatus =
   | 'raised'
+  | 'assigned'
   | 'visit'
   | 'test_result_submitted'
   | 'retest_requested'
@@ -112,6 +113,7 @@ function statusTone(status: ComplaintStatus) {
   if (status === 'cancelled') return 'bg-rose-100 text-rose-700'
   if (status === 'retest_requested') return 'bg-amber-100 text-amber-700'
   if (status === 'test_result_submitted') return 'bg-indigo-100 text-indigo-700'
+  if (status === 'assigned') return 'bg-orange-100 text-orange-700'
   if (status === 'visit') return 'bg-blue-100 text-blue-700'
   return 'bg-slate-100 text-slate-700'
 }
@@ -125,7 +127,7 @@ function warrantyTone(status: 'pending' | 'approved' | 'rejected') {
 function getActions(status: ComplaintStatus): string[] {
   if (FINAL_STATUSES.includes(status)) return []
   const actions: string[] = []
-  if (status === 'raised' || status === 'retest_requested') actions.push('visit_logged')
+  if (status === 'assigned' || status === 'retest_requested') actions.push('visit_logged')
   if (status === 'visit' || status === 'retest_requested') actions.push('tested_ok_close')
   if (status === 'test_result_submitted') actions.push('retest_requested', 'tested_ok_close')
   actions.push('telephonic_close', 'cancel')
@@ -162,6 +164,10 @@ export function ServiceComplaintDetailPage() {
   // Replacement state
   const [replacementLineId, setReplacementLineId] = useState('')
   const [replacementSerial, setReplacementSerial] = useState('')
+
+  // Form evidence state
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [formFieldValues, setFormFieldValues] = useState<Record<string, string>>({})
 
   // Action state (transition buttons)
   const [actionNote, setActionNote] = useState('')
@@ -212,6 +218,25 @@ export function ServiceComplaintDetailPage() {
     },
   })
 
+  const templatesQuery = useQuery<any[]>({
+    queryKey: ['service-form-templates'],
+    queryFn: async () => {
+      const response = await api.get('/service/forms/templates', { params: { withFields: true } })
+      const payload = response.data as any
+      return Array.isArray(payload?.data) ? payload.data : []
+    },
+  })
+
+  const submissionsQuery = useQuery<any[]>({
+    queryKey: ['service-complaint-submissions', id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const response = await api.get(`/tickets/${id}/submissions`)
+      const payload = response.data as any
+      return Array.isArray(payload?.data) ? payload.data : []
+    },
+  })
+
   function onMutationError(error: unknown) {
     setMutationError(apiErrorMessage(error, 'Action failed'))
   }
@@ -226,7 +251,7 @@ export function ServiceComplaintDetailPage() {
   const assignMutation = useMutation({
     mutationFn: async () =>
       api.post(`/tickets/${id}/assign`, {
-        reassign: true,
+        reassign: (detailQuery.data?.assignments?.length ?? 0) > 0,
         asiUserId: asiUserId || null,
         seUserId: seUserId || null,
         note: assignNote.trim() || null,
@@ -240,13 +265,33 @@ export function ServiceComplaintDetailPage() {
 
   const testMutation = useMutation({
     mutationFn: async () =>
-      api.post(`/tickets/${id}/forms`, {
+      api.post(`/tickets/${id}/test-submit`, {
         verdict: testVerdict,
         summary: testSummary.trim() || undefined,
       }),
     onSuccess: () => {
       invalidate()
       setTestSummary('')
+    },
+    onError: onMutationError,
+  })
+
+  const formSubmitMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedTemplateId) throw new Error('Select a form template')
+      const values = Object.entries(formFieldValues)
+        .filter(([, v]) => v !== '')
+        .map(([fieldKey, rawValue]) => ({ fieldKey, rawValue }))
+      return api.post(`/tickets/${id}/forms`, {
+        templateId: selectedTemplateId,
+        values,
+      })
+    },
+    onSuccess: () => {
+      invalidate()
+      queryClient.invalidateQueries({ queryKey: ['service-complaint-submissions', id] })
+      setSelectedTemplateId('')
+      setFormFieldValues({})
     },
     onError: onMutationError,
   })
@@ -323,6 +368,7 @@ export function ServiceComplaintDetailPage() {
     transitionMutation.isPending ||
     assignMutation.isPending ||
     testMutation.isPending ||
+    formSubmitMutation.isPending ||
     warrantyApproveMutation.isPending ||
     warrantyRejectMutation.isPending ||
     replacementAssignMutation.isPending ||
@@ -520,73 +566,204 @@ export function ServiceComplaintDetailPage() {
                     placeholder="Reason or context for assignment (optional)"
                   />
                 </div>
+                {status === 'raised' && !asiUserId ? (
+                  <p className="text-xs text-amber-600">ASI selection required for initial assignment (transitions status to Assigned)</p>
+                ) : null}
                 <Button
                   type="button"
                   size="sm"
                   onClick={() => assignMutation.mutate()}
-                  disabled={isPending || (!asiUserId && !seUserId)}
+                  disabled={isPending || (!asiUserId && !seUserId) || (status === 'raised' && !asiUserId)}
                 >
-                  {assignMutation.isPending ? 'Assigning...' : 'Assign / Reassign'}
+                  {assignMutation.isPending
+                    ? 'Assigning...'
+                    : (detailQuery.data?.assignments?.length ?? 0) > 0
+                      ? 'Reassign'
+                      : 'Assign'}
                 </Button>
               </CardContent>
             </Card>
           ) : null}
 
-          {/* ─── D. Test Report (visit / retest_requested) ─── */}
-          {(detail.status === 'visit' || detail.status === 'retest_requested') ? (
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Submit Test Report</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Verdict</Label>
-                  <select
-                    className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                    value={testVerdict}
-                    onChange={(e) => setTestVerdict(e.target.value)}
-                  >
-                    <option value="tested_ok">Tested OK — No fault found</option>
-                    <option value="warranty_candidate">Warranty Candidate — Replacement needed</option>
-                    <option value="failed">Failed — Out-of-warranty fault</option>
-                    <option value="needs_retest">Needs Retest — Inconclusive</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Summary (optional)</Label>
-                  <textarea
-                    className="min-h-[80px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                    value={testSummary}
-                    onChange={(e) => setTestSummary(e.target.value)}
-                    placeholder="Technical findings..."
-                    maxLength={2000}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => testMutation.mutate()}
-                  disabled={isPending}
-                >
-                  {testMutation.isPending ? 'Submitting...' : 'Submit Test Report'}
-                </Button>
-                {detail.tests.length > 0 ? (
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Previous Tests</p>
-                    {detail.tests.map((test) => (
-                      <div key={test.id} className="rounded-md border border-slate-200 p-3 text-sm">
-                        <div className="flex items-center justify-between">
-                          <Badge className="bg-indigo-100 text-indigo-700">{test.verdict}</Badge>
-                          <span className="text-xs text-slate-500">{timeAgo(test.createdAt)}</span>
+          {/* ─── D. Form Evidence ─── */}
+          {!isFinal ? (() => {
+            const templates: any[] = templatesQuery.data ?? []
+            const submissions: any[] = submissionsQuery.data ?? []
+            const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
+            const allValid = submissions.length > 0 && submissions.every((s) => !s.isDisabled && s.values?.every((v: any) => v.isValid))
+            const hasInvalid = submissions.length > 0 && !allValid
+            return (
+              <Card className="border-slate-200 bg-white shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base">Form Evidence</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Evidence readiness status */}
+                  {submissions.length === 0 ? (
+                    <p className="text-sm text-amber-600">No form submission yet — required before test report</p>
+                  ) : allValid ? (
+                    <p className="text-sm text-emerald-600">Form evidence ready</p>
+                  ) : hasInvalid ? (
+                    <p className="text-sm text-rose-600">Form evidence has validation errors</p>
+                  ) : null}
+
+                  {/* Existing submissions list */}
+                  {submissions.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Submissions</p>
+                      {submissions.map((sub: any) => (
+                        <div key={sub.id} className="rounded-md border border-slate-200 p-3 text-sm space-y-1">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="font-medium text-slate-800">{sub.templateName ?? sub.templateId}</span>
+                            <div className="flex gap-1">
+                              <Badge className={sub.isDisabled ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}>
+                                {sub.isDisabled ? 'disabled' : 'active'}
+                              </Badge>
+                              <Badge className={sub.values?.every((v: any) => v.isValid) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}>
+                                {sub.values?.every((v: any) => v.isValid) ? 'valid' : 'invalid'}
+                              </Badge>
+                            </div>
+                            <span className="text-xs text-slate-400">{timeAgo(sub.submittedAt)}</span>
+                          </div>
                         </div>
-                        {test.summary ? <p className="mt-1 text-slate-600">{test.summary}</p> : null}
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {/* Submit new form section */}
+                  <div className="border-t border-slate-200 pt-4 space-y-4">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Submit New Form</p>
+                    <div className="space-y-2">
+                      <Label>Form Template</Label>
+                      <select
+                        className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                        value={selectedTemplateId}
+                        onChange={(e) => {
+                          setSelectedTemplateId(e.target.value)
+                          setFormFieldValues({})
+                        }}
+                      >
+                        <option value="">— Select template —</option>
+                        {templates.filter((t) => t.isActive !== false).map((t: any) => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {selectedTemplate && Array.isArray(selectedTemplate.fields) && selectedTemplate.fields.length > 0 ? (
+                      <div className="space-y-3">
+                        {selectedTemplate.fields.map((field: any) => (
+                          <div key={field.fieldKey} className="space-y-1">
+                            <Label>{field.label ?? field.fieldKey}</Label>
+                            {field.fieldType === 'textarea' ? (
+                              <textarea
+                                className="min-h-[80px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
+                                value={formFieldValues[field.fieldKey] ?? ''}
+                                onChange={(e) => setFormFieldValues((prev) => ({ ...prev, [field.fieldKey]: e.target.value }))}
+                                placeholder={field.placeholder ?? ''}
+                              />
+                            ) : field.fieldType === 'select' && Array.isArray((field.validationRules as any)?.options) ? (
+                              <select
+                                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                                value={formFieldValues[field.fieldKey] ?? ''}
+                                onChange={(e) => setFormFieldValues((prev) => ({ ...prev, [field.fieldKey]: e.target.value }))}
+                              >
+                                <option value="">— Select —</option>
+                                {((field.validationRules as any).options as string[]).map((opt: string) => (
+                                  <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <Input
+                                value={formFieldValues[field.fieldKey] ?? ''}
+                                onChange={(e) => setFormFieldValues((prev) => ({ ...prev, [field.fieldKey]: e.target.value }))}
+                                placeholder={field.placeholder ?? ''}
+                              />
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    ) : null}
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => formSubmitMutation.mutate()}
+                      disabled={isPending || !selectedTemplateId}
+                    >
+                      {formSubmitMutation.isPending ? 'Submitting Form...' : 'Submit Form'}
+                    </Button>
                   </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
+                </CardContent>
+              </Card>
+            )
+          })() : null}
+
+          {/* ─── E. Test Report (visit / retest_requested) ─── */}
+          {(detail.status === 'visit' || detail.status === 'retest_requested') ? (() => {
+            const submissions: any[] = submissionsQuery.data ?? []
+            const formReady = submissions.some((s) => !s.isDisabled && s.values?.every((v: any) => v.isValid))
+            return (
+              <Card className="border-slate-200 bg-white shadow-sm">
+                <CardHeader>
+                  <CardTitle className="text-base">Submit Test Report</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {!formReady ? (
+                    <p className="text-sm text-amber-600">Complete a form submission first</p>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Verdict</Label>
+                        <select
+                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                          value={testVerdict}
+                          onChange={(e) => setTestVerdict(e.target.value)}
+                        >
+                          <option value="tested_ok">Tested OK — No fault found</option>
+                          <option value="warranty_candidate">Warranty Candidate — Replacement needed</option>
+                          <option value="failed">Failed — Out-of-warranty fault</option>
+                          <option value="needs_retest">Needs Retest — Inconclusive</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Summary (optional)</Label>
+                        <textarea
+                          className="min-h-[80px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
+                          value={testSummary}
+                          onChange={(e) => setTestSummary(e.target.value)}
+                          placeholder="Technical findings..."
+                          maxLength={2000}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => testMutation.mutate()}
+                        disabled={isPending}
+                      >
+                        {testMutation.isPending ? 'Submitting...' : 'Submit Test Report'}
+                      </Button>
+                    </>
+                  )}
+                  {detail.tests.length > 0 ? (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Previous Tests</p>
+                      {detail.tests.map((test) => (
+                        <div key={test.id} className="rounded-md border border-slate-200 p-3 text-sm">
+                          <div className="flex items-center justify-between">
+                            <Badge className="bg-indigo-100 text-indigo-700">{test.verdict}</Badge>
+                            <span className="text-xs text-slate-500">{timeAgo(test.createdAt)}</span>
+                          </div>
+                          {test.summary ? <p className="mt-1 text-slate-600">{test.summary}</p> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            )
+          })() : null}
 
           {/* ─── E. Warranty Decision (test_result_submitted) ─── */}
           {detail.status === 'test_result_submitted' ? (

@@ -1192,6 +1192,21 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     return { data: { data: result } }
   }
 
+  if (/^\/tickets\/[^/]+\/submissions$/.test(url)) {
+    const id = url.split('/')[2]
+    const subs = await trpcQuery<any>('serviceForms.listSubmissions', { complaintId: id })
+    return { data: { data: Array.isArray(subs) ? subs : [] } }
+  }
+
+  if (url === '/service/forms/templates') {
+    const withFields = config?.params?.withFields === 'true' || config?.params?.withFields === true
+    const templates = await trpcQuery<any>('serviceForms.listTemplates', {
+      isActive: true,
+      withFields,
+    })
+    return { data: { data: Array.isArray(templates) ? templates : [] } }
+  }
+
   if (url === '/service/integrations/clients') {
     const clients = await trpcQuery<any>('serviceIntegrations.listClients', undefined)
     return { data: { data: clients } }
@@ -1943,12 +1958,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (/^\/tickets\/[^/]+\/reopen$/.test(url)) {
-    const id = url.split('/')[2]
-    const reopened = await trpcMutation<any>('serviceComplaints.update', {
-      id,
-      resolutionNote: body?.note ?? 'Reopen requested',
-    })
-    return { data: { data: reopened } }
+    throw makeApiError('Complaint reopening is not supported. Raise a new complaint.', 400)
   }
 
   if (/^\/tickets\/[^/]+\/assign$/.test(url)) {
@@ -1964,6 +1974,17 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (/^\/tickets\/[^/]+\/forms$/.test(url)) {
+    const id = url.split('/')[2]
+    const submitted = await trpcMutation<any>('serviceForms.submitForm', {
+      complaintId: id,
+      templateId: body?.templateId,
+      values: Array.isArray(body?.values) ? body.values : [],
+    })
+    return { data: { data: submitted } }
+  }
+
+  // Test report submission (separate from form submission)
+  if (/^\/tickets\/[^/]+\/test-submit$/.test(url)) {
     const id = url.split('/')[2]
     const submitted = await trpcMutation<any>('serviceTests.submit', {
       complaintId: id,
@@ -2124,6 +2145,35 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       reason: body?.reason,
     })
     return { data: adjustment }
+  }
+
+  if (url === '/service/forms/templates') {
+    const created = await trpcMutation<any>('serviceForms.createTemplate', {
+      name: body?.name,
+      description: body?.description ?? undefined,
+      fields: body?.fields ?? undefined,
+    })
+    return { data: { data: created } }
+  }
+
+  if (/^\/service\/forms\/templates\/[^/]+\/fields$/.test(url)) {
+    const templateId = url.split('/')[4]
+    const added = await trpcMutation<any>('serviceForms.addField', {
+      templateId,
+      fieldKey: body?.fieldKey,
+      label: body?.label,
+      fieldType: body?.fieldType ?? 'text',
+      isRequired: body?.isRequired ?? true,
+      displayOrder: body?.displayOrder ?? 0,
+      validationRules: body?.validationRules ?? undefined,
+    })
+    return { data: { data: added } }
+  }
+
+  if (/^\/service\/forms\/templates\/[^/]+\/disable$/.test(url)) {
+    const templateId = url.split('/')[4]
+    const disabled = await trpcMutation<any>('serviceForms.disableTemplate', { id: templateId })
+    return { data: { data: disabled } }
   }
 
   return null

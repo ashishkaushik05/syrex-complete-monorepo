@@ -4,6 +4,43 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260522-006
+- Decision ID: `DEC-20260522-006`
+- Model: `claude-code`
+- Branch/Commit: `master@709e844`
+- Task: `Service module P0 production-readiness — assigned status coherence, form/test submission flow fix, form capture UI, form template admin`
+- Decision: `Split form submission and test report submission into separate paths. Fix assigned status representation across web. Add form template admin UI. Remove pseudo-reopen adapter.`
+- Rationale: `The web was calling serviceTests.submit directly from the /tickets/:id/forms adapter, bypassing the form submission gate. The backend serviceTests.submit enforces that at least one valid form submission exists before a test can be submitted — making the web's direct test submission always fail in production. Additionally, the assigned lifecycle status existed in the backend but was missing from all web type definitions, tabs, and badge styling, making complaints invisible once assigned. A form template admin UI was missing entirely, making it impossible for admins to configure diagnostic templates without database hand-edits.`
+- Alternatives Considered:
+  - `Keeping the direct test submission path and adding a form bypass flag` rejected — the plan explicitly states form-backed test submission is the primary path.
+  - `Adding a server-side REST route for form submissions` rejected — the tRPC adapter pattern is already established and consistent.
+- Scope:
+  - `web/src/pages/dashboard/ServiceComplaintsPage.tsx` — add `assigned` to type, tabs, counts, badge
+  - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx` — add `assigned` to type/actions/badge; fix first assignment detection; add form capture UI section; separate test submission section
+  - `web/src/lib/api.ts` — fix `/tickets/:id/forms` adapter to call `serviceForms.submitForm`; add `/tickets/:id/test-submit` adapter for `serviceTests.submit`; add `/tickets/:id/submissions` GET adapter; add `/service/forms/templates` GET/POST adapters; disable pseudo-reopen
+  - `web/src/pages/dashboard/ServiceFormsPage.tsx` — new page for form template admin (list, create, add fields, disable)
+  - `web/src/App.tsx` — register `/service/forms` route
+  - `web/src/pages/dashboard/DashboardLayout.tsx` — add Form Templates nav entry
+- Completion Notes:
+  - Done: `assigned` status added to all web type definitions, tabs, counts, and badge styling.
+  - Done: Form submission and test submission separated into distinct adapter paths in api.ts.
+  - Done: Form capture UI section added to ServiceComplaintDetailPage.
+  - Done: ServiceFormsPage (form template admin) created and routed.
+  - Done: Pseudo-reopen adapter removed; now throws an error surfacing "Complaint reopening is not supported".
+  - Not Done: P1 work — warranty prerequisite hardening, RBAC regression tests, serial backfill.
+- Impact/Risk:
+  - The `/tickets/:id/forms` adapter behavior change is a breaking change for any caller that was sending verdict/summary directly. The detail page is the only known caller and is being updated simultaneously.
+  - The reopen adapter now throws an error. Any UI that calls it will surface the error message "Complaint reopening is not supported".
+- Cleanup Required:
+  - None for P0. Future P1: harden warranty prerequisites, add RBAC regression tests, serial backfill.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: `ashish`
+- Status: `completed`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-22T00:00:00Z`
+
+---
+
 ## DEC-20260520-002
 - Decision ID: `DEC-20260520-002`
 - Model: `claude-sonnet-4-6`
@@ -4419,3 +4456,107 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Conflicting Implementations: `fieldLocation.ingest compatibility path and fieldLocation.ingestV2 primary/offline path continue to coexist by prior backend decision; no new conflicting implementation introduced.`
 - Next Cleanup Owner: `n/a`
 - Owner Timestamp: `claude-code @ 2026-05-22T11:05:06Z`
+
+---
+
+## DEC-20260522-008
+- Decision ID: `DEC-20260522-008`
+- Model: `codex`
+- Branch/Commit: `master@709e844`
+- Task: `Create complete service module production-readiness plan`
+- Decision: `Produce a documentation-only production plan for the full service vertical, converting the repository review findings into phased architecture, implementation, test, migration, and launch gates without changing runtime code.`
+- Rationale: `The service module already spans backend routes, web workflows, service mobile scaffolding, serial intelligence, forms, integrations, attachments, and warranty fulfillment. A single production plan is needed before implementation to keep those paths aligned and prevent partial fixes that leave conflicting service workflows active.`
+- Alternatives Considered:
+  - `Start fixing service workflow gaps immediately` rejected because the user requested a complete production plan first and the repository requires exact implementation scope before code edits.
+  - `Write only a short task checklist in chat` rejected because the service module needs a durable repo artifact with phase gates, acceptance criteria, and ownership boundaries.
+- Scope:
+  - `plan/SERVICE_MODULE_PRODUCTION_READINESS_PLAN.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before documentation edits.`
+  - Not Done: `Service production-readiness plan artifact, final verification, and final decision update pending.`
+- Impact/Risk:
+  - `No runtime behavior changes are intended in this documentation task.`
+  - `The plan will define future service implementation boundaries and should be followed by separate scoped implementation decisions.`
+- Cleanup Required:
+  - `Finalize this same decision entry after the plan artifact is created.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-22T07:42:19Z`
+
+### DEC-20260522-008 Final Update
+- Decision ID: `DEC-20260522-008`
+- Model: `codex`
+- Branch/Commit: `master@709e844`
+- Task: `Create complete service module production-readiness plan`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created `plan/SERVICE_MODULE_PRODUCTION_READINESS_PLAN.md` with the current baseline, launch-scope decision, canonical lifecycle, module boundaries, seven implementation phases, serial scale strategy, data/migration sequence, test matrix, release checklist, prioritized backlog, ownership work packages, and definition of done.`
+  - Done: `Kept this task documentation-only and identified that each later implementation phase must open its own scoped decision entry before runtime edits.`
+  - Not Done: `No backend, web, mobile, integration, storage, deployment, or database runtime changes were made in this planning task.`
+- Impact/Risk:
+  - `No runtime behavior changed.`
+  - `Future service work should follow the plan gates so the form-backed diagnostic path, lifecycle actions, mobile release, and machine integrations do not diverge.`
+- Cleanup Required:
+  - `Open a separate implementation decision for the first production phase selected from the plan.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `repo owner/codex when selecting the first implementation phase`
+- Owner Timestamp: `codex @ 2026-05-22T07:42:19Z`
+
+---
+
+## DEC-20260522-007
+- Decision ID: `DEC-20260522-007`
+- Model: `codex`
+- Branch/Commit: `master@709e844`
+- Task: `Fast-forward local master to the latest origin/master commit while preserving current worktree edits`
+- Decision: `Fetch the single remote commit and use a fast-forward pull with local worktree preservation, resolving only the decision log if the remote log append overlaps the local decision entries.`
+- Rationale: `The local branch is one commit behind origin/master and the incoming commit scope is limited to Field Sense mobile files plus the shared decision log. Preserving current unstaged service UI and planning edits keeps unrelated in-progress work intact while updating the branch.`
+- Alternatives Considered:
+  - `Reset local master to origin/master` rejected because the worktree contains existing unstaged and untracked work that must not be discarded.
+  - `Create a merge commit` rejected because the branch is directly behind origin/master and a fast-forward keeps the branch history current without an unnecessary merge path.
+- Scope:
+  - `mobile/sales_mobile_app/android/app/src/main/AndroidManifest.xml`
+  - `mobile/sales_mobile_app/android/gradle.properties`
+  - `mobile/sales_mobile_app/android/gradle/wrapper/gradle-wrapper.properties`
+  - `mobile/sales_mobile_app/lib/app/theme/app_theme.dart`
+  - `mobile/sales_mobile_app/lib/core/location/background_location_service.dart`
+  - `mobile/sales_mobile_app/pubspec.lock`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Confirmed local master is one commit behind origin/master and inspected the incoming file scope before updating the branch.`
+  - Not Done: `Fast-forward pull, post-pull worktree verification, and final decision update pending.`
+- Impact/Risk:
+  - `The shared decision log has local edits and remote additions; Git may require an autostash apply resolution in that file.`
+  - `Existing unstaged service web edits and untracked planning files must remain in the worktree after the branch update.`
+- Cleanup Required:
+  - `Finalize this same decision entry after the branch is updated and preserved worktree state is verified.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-22T12:13:42Z`
+
+### DEC-20260522-007 Final Update
+- Decision ID: `DEC-20260522-007`
+- Model: `codex`
+- Branch/Commit: `master@0c44b1d`
+- Task: `Fast-forward local master to the latest origin/master commit while preserving current worktree edits`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Fast-forwarded local master from 709e844 to origin/master at 0c44b1d with git pull --ff-only --autostash.`
+  - Done: `Resolved the autostash decision-log append conflict by preserving the remote Field Sense mobile entry at DEC-20260522-001 and renumbering the local service-plan entry to DEC-20260522-008 so decision IDs remain unique.`
+  - Done: `Preserved the existing unstaged service web edits and untracked service planning artifacts in the worktree.`
+  - Not Done: `No runtime implementation or test execution was performed for this branch synchronization task.`
+- Impact/Risk:
+  - `Branch history is now aligned with origin/master at the incoming Field Sense mobile commit.`
+  - `The decision log remains locally modified because existing in-progress/local decision entries and this synchronization record are not committed yet.`
+- Cleanup Required:
+  - `No cleanup required for this completed synchronization task.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-22T12:13:42Z`

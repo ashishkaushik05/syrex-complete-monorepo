@@ -39,6 +39,7 @@ import { ServiceComplaintsPage } from '@/pages/dashboard/ServiceComplaintsPage'
 import { ServiceSerialsPage } from '@/pages/dashboard/ServiceSerialsPage'
 import { ServiceWarrantyPage } from '@/pages/dashboard/ServiceWarrantyPage'
 import { ServiceIntegrationsPage } from '@/pages/dashboard/ServiceIntegrationsPage'
+import { ServiceFormsPage } from '@/pages/dashboard/ServiceFormsPage'
 import { FieldSenseLiveMapPage } from '@/pages/dashboard/FieldSenseLiveMapPage'
 import { FieldSenseSchedulePage } from '@/pages/dashboard/FieldSenseSchedulePage'
 import { FieldSenseAttendancePage } from '@/pages/dashboard/FieldSenseAttendancePage'
@@ -147,6 +148,7 @@ export default function App() {
             <Route path="service/serials" element={<ServiceSerialsPage />} />
             <Route path="service/warranty" element={<ServiceWarrantyPage />} />
             <Route path="service/integrations" element={<ServiceIntegrationsPage />} />
+            <Route path="service/forms" element={<ServiceFormsPage />} />
             <Route path="map" element={<FieldSenseLiveMapPage />} />
             <Route path="field-schedule" element={<FieldSenseSchedulePage />} />
             <Route path="attendance" element={<FieldSenseAttendancePage />} />

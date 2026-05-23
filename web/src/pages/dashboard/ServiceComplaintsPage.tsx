@@ -21,6 +21,7 @@ import { apiErrorMessage } from '@/lib/http'
 
 type ComplaintStatus =
   | 'raised'
+  | 'assigned'
   | 'visit'
   | 'test_result_submitted'
   | 'retest_requested'
@@ -53,6 +54,7 @@ type OutletOption = {
 const STATUS_TABS: Array<{ key: 'all' | ComplaintStatus; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'raised', label: 'Raised' },
+  { key: 'assigned', label: 'Assigned' },
   { key: 'visit', label: 'Visit' },
   { key: 'test_result_submitted', label: 'Test Submitted' },
   { key: 'retest_requested', label: 'Retest' },
@@ -70,6 +72,7 @@ function normalizeRows(payload: unknown): { rows: ComplaintRow[]; tabCounts: Rec
     tabCounts: {
       all: Number(counts.all ?? rows.length),
       raised: Number(counts.raised ?? 0),
+      assigned: Number(counts.assigned ?? 0),
       visit: Number(counts.visit ?? 0),
       test_result_submitted: Number(counts.test_result_submitted ?? 0),
       retest_requested: Number(counts.retest_requested ?? 0),
@@ -84,6 +87,7 @@ function statusTone(status: ComplaintStatus) {
   if (status === 'resolved') return 'bg-emerald-100 text-emerald-700'
   if (status === 'telephonic_closure') return 'bg-cyan-100 text-cyan-700'
   if (status === 'cancelled') return 'bg-rose-100 text-rose-700'
+  if (status === 'assigned') return 'bg-orange-100 text-orange-700'
   if (status === 'retest_requested') return 'bg-amber-100 text-amber-700'
   if (status === 'test_result_submitted') return 'bg-indigo-100 text-indigo-700'
   if (status === 'visit') return 'bg-blue-100 text-blue-700'

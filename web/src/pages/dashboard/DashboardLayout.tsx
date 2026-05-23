@@ -236,6 +236,14 @@ const navItems: NavItem[] = [
     requiredPermission: "service:manage",
   },
   {
+    section: "Service",
+    label: "Form Templates",
+    to: "/dashboard/service/forms",
+    icon: ClipboardList,
+    exact: false,
+    requiredPermission: "service:manage",
+  },
+  {
     section: "Field Sense",
     label: "Live Map",
     to: "/dashboard/map",
