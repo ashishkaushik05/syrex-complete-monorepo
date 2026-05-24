@@ -21,6 +21,7 @@ const sessionTokenSchema = z.object({
     name: z.string(),
     userType: z.string(),
     roleId: z.string(),
+    isFieldEnabled: z.boolean(),
     role: z.object({
       id: z.string(),
       name: z.string(),
@@ -57,6 +58,7 @@ export const authRouter = createTRPCRouter({
         passwordHash: true,
         userType: true,
         roleId: true,
+        isFieldEnabled: true,
         role: { select: { id: true, name: true, permissions: true } },
         isActive: true,
         managedWarehouse: { select: { id: true } },
@@ -94,6 +96,7 @@ export const authRouter = createTRPCRouter({
         name: user.name,
         userType: user.userType,
         roleId: user.roleId,
+        isFieldEnabled: user.isFieldEnabled,
         role: { id: user.role.id, name: user.role.name, permissions: user.role.permissions },
         managedWarehouseId: user.managedWarehouse?.id ?? null,
         outletId: user.outlet?.id ?? null
@@ -121,6 +124,7 @@ export const authRouter = createTRPCRouter({
         name: true,
         userType: true,
         roleId: true,
+        isFieldEnabled: true,
         role: { select: { id: true, name: true, permissions: true } },
         isActive: true,
         managedWarehouse: { select: { id: true } },
@@ -153,6 +157,7 @@ export const authRouter = createTRPCRouter({
         name: user.name,
         userType: user.userType,
         roleId: user.roleId,
+        isFieldEnabled: user.isFieldEnabled,
         role: { id: user.role.id, name: user.role.name, permissions: user.role.permissions },
         managedWarehouseId: user.managedWarehouse?.id ?? null,
         outletId: user.outlet?.id ?? null

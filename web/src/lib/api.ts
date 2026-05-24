@@ -31,7 +31,9 @@ const fallbackApi = axios.create({
 })
 
 const ACTOR_KEY = 'syrex_phase1_actor_id'
+const ORG_KEY = 'syrex_phase1_org_id'
 const DEV_FALLBACK_ACTOR_ID = (import.meta.env.VITE_DEV_ACTOR_ID as string | undefined)?.trim() || '21000000-0000-4000-8000-000000000001'
+const DEV_FALLBACK_ORG_ID = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim() || (import.meta.env.DEV ? 'default' : '')
 
 function getActorId() {
   const stored = window.localStorage.getItem(ACTOR_KEY)
@@ -46,6 +48,22 @@ function setActorId(actorId: string | null) {
     return
   }
   window.localStorage.setItem(ACTOR_KEY, actorId)
+}
+
+function getOrgId() {
+  const stored = window.localStorage.getItem(ORG_KEY)
+  if (stored) return stored
+  return DEV_FALLBACK_ORG_ID || null
+}
+
+function trpcHeaders(extra?: HeadersInit): HeadersInit {
+  const actorId = getActorId()
+  const orgId = getOrgId()
+  return {
+    ...(extra ?? {}),
+    ...(actorId ? { 'x-actor-id': actorId } : {}),
+    ...(orgId ? { 'x-org-id': orgId } : {}),
+  }
 }
 
 function makeApiError(message: string, status = 400): ApiErrorLike {
@@ -81,23 +99,18 @@ async function trpcQuery<T>(procedure: string, input: unknown): Promise<T> {
     input === undefined
       ? ''
       : `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`
-  const actorId = getActorId()
   const response = await fetch(`${trpcBaseURL}/${procedure}${qs}`, {
     method: 'GET',
-    headers: actorId ? { 'x-actor-id': actorId } : undefined,
+    headers: trpcHeaders(),
   })
   const payload = await response.json()
   return unwrap(payload) as T
 }
 
 async function trpcMutation<T>(procedure: string, input: unknown): Promise<T> {
-  const actorId = getActorId()
   const response = await fetch(`${trpcBaseURL}/${procedure}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(actorId ? { 'x-actor-id': actorId } : {}),
-    },
+    headers: trpcHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ json: input }),
   })
   const payload = await response.json()
@@ -153,8 +166,8 @@ function resolveOutletRoleId(
   rolesIndex: { roles: Array<{ id: string; name: string }> },
   outletRole: OutletRole,
 ) {
-  const ownerCandidates = ['owner', 'outlet owner', 'admin', 'sales']
-  const staffCandidates = ['staff', 'outlet staff', 'sales']
+  const ownerCandidates = ['outlet', 'owner', 'outlet owner', 'sales']
+  const staffCandidates = ['outlet', 'staff', 'outlet staff', 'sales']
   const candidates = outletRole === 'owner' ? ownerCandidates : staffCandidates
 
   for (const candidate of candidates) {
@@ -259,19 +272,11 @@ function getPageAndLimit(config?: RequestConfig, defaultLimit = 20) {
   return { page, limit }
 }
 
-function invoicePaymentStatus(amountDue: number, amountPaid: number) {
+function invoicePaymentStatus(amountDue: number, amountPaid: number, daysPastDue?: number | null) {
   if (amountDue <= 0) return 'paid' as const
+  if (typeof daysPastDue === 'number' && daysPastDue > 0) return 'overdue' as const
   if (amountPaid > 0) return 'partially_paid' as const
   return 'unpaid' as const
-}
-
-function daysSince(isoDate: string) {
-  const now = Date.now()
-  const then = new Date(isoDate).getTime()
-  if (!Number.isFinite(then)) return 0
-  const diff = now - then
-  if (diff <= 0) return 0
-  return Math.floor(diff / (1000 * 60 * 60 * 24))
 }
 
 async function getInvoiceListView(input: { outletId?: string; orderId?: string; q?: string } = {}) {
@@ -284,13 +289,14 @@ async function getInvoiceListView(input: { outletId?: string; orderId?: string; 
     const total = Number(invoice.total ?? 0)
     const paidAmount = Number(invoice.amountPaid ?? 0)
     const remainingAmount = Number(invoice.amountDue ?? 0)
+    const daysPastDue = typeof invoice.daysPastDue === 'number' ? invoice.daysPastDue : null
     return {
       ...invoice,
       total,
       paidAmount,
       remainingAmount,
-      paymentStatus: invoicePaymentStatus(remainingAmount, paidAmount),
-      isOverdue: remainingAmount > 0 && new Date(invoice.invoiceDate).getTime() < Date.now(),
+      paymentStatus: invoicePaymentStatus(remainingAmount, paidAmount, daysPastDue),
+      isOverdue: remainingAmount > 0 && typeof daysPastDue === 'number' && daysPastDue > 0,
       paymentDate: null,
       outlet: outletsIndex.byId.get(invoice.outletId)
         ? {
@@ -710,14 +716,19 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
       invoiceNumbersByOrderId.set(orderId, row)
     }
 
-    const dispatchSummaryByOrderId = new Map<string, { dispatchCount: number; dispatchedQty: number }>()
+    const dispatchSummaryByOrderId = new Map<string, {
+      dispatchCount: number
+      dispatchedQty: number
+      deliveryStatuses: Set<string>
+    }>()
     for (const dispatch of dispatches) {
       const touchedOrderIds = new Set<string>()
       for (const line of dispatch.lines ?? []) {
         const orderId = String(line.orderId ?? '')
         if (!orderId) continue
-        const prev = dispatchSummaryByOrderId.get(orderId) ?? { dispatchCount: 0, dispatchedQty: 0 }
+        const prev = dispatchSummaryByOrderId.get(orderId) ?? { dispatchCount: 0, dispatchedQty: 0, deliveryStatuses: new Set<string>() }
         prev.dispatchedQty += Number(line.qtyDispatched ?? 0)
+        prev.deliveryStatuses.add(String(dispatch.deliveryStatus ?? 'created'))
         if (!touchedOrderIds.has(orderId)) {
           prev.dispatchCount += 1
           touchedOrderIds.add(orderId)
@@ -726,20 +737,28 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
       }
     }
 
-    let mapped = listItems.map((order) => ({
-      ...order,
-      orgId: '',
-      outlet: outletsIndex.byId.get(order.outletId)
-        ? {
-            id: order.outletId,
-            name: outletsIndex.byId.get(order.outletId)?.name ?? order.outletId,
-          }
-        : undefined,
-      lines: order.lines ?? [],
-      linkedInvoices: invoiceNumbersByOrderId.get(order.id) ?? [],
-      dispatchCount: dispatchSummaryByOrderId.get(order.id)?.dispatchCount ?? 0,
-      dispatchedQty: dispatchSummaryByOrderId.get(order.id)?.dispatchedQty ?? 0,
-    }))
+    let mapped = listItems.map((order) => {
+      const summary = dispatchSummaryByOrderId.get(order.id)
+      const statuses = summary?.deliveryStatuses ?? new Set<string>()
+      const allDelivered = statuses.size > 0 && !statuses.has('created') && !statuses.has('in_transit')
+      const anyInTransit = statuses.has('in_transit')
+      const dispatchDeliveryLabel = allDelivered ? 'delivered' : anyInTransit ? 'in_transit' : statuses.size > 0 ? 'created' : null
+      return {
+        ...order,
+        orgId: '',
+        outlet: outletsIndex.byId.get(order.outletId)
+          ? {
+              id: order.outletId,
+              name: outletsIndex.byId.get(order.outletId)?.name ?? order.outletId,
+            }
+          : undefined,
+        lines: order.lines ?? [],
+        linkedInvoices: invoiceNumbersByOrderId.get(order.id) ?? [],
+        dispatchCount: summary?.dispatchCount ?? 0,
+        dispatchedQty: summary?.dispatchedQty ?? 0,
+        dispatchDeliveryLabel,
+      }
+    })
     if (priorityParam) {
       mapped = mapped.filter((order) => order.priority === priorityParam)
     }
@@ -1016,6 +1035,7 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     const outletsIndex = await getOutletsIndex()
     const paidAmount = Number(invoice.amountPaid ?? 0)
     const remainingAmount = Number(invoice.amountDue ?? 0)
+    const daysPastDue = typeof invoice.daysPastDue === 'number' ? invoice.daysPastDue : null
     return {
       data: {
         data: {
@@ -1023,8 +1043,8 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
           total: Number(invoice.total ?? 0),
           paidAmount,
           remainingAmount,
-          paymentStatus: invoicePaymentStatus(remainingAmount, paidAmount),
-          isOverdue: remainingAmount > 0 && new Date(invoice.invoiceDate).getTime() < Date.now(),
+          paymentStatus: invoicePaymentStatus(remainingAmount, paidAmount, daysPastDue),
+          isOverdue: remainingAmount > 0 && typeof daysPastDue === 'number' && daysPastDue > 0,
           paymentDate: null,
           outlet: outletsIndex.byId.get(invoice.outletId)
             ? {
@@ -1096,6 +1116,12 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
         },
       },
     }
+  }
+
+  if (/^\/dispatches\/[^/]+\/timeline$/.test(url)) {
+    const dispatchId = url.split('/')[2]
+    const events = await trpcQuery<any>('dispatches.timeline', { dispatchId })
+    return { data: { data: events } }
   }
 
   if (url === '/orgs') {
@@ -1286,78 +1312,36 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
   }
 
   if (url === '/accounts/ar-aging') {
-    const [outlets, invoices] = await Promise.all([
+    const [aging, outlets] = await Promise.all([
+      trpcQuery<any>('invoices.arAging', { limit: 100 }),
       trpcListAll<any>('outlets.list'),
-      trpcListAll<any>('invoices.list'),
     ])
     const outletById = new Map(outlets.map((outlet) => [outlet.id, outlet]))
-    const bucketByOutlet = new Map<
-      string,
-      { current: number; band0_30: number; band31_60: number; band60_plus: number; total: number }
-    >()
-
-    for (const invoice of invoices) {
-      const remaining = Number(invoice.amountDue ?? 0)
-      if (!Number.isFinite(remaining) || remaining <= 0) continue
-
-      const ageDays = daysSince(String(invoice.invoiceDate))
-      const outletId = String(invoice.outletId)
-      const bucket = bucketByOutlet.get(outletId) ?? {
-        current: 0,
-        band0_30: 0,
-        band31_60: 0,
-        band60_plus: 0,
-        total: 0,
-      }
-
-      if (ageDays <= 0) bucket.current += remaining
-      else if (ageDays <= 30) bucket.band0_30 += remaining
-      else if (ageDays <= 60) bucket.band31_60 += remaining
-      else bucket.band60_plus += remaining
-      bucket.total += remaining
-
-      bucketByOutlet.set(outletId, bucket)
-    }
-
-    const rows = Array.from(bucketByOutlet.entries())
-      .map(([outletId, bucket]) => {
-        const outlet = outletById.get(outletId)
-        return {
-          outletId,
-          outletCode: outlet?.outletCode ?? outletId,
-          outletName: outlet?.name ?? outletId,
-          current: bucket.current,
-          band0_30: bucket.band0_30,
-          band31_60: bucket.band31_60,
-          band60_plus: bucket.band60_plus,
-          total: bucket.total,
-        }
-      })
-      .sort((a, b) => b.total - a.total || a.outletName.localeCompare(b.outletName))
-
-    const totals = rows.reduce(
-      (acc, row) => {
-        acc.current += row.current
-        acc.band0_30 += row.band0_30
-        acc.band31_60 += row.band31_60
-        acc.band60_plus += row.band60_plus
-        acc.totalOutstanding += row.total
-        return acc
-      },
-      {
-        current: 0,
-        band0_30: 0,
-        band31_60: 0,
-        band60_plus: 0,
-        totalOutstanding: 0,
-      },
-    )
+    const rows = (aging.items ?? []).map((row: any) => ({
+      invoiceId: row.id,
+      invoiceNumber: row.invoiceNumber,
+      outletId: row.outletId,
+      outletCode: outletById.get(row.outletId)?.outletCode ?? row.outletId,
+      outletName: outletById.get(row.outletId)?.name ?? row.outletId,
+      invoiceDate: row.invoiceDate,
+      dueDate: row.dueDate,
+      amountDue: Number(row.amountDue ?? 0),
+      daysPastDue: Number(row.daysPastDue ?? 0),
+      agingBucket: row.agingBucket ?? 'current',
+    }))
 
     return {
       data: {
         data: {
           generatedAt: new Date().toISOString(),
-          totals,
+          totals: {
+            current: Number(aging.summary?.current ?? 0),
+            band1_30: Number(aging.summary?.bucket1_30 ?? 0),
+            band31_60: Number(aging.summary?.bucket31_60 ?? 0),
+            band61_90: Number(aging.summary?.bucket61_90 ?? 0),
+            band90_plus: Number(aging.summary?.bucket90Plus ?? 0),
+            totalOutstanding: Number(aging.summary?.totalOutstanding ?? 0),
+          },
           rows,
         },
       },
@@ -1367,8 +1351,15 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
   if (/^\/accounts\/outlet\/[^/]+\/financial-profile$/.test(url)) {
     const outletId = url.split('/')[3]
     const outlet = await trpcQuery<any>('outlets.getById', { id: outletId }).catch(() => null)
+    const invoices = await trpcListAll<any>('invoices.list', { outletId })
     const creditLimit = Number(outlet?.creditLimit ?? 0)
-    const outstandingBalance = Number(outlet?.outstandingBalance ?? 0)
+    const openInvoices = invoices.filter((invoice) => Number(invoice.amountDue ?? 0) > 0)
+    const outstandingBalance = openInvoices.reduce((sum, invoice) => sum + Number(invoice.amountDue ?? 0), 0)
+    const overdueInvoices = openInvoices.filter((invoice) => Number(invoice.daysPastDue ?? 0) > 0)
+    const oldestOverdue = overdueInvoices
+      .map((invoice) => invoice.dueDate || invoice.invoiceDate)
+      .filter(Boolean)
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0] ?? null
     return {
       data: {
         data: {
@@ -1377,9 +1368,9 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
           availableCredit: Math.max(0, creditLimit - outstandingBalance),
           creditUtilisationPct: creditLimit > 0 ? (outstandingBalance / creditLimit) * 100 : 0,
           overdueInvoices: {
-            count: 0,
-            total: 0,
-            oldestDate: null,
+            count: overdueInvoices.length,
+            total: overdueInvoices.reduce((sum, invoice) => sum + Number(invoice.amountDue ?? 0), 0),
+            oldestDate: oldestOverdue,
           },
         },
       },
@@ -1622,7 +1613,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       const rolesIndex = await getRolesIndex()
       const actor = await trpcQuery<any>('auth.me', undefined)
       const fallbackRoleId = actor?.roleId ?? rolesIndex.roles[0]?.id
-      const roleId = rolesIndex.byName.get('Sales')?.id ?? fallbackRoleId
+      const roleId = rolesIndex.byName.get('Outlet')?.id ?? rolesIndex.byName.get('Sales')?.id ?? fallbackRoleId
       if (!roleId) {
         throw makeApiError('Unable to resolve role for outlet user creation', 500)
       }
@@ -1683,6 +1674,9 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       orderDate: body.orderDate,
       deliveryAddress: body.deliveryAddress,
       priority: body.priority ?? 'medium',
+      discountType: body.discountType ?? null,
+      discountRate: body.discountRate ?? undefined,
+      paymentTermsDays: body.paymentTermsDays ?? 30,
       notes: body.notes ?? null,
       lines,
     })
@@ -2090,7 +2084,11 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (url === '/settings/billing/charges/preview') {
-    const result = await trpcQuery<any>('invoices.previewCharges', { subtotal: body?.subtotal ?? '0' })
+    const result = await trpcQuery<any>('invoices.previewCharges', {
+      subtotal: body?.subtotal ?? '0',
+      discountType: body?.discountType ?? null,
+      discountRate: body?.discountRate ?? '0',
+    })
     return { data: { data: result } }
   }
 
@@ -2176,6 +2174,21 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: disabled } }
   }
 
+  if (/^\/dispatches\/[^/]+\/mark-in-transit$/.test(url)) {
+    const id = url.split('/')[2]
+    const note = typeof body?.note === 'string' ? body.note : undefined
+    const dispatch = await trpcMutation<any>('dispatches.markInTransit', { id, note })
+    return { data: { data: dispatch } }
+  }
+
+  if (/^\/dispatches\/[^/]+\/mark-delivered$/.test(url)) {
+    const id = url.split('/')[2]
+    const deliveredAt = typeof body?.deliveredAt === 'string' ? body.deliveredAt : undefined
+    const note = typeof body?.note === 'string' ? body.note : undefined
+    const dispatch = await trpcMutation<any>('dispatches.markDelivered', { id, deliveredAt, note })
+    return { data: { data: dispatch } }
+  }
+
   return null
 }
 
@@ -2222,6 +2235,15 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     if (!roleId) throw makeApiError(`Unknown role: ${body.role}`)
     const user = await trpcMutation('users.update', { id, roleId })
     return { data: user }
+  }
+
+  if (/^\/users\/[^/]+\/field-sense$/.test(url)) {
+    const id = url.split('/')[2]
+    const result = await trpcMutation('users.toggleFieldSense', {
+      id,
+      enabled: Boolean(body?.enabled),
+    })
+    return { data: result }
   }
 
   if (/^\/catalog\/brands\/[^/]+$/.test(url)) {
@@ -2329,6 +2351,33 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
       billingCountry: body.billingCountry ?? undefined,
     })
     return { data: outlet }
+  }
+
+  if (/^\/invoices\/[^/]+$/.test(url)) {
+    const invoiceId = url.split('/')[2]
+    const updated = await trpcMutation<any>('invoices.update', {
+      invoiceId,
+      dueDate: body?.dueDate ?? undefined,
+      discountType: body?.discountType ?? undefined,
+      discountRate: body?.discountRate ?? undefined,
+      lines: Array.isArray(body?.lines)
+        ? body.lines.map((line: any) => ({
+            id: line.id,
+            qty: Number(line.qty),
+            unitPrice: String(line.unitPrice ?? '0'),
+          }))
+        : undefined,
+      charges: Array.isArray(body?.charges)
+        ? body.charges.map((charge: any, index: number) => ({
+            taxChargeId: charge.taxChargeId ?? null,
+            name: charge.name,
+            type: charge.type,
+            rate: String(charge.rate ?? '0'),
+            displayOrder: Number(charge.displayOrder ?? index),
+          }))
+        : undefined,
+    })
+    return { data: { data: updated } }
   }
 
   if (/^\/settings\/billing\/charges\/[^/]+$/.test(url)) {
@@ -2451,6 +2500,7 @@ export function openFieldSenseStream(
   signal: AbortSignal,
 ): void {
   const actorId = getActorId()
+  const orgId = getOrgId()
   const url = `${sseBaseURL}/field/live-stream`
 
   let reconnectDelay = 1000
@@ -2465,6 +2515,7 @@ export function openFieldSenseStream(
       headers: {
         Accept: 'text/event-stream',
         ...(actorId ? { 'x-actor-id': actorId } : {}),
+        ...(orgId ? { 'x-org-id': orgId } : {}),
       },
     })
       .then(async (res) => {

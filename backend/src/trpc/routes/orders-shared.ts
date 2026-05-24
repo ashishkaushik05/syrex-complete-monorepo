@@ -38,6 +38,14 @@ export const orderSchema = z.object({
     "on_hold",
   ]),
   priority: z.enum(["low", "medium", "high", "critical"]),
+  subtotalValue: z.string(),
+  discountType: z.enum(["percentage", "fixed"]).nullable(),
+  discountRate: z.string(),
+  discountAmount: z.string(),
+  taxableValue: z.string(),
+  taxSnapshot: z.unknown().nullable(),
+  taxTotal: z.string(),
+  paymentTermsDays: z.number().int(),
   totalValue: z.string(),
   approvedById: z.string().nullable(),
   approvedAt: z.string().nullable(),
@@ -56,6 +64,7 @@ export const orderLinkedInvoiceSchema = z.object({
   id: z.string(),
   invoiceNumber: z.string(),
   invoiceDate: z.string(),
+  dueDate: z.string().nullable(),
   total: z.string(),
   amountPaid: z.string(),
   amountDue: z.string(),
@@ -150,6 +159,14 @@ export function serializeOrder(order: {
   status: OrderStatus;
   priority: "low" | "medium" | "high" | "critical";
   totalValue: Prisma.Decimal;
+  subtotalValue: Prisma.Decimal;
+  discountType: "percentage" | "fixed" | null;
+  discountRate: Prisma.Decimal;
+  discountAmount: Prisma.Decimal;
+  taxableValue: Prisma.Decimal;
+  taxSnapshot: Prisma.JsonValue | null;
+  taxTotal: Prisma.Decimal;
+  paymentTermsDays: number;
   approvedById: string | null;
   approvedAt: Date | null;
   heldById: string | null;
@@ -185,6 +202,14 @@ export function serializeOrder(order: {
     deliveryAddress: order.deliveryAddress,
     status: derivedStatus,
     priority: order.priority,
+    subtotalValue: order.subtotalValue.toString(),
+    discountType: order.discountType,
+    discountRate: order.discountRate.toString(),
+    discountAmount: order.discountAmount.toString(),
+    taxableValue: order.taxableValue.toString(),
+    taxSnapshot: order.taxSnapshot,
+    taxTotal: order.taxTotal.toString(),
+    paymentTermsDays: order.paymentTermsDays,
     totalValue: order.totalValue.toString(),
     approvedById: order.approvedById,
     approvedAt: order.approvedAt?.toISOString() ?? null,
@@ -320,6 +345,7 @@ export async function queryOrderDetail(
           id: order.invoice.id,
           invoiceNumber: order.invoice.invoiceNumber,
           invoiceDate: order.invoice.invoiceDate.toISOString(),
+          dueDate: order.invoice.dueDate?.toISOString() ?? null,
           total: order.invoice.total.toString(),
           amountPaid: order.invoice.amountPaid.toString(),
           amountDue: order.invoice.amountDue.toString(),

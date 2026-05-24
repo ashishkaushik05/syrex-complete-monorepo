@@ -71,9 +71,11 @@ export const fieldVisitsRouter = createTRPCRouter({
     .output(visitSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      const orgId = ctx.actor.orgId;
+      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
 
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, status: "active" },
+        where: { agentId, orgId, status: "active" },
         select: { id: true, orgId: true }
       });
       if (!shift) throw apiError("BAD_REQUEST", "No active shift — visits require an active shift");

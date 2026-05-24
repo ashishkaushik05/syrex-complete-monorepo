@@ -187,7 +187,6 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                                   _searchCtrl.clear();
                                   ref.read(_filterProvider.notifier).state =
                                       _FilterState(status: filter.status);
-                                  setState(() {});
                                 },
                               ),
                       ),

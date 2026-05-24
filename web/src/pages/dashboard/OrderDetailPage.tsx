@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api } from '@/lib/api'
 import { formatCurrencyINR, titleCase } from '@/lib/format'
 import { apiErrorMessage } from '@/lib/http'
+import { usePermission } from '@/context/PermissionContext'
 
 type OrderStatus =
   | 'pending_approval'
@@ -18,6 +20,9 @@ type OrderStatus =
   | 'fully_dispatched'
   | 'rejected'
   | 'cancelled'
+
+type OrderPriority = 'low' | 'medium' | 'high' | 'critical'
+type DeliveryStatus = 'created' | 'in_transit' | 'delivered'
 
 type OrderLine = {
   id: string
@@ -30,9 +35,20 @@ type OrderLine = {
 
 type SalesOrder = {
   id: string
+  orderNumber?: string
   outletId: string
   status: OrderStatus
+  priority?: OrderPriority
   deliveryAddress: string
+  subtotalValue?: string | number
+  discountType?: 'percentage' | 'fixed' | null
+  discountRate?: string | number
+  discountAmount?: string | number
+  taxableValue?: string | number
+  taxTotal?: string | number
+  totalValue?: string | number
+  paymentTermsDays?: number
+  taxSnapshot?: unknown
   notes?: string | null
   holdNote?: string | null
   rejectionReason?: string | null
@@ -73,7 +89,19 @@ type InvoiceRecord = {
 type DispatchRecord = {
   id: string
   lrNumber?: string | null
+  transporterName?: string | null
+  vehicleNumber?: string | null
   dispatchDate: string
+  deliveryStatus?: DeliveryStatus
+  deliveredAt?: string | null
+  createdAt?: string
+}
+
+type TaxSnapshotRow = {
+  name: string
+  type: 'percentage' | 'fixed'
+  rate: string | number
+  amount: string | number
 }
 
 type PaginatedResponse<T> = {
@@ -121,6 +149,25 @@ function statusBadgeClass(status: OrderStatus) {
   return 'border-slate-300 bg-slate-100 text-slate-700'
 }
 
+function priorityBadgeClass(priority: OrderPriority) {
+  if (priority === 'critical') return 'border-red-300 bg-red-100 text-red-800'
+  if (priority === 'high') return 'border-amber-300 bg-amber-100 text-amber-800'
+  if (priority === 'medium') return 'border-blue-300 bg-blue-100 text-blue-800'
+  return 'border-slate-300 bg-slate-100 text-slate-500'
+}
+
+function deliveryStatusBadgeClass(status: DeliveryStatus | undefined) {
+  if (status === 'delivered') return 'border-emerald-300 bg-emerald-100 text-emerald-800'
+  if (status === 'in_transit') return 'border-blue-300 bg-blue-100 text-blue-800'
+  return 'border-slate-300 bg-slate-100 text-slate-500'
+}
+
+function deliveryStatusLabel(status: DeliveryStatus | undefined) {
+  if (status === 'delivered') return 'Delivered'
+  if (status === 'in_transit') return 'In Transit'
+  return 'Not Shipped'
+}
+
 function timelineIndex(status: OrderStatus) {
   if (status === 'pending_approval' || status === 'on_hold') return 0
   if (status === 'approved') return 1
@@ -133,12 +180,35 @@ const TIMELINE_STEPS = ['Pending Approval', 'Approved', 'Partially Dispatched', 
 
 type DetailTab = 'invoice' | 'dispatch' | 'notes'
 
+function parseTaxSnapshot(snapshot: unknown): TaxSnapshotRow[] {
+  if (!Array.isArray(snapshot)) return []
+  return snapshot
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null
+      const value = row as Record<string, unknown>
+      const name = typeof value.name === 'string' ? value.name : ''
+      const type = value.type === 'percentage' || value.type === 'fixed' ? value.type : null
+      if (!name || !type) return null
+      return {
+        name,
+        type,
+        rate: (value.rate as string | number | undefined) ?? '0',
+        amount: (value.amount as string | number | undefined) ?? '0',
+      } satisfies TaxSnapshotRow
+    })
+    .filter((row): row is TaxSnapshotRow => Boolean(row))
+}
+
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const orderId = id ?? ''
+  const queryClient = useQueryClient()
+  const { can } = usePermission()
+  const canDeliver = can('dispatches:deliver')
 
   const [tab, setTab] = useState<DetailTab>('invoice')
   const [toast, setToast] = useState<ToastState>(null)
+  const [confirmDeliverId, setConfirmDeliverId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!toast) return
@@ -194,6 +264,19 @@ export function OrderDetailPage() {
     },
   })
 
+  const markDeliveredMutation = useMutation({
+    mutationFn: async (dispatchId: string) => {
+      await api.post(`/dispatches/${dispatchId}/mark-delivered`, {})
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['sales-order-detail', orderId] })
+      setToast({ text: 'Delivery confirmed', type: 'success' })
+    },
+    onError: (error) => {
+      setToast({ text: apiErrorMessage(error, 'Could not confirm delivery'), type: 'error' })
+    },
+  })
+
   const order = orderQuery.data
   const linkedInvoices = order?.linkedInvoices ?? []
   const linkedDispatches = order?.linkedDispatches ?? []
@@ -208,6 +291,25 @@ export function OrderDetailPage() {
   const subtotal = useMemo(() => {
     return lineTotals.reduce((sum, line) => sum + line.lineTotal, 0)
   }, [lineTotals])
+
+  const taxSnapshotRows = useMemo(() => parseTaxSnapshot(order?.taxSnapshot), [order?.taxSnapshot])
+  const linkedInvoiceTotal = useMemo(
+    () => linkedInvoices.reduce((max, invoice) => Math.max(max, toNumber(invoice.total)), 0),
+    [linkedInvoices],
+  )
+  const subtotalFromOrder = toNumber(order?.subtotalValue)
+  const subtotalValue = subtotalFromOrder > 0 || subtotal === 0 ? subtotalFromOrder : subtotal
+  const discountAmount = toNumber(order?.discountAmount)
+  const taxableFromOrder = toNumber(order?.taxableValue)
+  const taxableValue =
+    taxableFromOrder > 0 || subtotalValue === 0 ? taxableFromOrder : Math.max(0, subtotalValue - discountAmount)
+  const snapshotTaxTotal = taxSnapshotRows.reduce((sum, row) => sum + toNumber(row.amount), 0)
+  const taxFromOrder = toNumber(order?.taxTotal)
+  const totalFromOrder = toNumber(order?.totalValue)
+  const inferredTaxFromOrderTotal = totalFromOrder > taxableValue ? totalFromOrder - taxableValue : 0
+  const inferredTaxFromInvoiceTotal = linkedInvoiceTotal > taxableValue ? linkedInvoiceTotal - taxableValue : 0
+  const taxTotal = Math.max(taxFromOrder, snapshotTaxTotal, inferredTaxFromOrderTotal, inferredTaxFromInvoiceTotal)
+  const totalValue = Math.max(totalFromOrder, taxableValue + taxTotal, linkedInvoiceTotal)
 
   const productNameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -240,12 +342,17 @@ export function OrderDetailPage() {
             <CardHeader className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <CardTitle>Order {order.id.slice(0, 12)}</CardTitle>
+                  <CardTitle>{order.orderNumber ? order.orderNumber : `Order ${order.id.slice(0, 12)}`}</CardTitle>
                   <p className="text-sm text-slate-500">
                     {order.outlet?.name ?? order.outletId} · Created {new Date(order.createdAt).toLocaleString()}
                   </p>
                 </div>
-                <Badge className={statusBadgeClass(order.status)}>{titleCase(order.status)}</Badge>
+                <div className="flex items-center gap-2">
+                  {order.priority ? (
+                    <Badge className={priorityBadgeClass(order.priority)}>{titleCase(order.priority)}</Badge>
+                  ) : null}
+                  <Badge className={statusBadgeClass(order.status)}>{titleCase(order.status)}</Badge>
+                </div>
               </div>
 
               <div className="grid gap-2 sm:grid-cols-5">
@@ -367,13 +474,63 @@ export function OrderDetailPage() {
                       </TableRow>
                     ))}
                     <TableRow>
-                      <TableCell colSpan={5} className="text-right font-semibold text-slate-900">
-                        Total
+                      <TableCell colSpan={5} className="text-right text-slate-600">
+                        Subtotal
                       </TableCell>
-                      <TableCell className="font-semibold text-slate-900">{formatCurrencyINR(subtotal)}</TableCell>
+                      <TableCell className="text-slate-600">{formatCurrencyINR(subtotalValue)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-right text-slate-600">
+                        Discount
+                        {order.discountType
+                          ? ` (${order.discountType === 'percentage' ? `${toNumber(order.discountRate)}%` : 'fixed'})`
+                          : ''}
+                      </TableCell>
+                      <TableCell className="text-slate-600">-{formatCurrencyINR(discountAmount)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-right text-slate-600">
+                        Taxable Value
+                      </TableCell>
+                      <TableCell className="text-slate-600">{formatCurrencyINR(taxableValue)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-right text-slate-600">
+                        Tax Total
+                      </TableCell>
+                      <TableCell className="text-slate-600">{formatCurrencyINR(taxTotal)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-right font-semibold text-slate-900">
+                        Total Value
+                      </TableCell>
+                      <TableCell className="font-semibold text-slate-900">{formatCurrencyINR(totalValue)}</TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
+              </div>
+              <div className="mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs uppercase tracking-wide text-slate-500">Tax Snapshot Used By Order</p>
+                {taxSnapshotRows.length === 0 ? (
+                  <p className="text-sm text-slate-500">
+                    No tax snapshot present.
+                    {inferredTaxFromInvoiceTotal > 0 ? ' Tax is inferred from linked invoice totals.' : ''}
+                  </p>
+                ) : (
+                  <div className="space-y-1 text-sm text-slate-700">
+                    {taxSnapshotRows.map((row) => (
+                      <div key={`${row.name}-${row.type}-${row.rate}`} className="flex items-center justify-between gap-2">
+                        <span>
+                          {row.name} {row.type === 'percentage' ? `(${toNumber(row.rate)}%)` : '(fixed)'}
+                        </span>
+                        <span>{formatCurrencyINR(toNumber(row.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-slate-500">
+                  Payment Terms: {order.paymentTermsDays ?? 30} days
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -425,18 +582,54 @@ export function OrderDetailPage() {
                   <p className="text-sm text-slate-500">No linked dispatch yet.</p>
                 ) : (
                   <div className="space-y-2">
-                    {linkedDispatches.map((dispatch) => (
-                      <Link
-                        key={dispatch.id}
-                        to={`/dashboard/sales/dispatches/${dispatch.id}`}
-                        className="block rounded-lg border border-slate-200 p-3 hover:bg-slate-50"
-                      >
-                        <p className="font-medium text-slate-900">Dispatch {dispatch.id.slice(0, 8)}</p>
-                        <p className="text-xs text-slate-500">
-                          LR: {dispatch.lrNumber ?? '-'} · {new Date(dispatch.dispatchDate).toLocaleDateString()}
-                        </p>
-                      </Link>
-                    ))}
+                    {linkedDispatches.map((dispatch) => {
+                      const isDelivered = dispatch.deliveryStatus === 'delivered'
+                      const canConfirm = canDeliver && !isDelivered
+                      return (
+                        <div
+                          key={dispatch.id}
+                          className="rounded-lg border border-slate-200 p-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <Link
+                                  to={`/dashboard/sales/dispatches/${dispatch.id}`}
+                                  className="font-medium text-slate-900 hover:underline"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  Dispatch {dispatch.id.slice(0, 8)}
+                                </Link>
+                                <Badge className={deliveryStatusBadgeClass(dispatch.deliveryStatus)}>
+                                  {deliveryStatusLabel(dispatch.deliveryStatus)}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-xs text-slate-500">
+                                {new Date(dispatch.dispatchDate).toLocaleDateString()}
+                                {dispatch.lrNumber ? ` · LR: ${dispatch.lrNumber}` : ''}
+                                {dispatch.transporterName ? ` · ${dispatch.transporterName}` : ''}
+                                {dispatch.vehicleNumber ? ` · ${dispatch.vehicleNumber}` : ''}
+                              </p>
+                              {isDelivered && dispatch.deliveredAt ? (
+                                <p className="mt-0.5 text-xs text-emerald-700">
+                                  Delivered {new Date(dispatch.deliveredAt).toLocaleDateString()}
+                                </p>
+                              ) : null}
+                            </div>
+                            {canConfirm ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setConfirmDeliverId(dispatch.id)}
+                                disabled={markDeliveredMutation.isPending}
+                              >
+                                Confirm Delivery
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 )
               ) : null}
@@ -450,6 +643,19 @@ export function OrderDetailPage() {
           </Card>
         </>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(confirmDeliverId)}
+        onOpenChange={(open) => { if (!open) setConfirmDeliverId(null) }}
+        title="Confirm Delivery"
+        description="Confirm that the goods have been received at the outlet. This action cannot be reversed."
+        confirmLabel="Confirm Delivery"
+        onConfirm={() => {
+          if (confirmDeliverId) markDeliveredMutation.mutate(confirmDeliverId)
+          setConfirmDeliverId(null)
+        }}
+        loading={markDeliveredMutation.isPending}
+      />
     </div>
   )
 }

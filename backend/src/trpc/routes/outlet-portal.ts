@@ -17,6 +17,7 @@ const invoiceListItemSchema = z.object({
   invoiceNumber: z.string(),
   orderId: z.string(),
   invoiceDate: z.string(),
+  dueDate: z.string().nullable(),
   total: z.string(),
   amountPaid: z.string(),
   amountDue: z.string(),
@@ -40,7 +41,7 @@ export const outletPortalRouter = createTRPCRouter({
 
       const outlet = await ctx.prisma.outlet.findUnique({
         where: { id: input.outletId },
-        select: { id: true, outstandingBalance: true },
+        select: { id: true },
       });
       if (!outlet) {
         throw apiError("NOT_FOUND", "Outlet not found");
@@ -64,7 +65,7 @@ export const outletPortalRouter = createTRPCRouter({
 
       return {
         outletId: outlet.id,
-        outstandingSnapshot: outlet.outstandingBalance.toString(),
+        outstandingSnapshot: (invoiceAgg._sum.amountDue ?? 0).toString(),
         outstandingLive: (invoiceAgg._sum.amountDue ?? 0).toString(),
         openInvoicesCount,
         ordersCount,
@@ -124,11 +125,26 @@ export const outletPortalRouter = createTRPCRouter({
         orderId: z.string(),
         orderNumber: z.string(),
         invoiceDate: z.string(),
+        dueDate: z.string().nullable(),
         subtotal: z.string(),
+        discountType: z.enum(["percentage", "fixed"]).nullable(),
+        discountRate: z.string(),
+        discountAmount: z.string(),
         total: z.string(),
         amountPaid: z.string(),
         amountDue: z.string(),
         createdAt: z.string(),
+        charges: z.array(
+          z.object({
+            id: z.string(),
+            taxChargeId: z.string().nullable(),
+            name: z.string(),
+            type: z.enum(["percentage", "fixed"]),
+            rate: z.string(),
+            amount: z.string(),
+            displayOrder: z.number().int(),
+          }),
+        ),
         lines: z.array(
           z.object({
             id: z.string(),
@@ -144,7 +160,11 @@ export const outletPortalRouter = createTRPCRouter({
       await assertOutletAccess(ctx, input.outletId);
       const invoice = await ctx.prisma.invoice.findUnique({
         where: { id: input.invoiceId },
-        include: { lines: true, order: { select: { orderNumber: true } } },
+        include: {
+          lines: true,
+          charges: { orderBy: [{ displayOrder: "asc" }] },
+          order: { select: { orderNumber: true } },
+        },
       });
       if (!invoice || invoice.outletId !== input.outletId) {
         throw apiError("NOT_FOUND", "Invoice not found");
@@ -155,11 +175,24 @@ export const outletPortalRouter = createTRPCRouter({
         orderId: invoice.orderId,
         orderNumber: invoice.order.orderNumber,
         invoiceDate: invoice.invoiceDate.toISOString(),
+        dueDate: invoice.dueDate?.toISOString() ?? null,
         subtotal: invoice.subtotal.toString(),
+        discountType: invoice.discountType,
+        discountRate: invoice.discountRate.toString(),
+        discountAmount: invoice.discountAmount.toString(),
         total: invoice.total.toString(),
         amountPaid: invoice.amountPaid.toString(),
         amountDue: invoice.amountDue.toString(),
         createdAt: invoice.createdAt.toISOString(),
+        charges: invoice.charges.map((c) => ({
+          id: c.id,
+          taxChargeId: c.taxChargeId,
+          name: c.name,
+          type: c.type,
+          rate: c.rate.toString(),
+          amount: c.amount.toString(),
+          displayOrder: c.displayOrder,
+        })),
         lines: invoice.lines.map((l) => ({
           id: l.id,
           sku: l.sku,
@@ -260,6 +293,7 @@ export const outletPortalRouter = createTRPCRouter({
           invoiceNumber: true,
           orderId: true,
           invoiceDate: true,
+          dueDate: true,
           total: true,
           amountPaid: true,
           amountDue: true,
@@ -279,6 +313,7 @@ export const outletPortalRouter = createTRPCRouter({
           invoiceNumber: r.invoiceNumber,
           orderId: r.orderId,
           invoiceDate: r.invoiceDate.toISOString(),
+          dueDate: r.dueDate?.toISOString() ?? null,
           total: r.total.toString(),
           amountPaid: r.amountPaid.toString(),
           amountDue: r.amountDue.toString(),

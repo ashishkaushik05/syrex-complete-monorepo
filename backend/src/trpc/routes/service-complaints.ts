@@ -6,6 +6,7 @@ import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import {
   SERVICE_STATUS_VALUES,
   SERVICE_TRANSITION_ACTIONS,
+  assertOrgAccess,
   ensureSerialIndex,
   nextComplaintNumber,
   normalizeSerial,
@@ -144,6 +145,7 @@ export const serviceComplaintsRouter = createTRPCRouter({
         tabCounts: z.object({
           all: z.number().int(),
           raised: z.number().int(),
+          assigned: z.number().int(),
           visit: z.number().int(),
           test_result_submitted: z.number().int(),
           retest_requested: z.number().int(),
@@ -156,8 +158,8 @@ export const serviceComplaintsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const offset = decodeCursor(input.cursor) ?? 0;
 
-      const where = {
-        status: input.status,
+      const baseFilter = {
+        orgId: ctx.actor.orgId ?? undefined,
         OR: input.q
           ? [
               { complaintNumber: { contains: input.q, mode: "insensitive" as const } },
@@ -177,6 +179,11 @@ export const serviceComplaintsRouter = createTRPCRouter({
           : undefined,
       };
 
+      const where = {
+        ...baseFilter,
+        status: input.status,
+      };
+
       const [rows, allCounts, total] = await Promise.all([
         ctx.prisma.serviceComplaint.findMany({
           where,
@@ -194,9 +201,10 @@ export const serviceComplaintsRouter = createTRPCRouter({
         }),
         ctx.prisma.serviceComplaint.groupBy({
           by: ["status"],
+          where: baseFilter,
           _count: { _all: true },
         }),
-        ctx.prisma.serviceComplaint.count(),
+        ctx.prisma.serviceComplaint.count({ where: baseFilter }),
       ]);
 
       const hasMore = rows.length > input.limit;
@@ -236,6 +244,7 @@ export const serviceComplaintsRouter = createTRPCRouter({
         },
       });
       if (!row) throw apiError("NOT_FOUND", "Complaint not found");
+      assertOrgAccess(ctx.actor.orgId, row.orgId, "Complaint");
       return toComplaintListItem(row);
     }),
 
@@ -255,6 +264,7 @@ export const serviceComplaintsRouter = createTRPCRouter({
         },
       });
       if (!row) throw apiError("NOT_FOUND", "Complaint not found");
+      assertOrgAccess(ctx.actor.orgId, row.orgId, "Complaint");
 
       return {
         ...toComplaintListItem(row),
@@ -324,13 +334,12 @@ export const serviceComplaintsRouter = createTRPCRouter({
         title: z.string().max(200).optional(),
         description: z.string().max(4000).optional(),
         outletId: z.string().uuid().optional(),
-        lines: z.array(complaintLineInputSchema).min(1),
+        lines: z.array(complaintLineInputSchema).min(1).max(50),
       }),
     )
     .output(complaintDetailSchema)
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+      const actorId = ctx.actor.id!;
 
       const actor = await ctx.prisma.user.findUnique({
         where: { id: actorId },
@@ -340,13 +349,15 @@ export const serviceComplaintsRouter = createTRPCRouter({
         throw apiError("FORBIDDEN", "Complaint creation is restricted to internal users");
       }
 
+      const orgId = ctx.actor.orgId ?? null;
       const now = new Date();
       const createdId = await ctx.prisma.$transaction(async (tx) => {
-        const complaintNumber = await nextComplaintNumber(tx, now);
+        const complaintNumber = await nextComplaintNumber(tx, now, orgId ?? "");
 
         const created = await tx.serviceComplaint.create({
           data: {
             complaintNumber,
+            orgId,
             status: "raised",
             title: input.title ?? null,
             description: input.description ?? null,
@@ -466,33 +477,53 @@ export const serviceComplaintsRouter = createTRPCRouter({
     .output(complaintListItemSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
-      const row = await ctx.prisma.serviceComplaint.update({
-        where: { id: input.id },
-        data: {
-          title: input.title,
-          description: input.description,
-          resolutionNote: input.resolutionNote,
-        },
-        include: {
-          outlet: { select: { name: true } },
-          lines: { select: { serialNumber: true } },
-        },
-      });
+      const row = await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.serviceComplaint.findUnique({
+          where: { id: input.id },
+          select: { orgId: true, status: true, title: true, description: true, resolutionNote: true },
+        });
+        if (!existing) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, existing.orgId, "Complaint");
 
-      await ctx.prisma.serviceComplaintActivity.create({
-        data: {
+        const FINAL_STATUSES = new Set(["resolved", "telephonic_closure", "cancelled"]);
+        if (FINAL_STATUSES.has(existing.status)) {
+          throw apiError("CONFLICT", "Cannot update a closed complaint");
+        }
+
+        const updated = await tx.serviceComplaint.update({
+          where: { id: input.id },
+          data: {
+            title: input.title,
+            description: input.description,
+            resolutionNote: input.resolutionNote,
+          },
+          include: {
+            outlet: { select: { name: true } },
+            lines: { select: { serialNumber: true } },
+          },
+        });
+
+        await recordComplaintActivity(tx, {
           complaintId: input.id,
           actorId,
           action: "updated",
           note: "Complaint fields updated",
           meta: {
-            title: input.title,
-            description: input.description,
-            resolutionNote: input.resolutionNote,
+            old: {
+              title: existing.title,
+              description: existing.description,
+              resolutionNote: existing.resolutionNote,
+            },
+            new: {
+              title: input.title,
+              description: input.description,
+              resolutionNote: input.resolutionNote,
+            },
           },
-        },
+        });
+
+        return updated;
       });
 
       return toComplaintListItem(row);
@@ -508,6 +539,9 @@ export const serviceComplaintsRouter = createTRPCRouter({
     )
     .output(complaintListItemSchema)
     .mutation(async ({ ctx, input }) => {
+      if (input.action === "assign" && !ctx.permissions.includes(P.service.assign)) {
+        throw apiError("FORBIDDEN", "Requires service:assign permission");
+      }
       if (input.action === "retest_requested" && !ctx.permissions.includes(P.service.retest)) {
         throw apiError("FORBIDDEN", "Requires: service:retest");
       }
@@ -525,7 +559,6 @@ export const serviceComplaintsRouter = createTRPCRouter({
       }
 
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findUnique({
@@ -536,6 +569,7 @@ export const serviceComplaintsRouter = createTRPCRouter({
           },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const transition = resolveTransition(complaint.status, input.action);
 
@@ -591,54 +625,4 @@ export const serviceComplaintsRouter = createTRPCRouter({
       return toComplaintListItem(updated);
     }),
 
-  cancel: perm(P.service.cancel)
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        reason: z.string().min(2).max(1000),
-      }),
-    )
-    .output(complaintListItemSchema)
-    .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
-
-      const updated = await ctx.prisma.$transaction(async (tx) => {
-        const complaint = await tx.serviceComplaint.findUnique({
-          where: { id: input.id },
-          include: {
-            outlet: { select: { name: true } },
-            lines: { select: { serialNumber: true } },
-          },
-        });
-        if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-
-        const transition = resolveTransition(complaint.status, "cancel");
-        const row = await tx.serviceComplaint.update({
-          where: { id: input.id },
-          data: {
-            status: transition.nextStatus,
-            cancelledAt: new Date(),
-            resolutionNote: input.reason,
-          },
-          include: {
-            outlet: { select: { name: true } },
-            lines: { select: { serialNumber: true } },
-          },
-        });
-
-        await recordComplaintActivity(tx, {
-          complaintId: input.id,
-          actorId,
-          action: "cancel",
-          fromStatus: complaint.status,
-          toStatus: transition.nextStatus,
-          note: input.reason,
-        });
-
-        return row;
-      });
-
-      return toComplaintListItem(updated);
-    }),
 });

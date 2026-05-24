@@ -15,13 +15,12 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       scaffoldBackgroundColor: AppPalette.cloud,
-      fontFamily: 'serif',
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
       ),
-      cardTheme: CardThemeData(
+      cardTheme: CardTheme(
         elevation: 0,
         color: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),

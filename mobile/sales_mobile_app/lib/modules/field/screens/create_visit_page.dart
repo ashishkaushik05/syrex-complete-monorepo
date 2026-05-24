@@ -42,13 +42,22 @@ class _CreateVisitPageState extends ConsumerState<CreateVisitPage> {
   }
 
   Future<void> _captureLocation() async {
+    final shift = await ref.read(activeShiftProvider.future);
+    if (shift == null) {
+      setState(() => _banner = 'No active shift. Start a shift before logging a visit.');
+      return;
+    }
     setState(() => _loadingLocation = true);
     try {
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.deniedForever) {
+        setState(() => _banner = 'Location permission permanently denied. Please enable it in app settings.');
+        return;
+      }
+      if (permission == LocationPermission.denied) {
         setState(() => _banner = 'Location permission is required for visit logging.');
         return;
       }
@@ -95,6 +104,7 @@ class _CreateVisitPageState extends ConsumerState<CreateVisitPage> {
             outletId: _outletId,
             customerId: _customerId,
             notes: _notesCtrl.text.trim(),
+            audioUrl: _audioCtrl.text.trim().isEmpty ? null : _audioCtrl.text.trim(),
             recordedAt: _position!.timestamp,
           );
       if (!mounted) return;

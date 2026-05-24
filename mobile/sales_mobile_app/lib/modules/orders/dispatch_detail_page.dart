@@ -48,13 +48,16 @@ class DispatchDetailPage extends ConsumerWidget {
                   children: [
                     const Text('Dispatched Lines', style: TextStyle(fontWeight: FontWeight.w700)),
                     const SizedBox(height: 8),
-                    ...dispatch.lines.map(
-                      (line) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(line.sku, style: const TextStyle(fontWeight: FontWeight.w700)),
-                        subtitle: Text('Qty: ${line.qtyDispatched}'),
+                    if (dispatch.lines.isEmpty)
+                      const Center(child: Text('No items in this dispatch.'))
+                    else
+                      ...dispatch.lines.map(
+                        (line) => ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(line.sku, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          subtitle: Text('Qty: ${line.qtyDispatched}'),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
@@ -6,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ServiceStatusBadge } from '@/components/service/ServiceStatusBadge'
+import type { ComplaintStatus } from '@/components/service/ServiceStatusBadge'
 import { api } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/http'
 
@@ -19,11 +22,7 @@ type SerialResolveResult = {
     categoryName: string | null
     brandName: string | null
   } | null
-  soldToOutlet: {
-    id: string
-    name: string
-    outletCode: string | null
-  } | null
+  soldToOutlet: { id: string; name: string; outletCode: string | null } | null
   salesChain: Array<{
     orderId: string
     orderNumber: string
@@ -42,10 +41,7 @@ type SerialResolveResult = {
     role: 'old_serial' | 'replacement_serial'
     lineId: string
   }>
-  replacementConflict: {
-    hasConflict: boolean
-    usedInComplaintIds: string[]
-  }
+  replacementConflict: { hasConflict: boolean; usedInComplaintIds: string[] }
   events: Array<{
     id: string
     eventType: string
@@ -56,166 +52,198 @@ type SerialResolveResult = {
   }>
 }
 
+function DeliveryBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    delivered:  'bg-emerald-100 text-emerald-700',
+    in_transit: 'bg-blue-100 text-blue-700',
+    pending:    'bg-amber-100 text-amber-700',
+  }
+  return (
+    <Badge className={`border-0 text-xs ${map[status] ?? 'bg-slate-100 text-slate-600'}`}>
+      {status.replace(/_/g, ' ')}
+    </Badge>
+  )
+}
+
 export function ServiceSerialsPage() {
   const navigate = useNavigate()
   const [searchInput, setSearchInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<SerialResolveResult | null>(null)
-  const [queriedSerial, setQueriedSerial] = useState('')
+  const [submittedSerial, setSubmittedSerial] = useState('')
 
-  async function handleLookup() {
+  // FP-049: use useQuery instead of manual state + async function
+  const resultQuery = useQuery<SerialResolveResult | null>({
+    queryKey: ['serviceSerials', 'resolve', submittedSerial],
+    queryFn: async () => {
+      if (!submittedSerial) return null
+      const response = await api.get('/service/serials', { params: { q: submittedSerial } })
+      const p = response.data as any
+      return p?.data?.data ?? p?.data ?? null
+    },
+    enabled: Boolean(submittedSerial),
+    staleTime: 60_000,
+  })
+
+  const loading = resultQuery.isFetching
+  const error = resultQuery.isError ? apiErrorMessage(resultQuery.error, 'Failed to resolve serial') : null
+  const result = resultQuery.data ?? null
+  const queriedSerial = submittedSerial
+
+  function handleLookup() {
     const serial = searchInput.trim()
     if (!serial) return
-    setLoading(true)
-    setError(null)
-    setResult(null)
-    setQueriedSerial(serial)
-    try {
-      const response = await api.get<{ data: { data: SerialResolveResult } }>('/service/serials', {
-        params: { q: serial },
-      })
-      const payload = response.data as any
-      setResult(payload?.data?.data ?? payload?.data ?? null)
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Failed to resolve serial'))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter') handleLookup()
+    setSubmittedSerial(serial)
   }
 
   return (
     <div className="space-y-4">
-      {/* Search */}
+      {/* Search card */}
       <Card className="border-slate-200 bg-white shadow-sm">
-        <CardHeader>
-          <CardTitle>Serial Number Lookup</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Serial Intelligence</CardTitle>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Look up any serial number to trace its product, sales history, and complaint links.
+          </p>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-3">
+          <div className="flex gap-2 max-w-lg">
             <Input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Enter serial number (e.g. SN-1234-ABC)"
-              className="max-w-md"
+              onKeyDown={(e) => { if (e.key === 'Enter') handleLookup() }}
+              placeholder="Enter serial number, e.g. SN-1234-ABC"
+              className="font-mono"
             />
-            <Button type="button" onClick={handleLookup} disabled={loading || !searchInput.trim()}>
-              {loading ? 'Looking up...' : 'Lookup'}
+            <Button
+              type="button"
+              onClick={handleLookup}
+              disabled={loading || !searchInput.trim()}
+              className="bg-teal-600 hover:bg-teal-700 text-white shrink-0"
+            >
+              {loading ? (
+                <span className="flex items-center gap-1.5">
+                  <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  Looking up…
+                </span>
+              ) : 'Lookup'}
             </Button>
           </div>
-          {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+          {error ? <p className="mt-2 text-sm text-rose-600">{error}</p> : null}
         </CardContent>
       </Card>
 
+      {/* Results */}
       {result ? (
-        <>
-          {/* Product + Outlet */}
-          <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-4">
+          {/* Conflict banner */}
+          {result.replacementConflict.hasConflict ? (
+            <div className="flex items-center gap-3 rounded-xl border border-rose-300 bg-rose-50 px-5 py-3 text-rose-700">
+              <svg className="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <div>
+                <p className="text-sm font-semibold">Replacement Conflict Detected</p>
+                <p className="text-xs mt-0.5">
+                  This serial is used as a replacement in {result.replacementConflict.usedInComplaintIds.length} complaint(s).
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Product + Outlet row */}
+          <div className="grid gap-4 sm:grid-cols-2">
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Product</CardTitle>
+              <CardHeader className="pb-2 pt-4 px-5">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Product</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2 text-sm">
+              <CardContent className="px-5 pb-5 space-y-3">
                 <div>
-                  <p className="text-xs text-slate-500 uppercase tracking-wide">Serial</p>
-                  <code className="font-mono font-semibold text-slate-900">{result.serial}</code>
-                  <p className="text-xs text-slate-400">Normalized: {result.normalizedSerial}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Serial</p>
+                  <code className="text-base font-mono font-bold text-slate-900">{result.serial}</code>
+                  <p className="text-xs text-slate-400 mt-0.5">Normalized: <code className="font-mono">{result.normalizedSerial}</code></p>
                 </div>
                 {result.product ? (
                   <>
                     <div>
-                      <p className="text-xs text-slate-500 uppercase tracking-wide">Product</p>
-                      <p className="font-medium text-slate-900">{result.product.name}</p>
-                      <p className="text-xs text-slate-500">SKU: {result.product.sku}</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Product Name</p>
+                      <p className="text-sm font-semibold text-slate-900">{result.product.name}</p>
+                      <code className="text-xs font-mono text-slate-500">{result.product.sku}</code>
                     </div>
-                    {result.product.brandName || result.product.categoryName ? (
+                    {result.product.categoryName || result.product.brandName ? (
                       <div>
-                        <p className="text-xs text-slate-500 uppercase tracking-wide">Category / Brand</p>
-                        <p className="text-slate-700">
-                          {result.product.categoryName ?? '—'} / {result.product.brandName ?? '—'}
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Brand / Category</p>
+                        <p className="text-sm text-slate-700">
+                          {result.product.brandName ?? '—'} / {result.product.categoryName ?? '—'}
                         </p>
                       </div>
                     ) : null}
                   </>
                 ) : (
-                  <p className="text-slate-400">Product not found in catalog</p>
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
+                    Product not found in catalog
+                  </div>
                 )}
               </CardContent>
             </Card>
 
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Sold To Outlet</CardTitle>
+              <CardHeader className="pb-2 pt-4 px-5">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Outlet</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm">
+              <CardContent className="px-5 pb-5 space-y-3">
                 {result.soldToOutlet ? (
-                  <div className="space-y-1">
-                    <p className="font-medium text-slate-900">{result.soldToOutlet.name}</p>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{result.soldToOutlet.name}</p>
                     {result.soldToOutlet.outletCode ? (
-                      <p className="text-xs text-slate-500">Code: {result.soldToOutlet.outletCode}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">Code: <code className="font-mono">{result.soldToOutlet.outletCode}</code></p>
                     ) : null}
                   </div>
                 ) : (
-                  <p className="text-slate-400">No outlet record found</p>
+                  <p className="text-sm text-slate-400 italic">No outlet record found</p>
                 )}
-                {result.replacementConflict.hasConflict ? (
-                  <div className="mt-3">
-                    <Badge className="bg-rose-100 text-rose-700">Replacement Conflict</Badge>
-                    <p className="mt-1 text-xs text-rose-600">
-                      This serial is already used as a replacement in{' '}
-                      {result.replacementConflict.usedInComplaintIds.length} complaint(s).
-                    </p>
-                  </div>
-                ) : null}
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Complaint Links</p>
+                  {result.complaintLinks.length === 0 ? (
+                    <p className="text-sm text-slate-400 mt-1">No complaint links</p>
+                  ) : (
+                    <p className="text-sm font-semibold text-slate-900 mt-1">{result.complaintLinks.length} complaint{result.complaintLinks.length !== 1 ? 's' : ''}</p>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Sales Chain */}
+          {/* Sales chain */}
           {result.salesChain.length > 0 ? (
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Sales Chain</CardTitle>
+              <CardHeader className="pb-2 pt-4 px-5">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sales Chain</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="px-5 pb-5">
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
-                      <TableRow>
-                        <TableHead>Order</TableHead>
-                        <TableHead>Dispatch Date</TableHead>
-                        <TableHead>Delivery Status</TableHead>
-                        <TableHead>Invoice</TableHead>
-                        <TableHead>Outlet</TableHead>
+                      <TableRow className="bg-slate-50">
+                        <TableHead className="text-xs">Order</TableHead>
+                        <TableHead className="text-xs">Dispatch Date</TableHead>
+                        <TableHead className="text-xs">Delivery</TableHead>
+                        <TableHead className="text-xs">Invoice</TableHead>
+                        <TableHead className="text-xs">Outlet</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {result.salesChain.map((chain) => (
                         <TableRow key={chain.dispatchId}>
-                          <TableCell className="font-mono text-sm">{chain.orderNumber}</TableCell>
-                          <TableCell className="text-sm">
+                          <TableCell className="font-mono text-sm font-semibold text-slate-800">{chain.orderNumber}</TableCell>
+                          <TableCell className="text-sm text-slate-600">
                             {new Date(chain.dispatchDate).toLocaleDateString()}
                           </TableCell>
-                          <TableCell>
-                            <Badge
-                              className={
-                                chain.deliveryStatus === 'delivered'
-                                  ? 'bg-emerald-100 text-emerald-700'
-                                  : chain.deliveryStatus === 'in_transit'
-                                    ? 'bg-blue-100 text-blue-700'
-                                    : 'bg-slate-100 text-slate-700'
-                              }
-                            >
-                              {chain.deliveryStatus}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm">{chain.invoiceNumber ?? '—'}</TableCell>
-                          <TableCell className="text-sm">{chain.outletName ?? '—'}</TableCell>
+                          <TableCell><DeliveryBadge status={chain.deliveryStatus} /></TableCell>
+                          <TableCell className="text-sm font-mono text-slate-600">{chain.invoiceNumber ?? '—'}</TableCell>
+                          <TableCell className="text-sm text-slate-600">{chain.outletName ?? '—'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -225,83 +253,63 @@ export function ServiceSerialsPage() {
             </Card>
           ) : null}
 
-          {/* Complaint Links */}
+          {/* Complaint links */}
           {result.complaintLinks.length > 0 ? (
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Complaint Links</CardTitle>
+              <CardHeader className="pb-2 pt-4 px-5">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Complaint Links</CardTitle>
               </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Complaint</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {result.complaintLinks.map((link) => (
-                      <TableRow key={link.lineId}>
-                        <TableCell className="font-mono text-sm">{link.complaintNumber}</TableCell>
-                        <TableCell>
-                          <Badge className="bg-slate-100 text-slate-700">{link.complaintStatus}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              link.role === 'replacement_serial'
-                                ? 'bg-indigo-100 text-indigo-700'
-                                : 'bg-slate-100 text-slate-700'
-                            }
-                          >
-                            {link.role === 'replacement_serial' ? 'Replacement' : 'Original'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              navigate(`/dashboard/service/complaints/${link.complaintId}`)
-                            }
-                          >
-                            View
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <CardContent className="px-5 pb-5">
+                <div className="space-y-2">
+                  {result.complaintLinks.map((link) => (
+                    <div key={link.lineId} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <code className="font-mono text-sm font-semibold text-slate-800">{link.complaintNumber}</code>
+                        <ServiceStatusBadge status={link.complaintStatus as ComplaintStatus} size="sm" />
+                        <Badge className={`border-0 text-xs ${link.role === 'replacement_serial' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {link.role === 'replacement_serial' ? 'Replacement' : 'Original'}
+                        </Badge>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => navigate(`/dashboard/service/complaints/${link.complaintId}`)}
+                        className="shrink-0 text-xs"
+                      >
+                        View →
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           ) : null}
 
-          {/* Event Timeline */}
+          {/* Event timeline */}
           {result.events.length > 0 ? (
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Serial Event Timeline</CardTitle>
+              <CardHeader className="pb-2 pt-4 px-5">
+                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-slate-500">Serial Event Timeline</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {result.events.map((event) => (
-                    <div key={event.id} className="flex gap-3 rounded-lg border border-slate-100 p-3 text-sm">
-                      <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-teal-400" />
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium text-slate-900">
+              <CardContent className="px-5 pb-5">
+                <div className="space-y-0">
+                  {result.events.map((event, idx) => (
+                    <div key={event.id} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className="h-2.5 w-2.5 rounded-full bg-teal-500 ring-2 ring-white shrink-0 mt-1" />
+                        {idx < result.events.length - 1 ? <div className="w-px flex-1 bg-slate-200 min-h-[1.5rem]" /> : null}
+                      </div>
+                      <div className="pb-3 flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2 flex-wrap">
+                          <span className="text-xs font-semibold text-slate-800">
                             {event.eventType.replace(/_/g, ' ')}
                           </span>
-                          <span className="text-xs text-slate-400">
+                          <span className="text-[10px] text-slate-400 whitespace-nowrap">
                             {new Date(event.eventAt).toLocaleDateString()}
                           </span>
                         </div>
-                        <p className="text-xs text-slate-500">
-                          {event.entityType}: {event.entityId}
-                        </p>
+                        <p className="text-[10px] text-slate-500 mt-0.5 font-mono">{event.entityType}: {event.entityId}</p>
                       </div>
                     </div>
                   ))}
@@ -310,19 +318,17 @@ export function ServiceSerialsPage() {
             </Card>
           ) : null}
 
-          {result.salesChain.length === 0 &&
-          result.complaintLinks.length === 0 &&
-          result.events.length === 0 ? (
+          {/* Empty state */}
+          {result.salesChain.length === 0 && result.complaintLinks.length === 0 && result.events.length === 0 ? (
             <Card className="border-slate-200 bg-white shadow-sm">
-              <CardContent className="pt-6">
-                <p className="text-sm text-slate-500">
-                  Serial <code className="font-mono">{queriedSerial}</code> has no sales history or complaint
-                  links in the system.
+              <CardContent className="px-5 py-10 text-center text-slate-400">
+                <p className="text-sm">
+                  Serial <code className="font-mono text-slate-600">{queriedSerial}</code> has no sales history, complaint links, or events in the system.
                 </p>
               </CardContent>
             </Card>
           ) : null}
-        </>
+        </div>
       ) : null}
     </div>
   )

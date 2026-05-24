@@ -84,9 +84,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
             status: picked,
             note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
           );
-      final now = DateTime.now();
-      final from = now.subtract(const Duration(days: 30)).toIso8601String();
-      final to = now.toIso8601String();
+      final now = DateTime.now().toLocal();
+      final from = now.subtract(const Duration(days: 30)).toIso8601String().substring(0, 10);
+      final to = now.toIso8601String().substring(0, 10);
       ref.invalidate(attendanceAdminProvider((
         userId: _selectedAgentId,
         from: from,
@@ -108,9 +108,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
         ref.watch(permissionServiceProvider).can(user, 'field:admin');
     final historyAsync = ref.watch(todayAttendanceProvider);
     final agentsAsync = ref.watch(agentsProvider);
-    final now = DateTime.now();
-    final from = now.subtract(const Duration(days: 30)).toIso8601String();
-    final to = now.toIso8601String();
+    final now = DateTime.now().toLocal();
+    final from = now.subtract(const Duration(days: 30)).toIso8601String().substring(0, 10);
+    final to = now.toIso8601String().substring(0, 10);
     final adminAsync = ref.watch(attendanceAdminProvider((
       userId: _selectedAgentId,
       from: from,

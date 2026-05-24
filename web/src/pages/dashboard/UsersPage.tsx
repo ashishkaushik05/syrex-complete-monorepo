@@ -242,6 +242,7 @@ export function UsersPage() {
                 <TableHead>Role</TableHead>
                 <TableHead>User Type</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Field Sense</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -253,6 +254,15 @@ export function UsersPage() {
                   <TableCell>{user.role?.name ?? '-'}</TableCell>
                   <TableCell>{user.userType}</TableCell>
                   <TableCell>{user.isActive ? 'active' : 'inactive'}</TableCell>
+                  <TableCell>
+                    {user.userType === 'internal' ? (
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${user.isFieldEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                        {user.isFieldEnabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <Button variant="outline" size="sm" onClick={() => openManageDialog(user)} disabled={!canWriteUsers}>
                       Manage

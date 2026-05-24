@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { normalizeSerial, recordComplaintActivity, resolveTransition } from "./service-shared";
+import { assertOrgAccess, normalizeSerial, recordComplaintActivity, resolveTransition } from "./service-shared";
 
 async function nextOrderNumber(tx: Prisma.TransactionClient, now: Date) {
   const year = now.getUTCFullYear();
@@ -41,16 +41,27 @@ export const serviceWarrantyRouter = createTRPCRouter({
     .output(warrantyDecisionOutputSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findUnique({
           where: { id: input.complaintId },
-          select: { id: true, status: true },
+          select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
-        resolveTransition(complaint.status, "warranty_approve");
+        const transition = resolveTransition(complaint.status, "warranty_approve");
+
+        // SW-003/SW-004: Guard against re-approval or re-opening a rejected decision
+        const existingDecision = await tx.serviceWarrantyDecision.findUnique({
+          where: { complaintId: input.complaintId },
+        });
+        if (existingDecision?.status === "approved") {
+          throw apiError("CONFLICT", "Warranty decision already approved. Cannot re-approve.");
+        }
+        if (existingDecision?.status === "rejected") {
+          throw apiError("CONFLICT", "Warranty was rejected. Reopen the complaint to re-evaluate.");
+        }
 
         const decision = await tx.serviceWarrantyDecision.upsert({
           where: { complaintId: input.complaintId },
@@ -70,12 +81,20 @@ export const serviceWarrantyRouter = createTRPCRouter({
           },
         });
 
+        // SW-002: Apply status transition when statusChanged
+        if (transition.statusChanged) {
+          await tx.serviceComplaint.update({
+            where: { id: input.complaintId },
+            data: { status: transition.nextStatus },
+          });
+        }
+
         await recordComplaintActivity(tx, {
           complaintId: input.complaintId,
           actorId,
           action: "warranty_approve",
           fromStatus: complaint.status,
-          toStatus: complaint.status,
+          toStatus: transition.nextStatus,
           note: input.note ?? null,
           meta: {
             sourceWarehouseId: input.sourceWarehouseId,
@@ -109,16 +128,24 @@ export const serviceWarrantyRouter = createTRPCRouter({
     .output(warrantyDecisionOutputSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findUnique({
           where: { id: input.complaintId },
-          select: { id: true, status: true },
+          select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const transition = resolveTransition(complaint.status, "warranty_reject");
+
+        // SW-006: Guard against double-rejection
+        const existingDecision = await tx.serviceWarrantyDecision.findUnique({
+          where: { complaintId: input.complaintId },
+        });
+        if (existingDecision?.status === "rejected") {
+          throw apiError("CONFLICT", "Warranty decision already rejected.");
+        }
 
         const decision = await tx.serviceWarrantyDecision.upsert({
           where: { complaintId: input.complaintId },
@@ -189,29 +216,31 @@ export const serviceWarrantyRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const normalizedReplacementSerial = normalizeSerial(input.replacementSerial);
-      const conflict = await ctx.prisma.serviceComplaintLine.findFirst({
-        where: {
-          normalizedReplacementSerial,
-          NOT: {
-            complaintId: input.complaintId,
-          },
-        },
-        select: { id: true, complaintId: true },
-      });
-      if (conflict) {
-        throw apiError("CONFLICT", "Replacement serial is already linked to another complaint");
-      }
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
+        // SW-007: Conflict check moved inside the transaction to avoid TOCTOU race
+        const conflict = await tx.serviceComplaintLine.findFirst({
+          where: {
+            normalizedReplacementSerial,
+            NOT: {
+              complaintId: input.complaintId,
+            },
+          },
+          select: { id: true, complaintId: true },
+        });
+        if (conflict) {
+          throw apiError("CONFLICT", "Replacement serial is already linked to another complaint");
+        }
+
         const line = await tx.serviceComplaintLine.findUnique({
           where: { id: input.complaintLineId },
           include: {
             complaint: {
               select: {
                 id: true,
+                orgId: true,
                 status: true,
               },
             },
@@ -220,6 +249,7 @@ export const serviceWarrantyRouter = createTRPCRouter({
         if (!line || line.complaintId !== input.complaintId) {
           throw apiError("NOT_FOUND", "Complaint line not found");
         }
+        assertOrgAccess(ctx.actor.orgId, line.complaint.orgId, "Complaint");
 
         const patched = await tx.serviceComplaintLine.update({
           where: { id: input.complaintLineId },
@@ -302,7 +332,6 @@ export const serviceWarrantyRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const result = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findUnique({
@@ -313,6 +342,7 @@ export const serviceWarrantyRouter = createTRPCRouter({
           },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const decision = await tx.serviceWarrantyDecision.findUnique({
           where: { complaintId: input.complaintId },
@@ -352,17 +382,19 @@ export const serviceWarrantyRouter = createTRPCRouter({
           }
         }
 
+        // SW-012: Deduplicate productIds before comparing lengths to avoid false BAD_REQUEST
+        const uniqueProductIds = [...new Set(input.lines.map((line) => line.productId))];
         const products = await tx.product.findMany({
           where: {
-            id: { in: input.lines.map((line) => line.productId) },
+            id: { in: uniqueProductIds },
           },
           select: {
             id: true,
             sku: true,
           },
         });
-        if (products.length !== input.lines.length) {
-          throw apiError("BAD_REQUEST", "One or more replacement productId values are invalid");
+        if (products.length !== uniqueProductIds.length) {
+          throw apiError("BAD_REQUEST", "One or more product IDs are invalid");
         }
 
         const skuByProductId = new Map(products.map((product) => [product.id, product.sku]));
@@ -415,18 +447,21 @@ export const serviceWarrantyRouter = createTRPCRouter({
           },
         });
 
+        // SW-019: Only emit serial events for lines that are in the current fulfillment batch
+        const inputLineIds = new Set(input.lines.map((l) => l.complaintLineId));
+        const relevantLines = complaint.lines.filter(
+          (l) => inputLineIds.has(l.id) && l.normalizedReplacementSerial,
+        );
         await tx.serviceSerialEvent.createMany({
-          data: complaint.lines
-            .filter((line) => Boolean(line.normalizedReplacementSerial))
-            .map((line) => ({
-              normalizedSerial: line.normalizedReplacementSerial!,
-              eventType: "replacement_order_created",
-              entityType: "sale_order",
-              entityId: created.id,
-              meta: {
-                complaintId: input.complaintId,
-              },
-            })),
+          data: relevantLines.map((line) => ({
+            normalizedSerial: line.normalizedReplacementSerial!,
+            eventType: "replacement_order_created",
+            entityType: "sale_order",
+            entityId: created.id,
+            meta: {
+              complaintId: input.complaintId,
+            },
+          })),
         });
 
         await recordComplaintActivity(tx, {

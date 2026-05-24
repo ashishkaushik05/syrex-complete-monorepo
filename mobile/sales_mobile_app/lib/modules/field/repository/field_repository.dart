@@ -63,6 +63,31 @@ class FieldRepository {
     return ShiftModel.fromJson(_extract(res.data));
   }
 
+  Future<ShiftSyncResult> syncStartShift({
+    required String clientShiftId,
+    required DateTime startedAt,
+    required String deviceId,
+    String? orgId,
+    String? platform,
+    String? appVersion,
+  }) async {
+    final res = await _dio.post(
+      '/fieldShifts.syncStart',
+      data: jsonEncode({
+        'json': {
+          'clientShiftId': clientShiftId,
+          'startedAt': startedAt.toUtc().toIso8601String(),
+          'deviceId': deviceId,
+          if (orgId != null && orgId.isNotEmpty) 'orgId': orgId,
+          if (platform != null && platform.isNotEmpty) 'platform': platform,
+          if (appVersion != null && appVersion.isNotEmpty) 'appVersion': appVersion,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+    return ShiftSyncResult.fromJson(_extract(res.data));
+  }
+
   Future<ShiftModel> endShift() async {
     final res = await _dio.post(
       '/fieldShifts.end',
@@ -70,6 +95,27 @@ class FieldRepository {
       options: Options(headers: {'Content-Type': 'application/json'}),
     );
     return ShiftModel.fromJson(_extract(res.data));
+  }
+
+  Future<ShiftSyncResult> syncEndShift({
+    required String clientShiftId,
+    required DateTime endedAt,
+    required String deviceId,
+    String? orgId,
+  }) async {
+    final res = await _dio.post(
+      '/fieldShifts.syncEnd',
+      data: jsonEncode({
+        'json': {
+          'clientShiftId': clientShiftId,
+          'endedAt': endedAt.toUtc().toIso8601String(),
+          'deviceId': deviceId,
+          if (orgId != null && orgId.isNotEmpty) 'orgId': orgId,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+    return ShiftSyncResult.fromJson(_extract(res.data));
   }
 
   Future<ShiftModel> extendShift() async {
@@ -102,6 +148,7 @@ class FieldRepository {
     String? outletId,
     String? customerId,
     String? notes,
+    String? audioUrl,
     DateTime? recordedAt,
   }) async {
     final res = await _dio.post(
@@ -114,6 +161,7 @@ class FieldRepository {
           if (customerId != null && customerId.isNotEmpty)
             'customerId': customerId,
           if (notes != null && notes.isNotEmpty) 'description': notes,
+          if (audioUrl != null && audioUrl.isNotEmpty) 'audioUrl': audioUrl,
           if (recordedAt != null) 'recordedAt': recordedAt.toUtc().toIso8601String(),
         }
       }),
@@ -303,6 +351,27 @@ class FieldRepository {
       }),
     });
     return TrailSnapshot.fromJson(_extract(res.data));
+  }
+
+  Future<LocationSyncAck> ingestLocationsV2({
+    required String clientShiftId,
+    required String serverShiftId,
+    required String deviceId,
+    required List<Map<String, dynamic>> points,
+  }) async {
+    final res = await _dio.post(
+      '/fieldLocation.ingestV2',
+      data: jsonEncode({
+        'json': {
+          'clientShiftId': clientShiftId,
+          'shiftId': serverShiftId,
+          'deviceId': deviceId,
+          'points': points,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+    return LocationSyncAck.fromJson(_extract(res.data));
   }
 
 }

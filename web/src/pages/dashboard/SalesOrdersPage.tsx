@@ -67,12 +67,26 @@ type OrderLine = {
   unitPrice: number | string
 }
 
+type OrderPriority = 'low' | 'medium' | 'high' | 'critical'
+type DispatchDeliveryLabel = 'created' | 'in_transit' | 'delivered' | null
+
 type SalesOrder = {
   id: string
+  orderNumber?: string
   outletId: string
   orgId: string
   status: OrderStatus
+  priority?: OrderPriority
   deliveryAddress: string
+  subtotalValue?: string | number
+  discountType?: 'percentage' | 'fixed' | null
+  discountRate?: string | number
+  discountAmount?: string | number
+  taxableValue?: string | number
+  taxTotal?: string | number
+  totalValue?: string | number
+  paymentTermsDays?: number
+  taxSnapshot?: unknown
   notes?: string | null
   createdAt: string
   outlet?: {
@@ -83,6 +97,7 @@ type SalesOrder = {
   linkedInvoices?: string[]
   dispatchedQty?: number
   dispatchCount?: number
+  dispatchDeliveryLabel?: DispatchDeliveryLabel
 }
 
 type PaginatedResponse<T> = {
@@ -168,6 +183,20 @@ function statusBadgeClass(status: OrderStatus) {
   return 'border-slate-300 bg-slate-100 text-slate-700'
 }
 
+function priorityBadgeClass(priority: OrderPriority) {
+  if (priority === 'critical') return 'border-red-300 bg-red-100 text-red-800'
+  if (priority === 'high') return 'border-amber-300 bg-amber-100 text-amber-800'
+  if (priority === 'medium') return 'border-blue-300 bg-blue-100 text-blue-800'
+  return 'border-slate-300 bg-slate-100 text-slate-500'
+}
+
+function deliveryLabelBadge(label: DispatchDeliveryLabel): { text: string; cls: string } | null {
+  if (!label) return null
+  if (label === 'delivered') return { text: 'Delivered', cls: 'border-emerald-300 bg-emerald-100 text-emerald-800' }
+  if (label === 'in_transit') return { text: 'In Transit', cls: 'border-blue-300 bg-blue-100 text-blue-800' }
+  return { text: 'Not Shipped', cls: 'border-slate-300 bg-slate-100 text-slate-500' }
+}
+
 export function SalesOrdersPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -185,6 +214,9 @@ export function SalesOrdersPage() {
   const [selectedOutletId, setSelectedOutletId] = useState<string>('')
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [notes, setNotes] = useState('')
+  const [discountType, setDiscountType] = useState<'percentage' | 'fixed' | null>(null)
+  const [discountRate, setDiscountRate] = useState('0')
+  const [paymentTermsDays, setPaymentTermsDays] = useState('30')
   const [outletSearch, setOutletSearch] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [debouncedProductSearch, setDebouncedProductSearch] = useState('')
@@ -349,6 +381,9 @@ export function SalesOrdersPage() {
         outletId: outlet.id,
         deliveryAddress: deliveryAddress.trim(),
         priority: 'medium',
+        discountType,
+        discountRate: discountType ? discountRate : '0',
+        paymentTermsDays: Math.max(0, Math.min(365, Number(paymentTermsDays || 30))),
         notes: notes.trim() || undefined,
         lines: selectedItems.map((item) => ({
           productId: item.product.id,
@@ -393,6 +428,9 @@ export function SalesOrdersPage() {
     setSelectedOutletId('')
     setDeliveryAddress('')
     setNotes('')
+    setDiscountType(null)
+    setDiscountRate('0')
+    setPaymentTermsDays('30')
     setOutletSearch('')
     setProductSearch('')
     setDebouncedProductSearch('')
@@ -459,13 +497,28 @@ export function SalesOrdersPage() {
     }, 0)
   }, [selectedLineItems])
 
+  const discountAmount = useMemo(() => {
+    const rate = toNumber(discountRate)
+    if (!discountType || runningTotal <= 0 || rate <= 0) return 0
+    if (discountType === 'percentage') return Math.min(runningTotal, (runningTotal * Math.min(rate, 100)) / 100)
+    return Math.min(runningTotal, rate)
+  }, [discountRate, discountType, runningTotal])
+
+  const taxableSubtotal = Math.max(0, runningTotal - discountAmount)
+
   const chargesPreviewQuery = useQuery({
-    queryKey: ['order-charges-preview', runningTotal],
+    queryKey: ['order-charges-preview', runningTotal, discountType, discountRate],
     enabled: createStep === 3 && runningTotal > 0,
     queryFn: async () => {
-      const resp = await api.post('/settings/billing/charges/preview', { subtotal: String(runningTotal) })
+      const resp = await api.post('/settings/billing/charges/preview', {
+        subtotal: String(runningTotal),
+        discountType,
+        discountRate,
+      })
       return (resp as any).data.data as {
         charges: Array<{ taxChargeId: string; name: string; type: 'percentage' | 'fixed'; rate: string; amount: string; displayOrder: number }>
+        discountAmount: string
+        taxableSubtotal: string
         subtotal: string
         total: string
       }
@@ -520,6 +573,21 @@ export function SalesOrdersPage() {
         return
       }
       setCreateStep(3)
+      return
+    }
+
+    const discountRateValue = toNumber(discountRate)
+    if (discountRateValue < 0) {
+      setCreateError('Discount rate must be non-negative')
+      return
+    }
+    if (discountType === 'percentage' && discountRateValue > 100) {
+      setCreateError('Discount percentage cannot exceed 100')
+      return
+    }
+    const terms = Number(paymentTermsDays)
+    if (!Number.isFinite(terms) || terms < 0 || terms > 365) {
+      setCreateError('Payment terms must be between 0 and 365 days')
       return
     }
 
@@ -612,13 +680,13 @@ export function SalesOrdersPage() {
                     <TableRow>
                       <TableHead>Order</TableHead>
                       <TableHead>Outlet</TableHead>
+                      <TableHead>Priority</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Invoices</TableHead>
                       <TableHead>Dispatched</TableHead>
                       <TableHead>Items</TableHead>
                       <TableHead>Total</TableHead>
                       <TableHead>Created</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -633,6 +701,7 @@ export function SalesOrdersPage() {
                       )
                       const dispatchedQty = Number(order.dispatchedQty ?? dispatchedQtyFromLines)
                       const invoiceNumbers = order.linkedInvoices ?? []
+                      const deliveryBadge = deliveryLabelBadge(order.dispatchDeliveryLabel ?? null)
                       return (
                         <TableRow
                           key={order.id}
@@ -640,10 +709,19 @@ export function SalesOrdersPage() {
                           onClick={() => navigate(`/dashboard/sales/orders/${order.id}`)}
                         >
                           <TableCell>
-                            <p className="font-medium text-slate-900">Order {order.id.slice(0, 8)}</p>
+                            <p className="font-medium text-slate-900">
+                              {order.orderNumber ? order.orderNumber : `Order ${order.id.slice(0, 8)}`}
+                            </p>
                             <p className="text-xs text-slate-500 line-clamp-1">{order.deliveryAddress}</p>
                           </TableCell>
                           <TableCell>{order.outlet?.name ?? order.outletId}</TableCell>
+                          <TableCell>
+                            {order.priority ? (
+                              <Badge className={priorityBadgeClass(order.priority)}>{titleCase(order.priority)}</Badge>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </TableCell>
                           <TableCell>
                             <Badge className={statusBadgeClass(order.status)}>{titleCase(order.status)}</Badge>
                           </TableCell>
@@ -668,13 +746,13 @@ export function SalesOrdersPage() {
                               {dispatchedQty}/{totalOrderedQty}
                             </p>
                             <p className="text-xs text-slate-500">{order.dispatchCount ?? 0} dispatches</p>
+                            {deliveryBadge ? (
+                              <Badge className={`mt-1 ${deliveryBadge.cls}`}>{deliveryBadge.text}</Badge>
+                            ) : null}
                           </TableCell>
                           <TableCell>{order.lines?.length ?? 0}</TableCell>
-                          <TableCell>{formatCurrencyINR(total)}</TableCell>
+                          <TableCell>{formatCurrencyINR(toNumber(order.totalValue ?? total))}</TableCell>
                           <TableCell>{timeAgo(order.createdAt)}</TableCell>
-                          <TableCell className="text-right">
-                            <span className="text-xs text-slate-400">-</span>
-                          </TableCell>
                         </TableRow>
                       )
                     })}
@@ -869,6 +947,47 @@ export function SalesOrdersPage() {
                 </p>
               </div>
 
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="order-discount-type">Discount Type</Label>
+                  <select
+                    id="order-discount-type"
+                    value={discountType ?? 'none'}
+                    onChange={(event) =>
+                      setDiscountType(event.target.value === 'none' ? null : (event.target.value as 'percentage' | 'fixed'))
+                    }
+                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm"
+                  >
+                    <option value="none">No discount</option>
+                    <option value="percentage">Percentage</option>
+                    <option value="fixed">Fixed</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="order-discount-rate">Discount Rate</Label>
+                  <Input
+                    id="order-discount-rate"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={discountRate}
+                    onChange={(event) => setDiscountRate(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="order-payment-terms">Payment Terms (Days)</Label>
+                  <Input
+                    id="order-payment-terms"
+                    type="number"
+                    min={0}
+                    max={365}
+                    step={1}
+                    value={paymentTermsDays}
+                    onChange={(event) => setPaymentTermsDays(event.target.value)}
+                  />
+                </div>
+              </div>
+
               <div className="overflow-hidden rounded-lg border border-slate-200">
                 <Table>
                   <TableHeader>
@@ -898,6 +1017,23 @@ export function SalesOrdersPage() {
                         Subtotal
                       </TableCell>
                       <TableCell className="text-slate-600">{formatCurrencyINR(runningTotal)}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-right text-slate-600">
+                        Discount
+                        {discountType ? ` (${discountType === 'percentage' ? `${toNumber(discountRate)}%` : 'fixed'})` : ''}
+                      </TableCell>
+                      <TableCell className="text-slate-600">
+                        -{formatCurrencyINR(chargesPreviewQuery.data ? Number(chargesPreviewQuery.data.discountAmount) : discountAmount)}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-right text-slate-600">
+                        Taxable Subtotal
+                      </TableCell>
+                      <TableCell className="text-slate-600">
+                        {formatCurrencyINR(chargesPreviewQuery.data ? Number(chargesPreviewQuery.data.taxableSubtotal) : taxableSubtotal)}
+                      </TableCell>
                     </TableRow>
                     {chargesPreviewQuery.data?.charges.map((charge) => (
                       <TableRow key={charge.taxChargeId}>

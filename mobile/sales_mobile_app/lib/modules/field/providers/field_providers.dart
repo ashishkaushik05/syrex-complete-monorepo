@@ -25,8 +25,8 @@ final todayAttendanceProvider = FutureProvider.autoDispose<List<AttendanceRecord
   final from = now.subtract(const Duration(days: 30));
   return ref.read(fieldRepositoryProvider).attendanceList(
         userId: user.id,
-        from: from.toIso8601String(),
-        to: now.toIso8601String(),
+        from: from.toIso8601String().sliceDate(),
+        to: now.toIso8601String().sliceDate(),
         limit: 30,
       );
 });
@@ -64,3 +64,7 @@ final agentsProvider = FutureProvider.autoDispose<List<AgentLite>>((ref) async {
 final myScheduleProvider = FutureProvider.autoDispose<ShiftSchedule?>((ref) async {
   return ref.read(fieldRepositoryProvider).getMySchedule();
 });
+
+extension on String {
+  String sliceDate() => length >= 10 ? substring(0, 10) : this;
+}

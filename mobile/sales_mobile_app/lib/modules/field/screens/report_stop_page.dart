@@ -41,7 +41,14 @@ class _ReportStopPageState extends ConsumerState<ReportStopPage> {
   }
 
   Future<Position> _locate() async {
-    final permission = await Geolocator.requestPermission();
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.deniedForever) {
+      setState(() => _banner = 'Location permission permanently denied. Please enable it in app settings.');
+      throw Exception('Location permission permanently denied');
+    }
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
     if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
       throw Exception('Location permission denied');
     }
@@ -54,6 +61,11 @@ class _ReportStopPageState extends ConsumerState<ReportStopPage> {
   }
 
   Future<void> _startStop() async {
+    final shift = await ref.read(activeShiftProvider.future);
+    if (shift == null) {
+      setState(() => _banner = 'No active shift. Start a shift before reporting a stop.');
+      return;
+    }
     setState(() {
       _pending = true;
       _banner = null;

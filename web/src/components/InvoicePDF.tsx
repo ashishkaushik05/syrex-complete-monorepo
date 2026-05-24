@@ -161,6 +161,10 @@ type InvoicePDFProps = {
     dueDate?: string | null
     total: number | string
     subtotal?: number | string
+    discountType?: 'percentage' | 'fixed' | null
+    discountRate?: string | number
+    discountAmount?: string | number
+    taxableSubtotal?: string | number
     paidAmount?: number | string
     remainingAmount?: number | string
     outlet?: OutletBilling
@@ -191,6 +195,8 @@ function statusConfig(status: string): StatusConfig {
 export function InvoicePDF({ invoice, productNameById, paymentStatus, orgProfile }: InvoicePDFProps) {
   const lineSubtotal = invoice.lines.reduce((s, l) => s + toNum(l.lineTotal), 0)
   const subtotal = invoice.subtotal !== undefined ? toNum(invoice.subtotal) : lineSubtotal
+  const discountAmount = invoice.discountAmount !== undefined ? toNum(invoice.discountAmount) : 0
+  const taxableSubtotal = invoice.taxableSubtotal !== undefined ? toNum(invoice.taxableSubtotal) : Math.max(0, subtotal - discountAmount)
   const charges = invoice.charges ?? []
   const total = toNum(invoice.total)
   const paid = toNum(invoice.paidAmount)
@@ -306,6 +312,18 @@ export function InvoicePDF({ invoice, productNameById, paymentStatus, orgProfile
           <View style={styles.totalsRow}>
             <Text style={styles.totalsLabel}>Sub Total</Text>
             <Text style={styles.totalsValue}>{formatINR(subtotal)}</Text>
+          </View>
+
+          <View style={styles.totalsRow}>
+            <Text style={styles.totalsLabel}>
+              Discount{invoice.discountType ? ` (${invoice.discountType === 'percentage' ? `${toNum(invoice.discountRate)}%` : 'fixed'})` : ''}
+            </Text>
+            <Text style={styles.totalsValue}>-{formatINR(discountAmount)}</Text>
+          </View>
+
+          <View style={styles.totalsRow}>
+            <Text style={styles.totalsLabel}>Taxable Subtotal</Text>
+            <Text style={styles.totalsValue}>{formatINR(taxableSubtotal)}</Text>
           </View>
 
           {/* Charge rows — GST charges grouped in one row */}

@@ -81,6 +81,13 @@ class CartNotifier extends Notifier<CartState> {
     state = state.copyWith(items: updated);
   }
 
+  void updatePrice(String productId, String price) {
+    final updated = List<CartItem>.from(state.items);
+    final idx = updated.indexWhere((i) => i.product.id == productId);
+    if (idx >= 0) updated[idx] = CartItem(product: updated[idx].product, qty: updated[idx].qty, unitPrice: price);
+    state = state.copyWith(items: updated);
+  }
+
   void setDeliveryAddress(String address) =>
       state = state.copyWith(deliveryAddress: address);
 

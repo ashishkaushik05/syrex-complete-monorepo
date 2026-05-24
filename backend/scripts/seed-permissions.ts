@@ -1,5 +1,19 @@
 import { P } from "../src/rbac/catalog";
 
+// Outlet-type users: can place orders, view catalog/invoices, and confirm delivery of their dispatches
+export const OUTLET_PERMISSIONS = [
+  P.orders.read,
+  P.orders.write,
+  P.catalog.read,
+  P.outlets.read,
+  P.invoices.read,
+  P.payments.read,
+  P.attachments.read,
+  P.attachments.write,
+  P.dispatches.read,
+  P.dispatches.deliver,
+] as const;
+
 export const DEV_SALES_PERMISSIONS = [
   P.orders.read,
   P.orders.write,
@@ -21,6 +35,8 @@ export const DEV_SALES_PERMISSIONS = [
   P.service.telephonic,
   P.service.form,
   P.warehouses.read,
+  P.field.read,
+  P.field.write,
 ] as const;
 
 export const DEV_WAREHOUSE_PERMISSIONS = [

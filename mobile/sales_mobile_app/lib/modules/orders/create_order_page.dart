@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/sales_client.dart';
+import '../../core/errors/app_error.dart';
 import '../../core/outlet/outlet_context.dart';
 import '../../shared/widgets/premium_surfaces.dart';
 import '../../shared/widgets/error_view.dart';
@@ -51,14 +52,14 @@ class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
             lines: ref.read(cartProvider.notifier).toOrderLines(),
             notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           );
-      ref.read(cartProvider.notifier).clear();
       if (mounted) {
+        ref.read(cartProvider.notifier).clear();
         context.go('/orders/${order.id}');
       }
-    } catch (_) {
+    } catch (e) {
       setState(() {
         _submitting = false;
-        _submitError = 'Order could not be submitted. Please try again.';
+        _submitError = e is AppError ? e.message : e.toString();
       });
     }
   }
@@ -283,8 +284,7 @@ class _UnitPriceFieldState extends ConsumerState<_UnitPriceField> {
         ),
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         onChanged: (v) {
-          widget.item.unitPrice = v;
-          ref.read(cartProvider.notifier).updateQty(widget.item.product.id, widget.item.qty);
+          ref.read(cartProvider.notifier).updatePrice(widget.item.product.id, v);
         },
         validator: (v) => (v == null || double.tryParse(v) == null) ? 'Invalid' : null,
       ),

@@ -167,6 +167,7 @@ model User {
   serviceMachineClientsCreated ServiceMachineClient[] @relation("ServiceMachineClientCreatedBy")
   serviceFormTemplatesCreated  ServiceFormTemplate[]  @relation("ServiceFormTemplateCreatedBy")
   serviceFormSubmissions       ServiceFormSubmission[] @relation("ServiceFormSubmittedBy")
+  dispatchTimelineEvents       DispatchTimeline[]      @relation("DispatchTimelineActor")
 
   @@map("users")
 }
@@ -460,6 +461,14 @@ model SaleOrder {
   deliveryAddress String
   status          OrderStatus   @default(pending_approval)
   priority        OrderPriority @default(medium)
+  subtotalValue   Decimal       @default(0)
+  discountType    ChargeType?
+  discountRate    Decimal       @default(0)
+  discountAmount  Decimal       @default(0)
+  taxableValue    Decimal       @default(0)
+  taxSnapshot     Json?
+  taxTotal        Decimal       @default(0)
+  paymentTermsDays Int          @default(30)
   totalValue      Decimal       @default(0)
 
   approvedById    String?
@@ -535,11 +544,13 @@ model Dispatch {
   createdById       String
   createdAt         DateTime  @default(now())
 
-  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
-  createdBy User           @relation(fields: [createdById], references: [id])
+  warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
+  createdBy User               @relation(fields: [createdById], references: [id])
   lines     DispatchLine[]
+  timeline  DispatchTimeline[]
 
   @@index([warehouseId])
+  @@index([deliveryStatus])
   @@map("dispatches")
 }
 
@@ -581,6 +592,22 @@ model DispatchLineSerial {
   @@map("dispatch_line_serials")
 }
 
+model DispatchTimeline {
+  id         String   @id @default(uuid())
+  dispatchId String
+  status     String   // created | in_transit | delivered
+  actorId    String?
+  actorRole  String?  // "admin" | "warehouse" | "outlet"
+  note       String?
+  happenedAt DateTime @default(now())
+
+  dispatch Dispatch @relation(fields: [dispatchId], references: [id])
+  actor    User?    @relation("DispatchTimelineActor", fields: [actorId], references: [id])
+
+  @@index([dispatchId])
+  @@map("dispatch_timeline")
+}
+
 // =============================================================================
 // FINANCIALS  —  Invoices + Outlet Payments (FIFO clearing)
 // =============================================================================
@@ -592,7 +619,12 @@ model Invoice {
   orderId       String   @unique // 1:1 with SaleOrder
   outletId      String
   invoiceDate   DateTime @default(now())
+  dueDate       DateTime?
   subtotal      Decimal
+  discountType  ChargeType?
+  discountRate  Decimal  @default(0)
+  discountAmount Decimal @default(0)
+  taxSnapshot   Json?
   total         Decimal
   amountPaid    Decimal  @default(0)
   amountDue     Decimal  // kept in sync: total - amountPaid
@@ -607,6 +639,7 @@ model Invoice {
   // Fast FIFO query: unpaid invoices per outlet ordered by invoiceDate ASC
   @@index([outletId, amountDue])
   @@index([outletId, invoiceDate])
+  @@index([outletId, dueDate])
   @@map("invoices")
 }
 

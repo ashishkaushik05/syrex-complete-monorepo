@@ -78,7 +78,6 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
                           _searchCtrl.clear();
                           ref.read(_catalogFilterProvider.notifier).state =
                               (brandId: filter.brandId, categoryId: filter.categoryId, q: null);
-                          setState(() {});
                         },
                       )
                     : null,
@@ -89,7 +88,6 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
                   categoryId: filter.categoryId,
                   q: v.isEmpty ? null : v,
                 );
-                setState(() {});
               },
             ),
             const SizedBox(height: 10),

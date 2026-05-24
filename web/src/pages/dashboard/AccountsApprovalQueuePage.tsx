@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
@@ -218,7 +218,7 @@ export function AccountsApprovalQueuePage() {
                 </TableHeader>
                 <TableBody>
                   {rows.map((row) => (
-                    <>
+                    <Fragment key={row.id}>
                       <TableRow key={row.id}>
                         <TableCell className="font-medium text-slate-900">
                           <Link
@@ -312,7 +312,7 @@ export function AccountsApprovalQueuePage() {
                           </TableCell>
                         </TableRow>
                       ) : null}
-                    </>
+                    </Fragment>
                   ))}
                 </TableBody>
               </Table>

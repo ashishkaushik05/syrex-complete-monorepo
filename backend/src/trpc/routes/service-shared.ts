@@ -32,7 +32,7 @@ type TransitionResolution = {
   statusChanged: boolean;
 };
 
-const FINAL_STATUSES = new Set<ServiceComplaintStatus>([
+export const FINAL_STATUSES = new Set<ServiceComplaintStatus>([
   "resolved",
   "telephonic_closure",
   "cancelled",
@@ -81,6 +81,9 @@ export function resolveTransition(
       return { nextStatus: "retest_requested", statusChanged: true };
     }
     case "telephonic_close": {
+      if (currentStatus !== "raised" && currentStatus !== "assigned") {
+        throw apiError("CONFLICT", "Telephonic closure only allowed from raised or assigned status");
+      }
       return { nextStatus: "telephonic_closure", statusChanged: true };
     }
     case "tested_ok_close": {
@@ -109,15 +112,21 @@ export function resolveTransition(
   }
 }
 
-export async function nextComplaintNumber(tx: Prisma.TransactionClient, now: Date) {
+export async function nextComplaintNumber(tx: Prisma.TransactionClient, now: Date, orgId: string) {
   const year = now.getUTCFullYear();
-  const row = await tx.serviceComplaintSequence.upsert({
-    where: { year },
-    create: { year, lastSequence: 1 },
-    update: { lastSequence: { increment: 1 } },
-    select: { lastSequence: true },
-  });
-  return `CMP-${year}-${String(row.lastSequence).padStart(6, "0")}`;
+  await tx.$executeRaw`
+    INSERT INTO service_complaint_sequences ("orgId", year, "lastSequence")
+    VALUES (${orgId}, ${year}, 1)
+    ON CONFLICT ("orgId", year) DO UPDATE SET "lastSequence" = service_complaint_sequences."lastSequence" + 1
+  `;
+  const row = await tx.serviceComplaintSequence.findUnique({ where: { orgId_year: { orgId, year } } });
+  return `CMP-${year}-${String(row!.lastSequence).padStart(6, "0")}`;
+}
+
+export function assertOrgAccess(actorOrgId: string | null, resourceOrgId: string | null, resourceName = "resource"): void {
+  if (actorOrgId !== null && resourceOrgId !== actorOrgId) {
+    throw apiError("NOT_FOUND", `${resourceName} not found`);
+  }
 }
 
 export async function recordComplaintActivity(
@@ -140,7 +149,7 @@ export async function recordComplaintActivity(
       fromStatus: input.fromStatus ?? null,
       toStatus: input.toStatus ?? null,
       note: input.note ?? null,
-      meta: input.meta ?? undefined,
+      meta: input.meta ?? Prisma.JsonNull,
     },
   });
 
@@ -162,12 +171,18 @@ export async function recordComplaintActivity(
   }
 }
 
-function serialMatches(serial: string, normalized: string) {
-  return normalizeSerial(serial) === normalized;
-}
-
 export async function findSerialLegacyDispatchRows(ctx: TrpcContext, normalizedSerial: string) {
-  const rows = await ctx.prisma.dispatchLine.findMany({
+  const refs = await ctx.prisma.dispatchLineSerial.findMany({
+    where: { normalizedSerial },
+    select: { dispatchLineId: true },
+  });
+
+  if (refs.length === 0) return [];
+
+  const ids = refs.map((r) => r.dispatchLineId);
+
+  return ctx.prisma.dispatchLine.findMany({
+    where: { id: { in: ids } },
     include: {
       dispatch: {
         select: {
@@ -227,10 +242,6 @@ export async function findSerialLegacyDispatchRows(ctx: TrpcContext, normalizedS
     },
     orderBy: [{ dispatch: { dispatchDate: "asc" } }, { id: "asc" }],
   });
-
-  return rows.filter((row) =>
-    parseSerialNumbers(row.serialNumbers).some((serial) => serialMatches(serial, normalizedSerial)),
-  );
 }
 
 export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
@@ -250,10 +261,13 @@ export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
   const first = legacyRows[0];
   const now = new Date();
 
+  const orgId = ctx.actor.orgId ?? null;
+
   const upserted = await ctx.prisma.serviceSerialIndex.upsert({
     where: { normalizedSerial },
     create: {
       normalizedSerial,
+      orgId,
       serialNumber: serial,
       productId: first?.productId,
       soldOutletId: first?.orderLine.order.outletId,
@@ -262,30 +276,36 @@ export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
       hydratedLegacy: legacyRows.length > 0,
     },
     update: {
-      serialNumber: serial,
-      productId: first?.productId ?? existing?.productId ?? null,
-      soldOutletId: first?.orderLine.order.outletId ?? existing?.soldOutletId ?? null,
-      lastSeenAt: now,
-      hydratedLegacy: legacyRows.length > 0 || existing?.hydratedLegacy === true,
+      hydratedLegacy: true,
+      // Do NOT update serialNumber or orgId — preserve first-seen canonical form
+      productId: first?.productId ?? existing?.productId ?? undefined,
+      soldOutletId: first?.orderLine.order.outletId ?? existing?.soldOutletId ?? undefined,
+      updatedAt: new Date(),
     },
   });
 
   if (legacyRows.length > 0) {
-    await ctx.prisma.serviceSerialEvent.createMany({
-      data: legacyRows.slice(0, 3).map((row) => ({
-        normalizedSerial,
-        eventType: "legacy_dispatch_hydrated",
-        entityType: "dispatch_line",
-        entityId: row.id,
-        eventAt: row.dispatch.dispatchDate,
-        meta: {
-          dispatchId: row.dispatchId,
-          orderId: row.orderLine.orderId,
-          outletId: row.orderLine.order.outletId,
-        },
-      })),
-      skipDuplicates: true,
+    const existingEventCount = await ctx.prisma.serviceSerialEvent.count({
+      where: { normalizedSerial },
     });
+    if (existingEventCount === 0) {
+      await ctx.prisma.serviceSerialEvent.createMany({
+        data: legacyRows.slice(0, 10).map((row) => ({
+          normalizedSerial,
+          orgId,
+          eventType: "legacy_dispatch_hydrated",
+          entityType: "dispatch_line",
+          entityId: row.id,
+          eventAt: row.dispatch.dispatchDate,
+          meta: {
+            dispatchId: row.dispatchId,
+            orderId: row.orderLine.orderId,
+            outletId: row.orderLine.order.outletId,
+          },
+        })),
+        skipDuplicates: true,
+      });
+    }
   }
 
   return upserted;

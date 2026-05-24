@@ -5,10 +5,20 @@ import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import { assertWarehouseScope } from "./outlet-access";
-import { recordComplaintActivity } from "./service-shared";
+import { findActorLinkedOutletId } from "./outlet-access";
+import { normalizeSerial, recordComplaintActivity } from "./service-shared";
 
 function isAdmin(ctx: { permissions: string[] }) {
   return ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+}
+
+function deriveActorRole(ctx: {
+  permissions: string[];
+  managedWarehouseId: string | null | undefined;
+}): "admin" | "warehouse" | "outlet" {
+  if (ctx.permissions.includes(SUPER_ADMIN_PERMISSION)) return "admin";
+  if (ctx.managedWarehouseId) return "warehouse";
+  return "outlet";
 }
 
 const deliveryStatusSchema = z.enum(["created", "in_transit", "delivered"]);
@@ -21,6 +31,16 @@ const dispatchLineSchema = z.object({
   sku: z.string(),
   qtyDispatched: z.number().int(),
   serialNumbers: z.array(z.string())
+});
+
+const timelineEventSchema = z.object({
+  id: z.string(),
+  dispatchId: z.string(),
+  status: deliveryStatusSchema,
+  actorId: z.string().nullable(),
+  actorRole: z.string().nullable(),
+  note: z.string().nullable(),
+  happenedAt: z.string()
 });
 
 const dispatchSchema = z.object({
@@ -152,8 +172,18 @@ function toDispatchItem(dispatch: {
   };
 }
 
+const dispatchLinesInclude = {
+  lines: {
+    include: {
+      orderLine: {
+        select: { orderId: true }
+      }
+    }
+  }
+} as const;
+
 export const dispatchesRouter = createTRPCRouter({
-  
+
   list: perm(P.dispatches.read)
     .input(
       paginationInputSchema.extend({
@@ -211,9 +241,7 @@ export const dispatchesRouter = createTRPCRouter({
           lines: {
             include: {
               orderLine: {
-                select: {
-                  orderId: true
-                }
+                select: { orderId: true }
               }
             }
           }
@@ -226,6 +254,35 @@ export const dispatchesRouter = createTRPCRouter({
 
       assertWarehouseScope(ctx, dispatch.warehouseId);
       return toDispatchItem(dispatch);
+    }),
+
+  timeline: perm(P.dispatches.read)
+    .input(z.object({ dispatchId: z.string().uuid() }))
+    .output(z.array(timelineEventSchema))
+    .query(async ({ ctx, input }) => {
+      const dispatch = await ctx.prisma.dispatch.findUnique({
+        where: { id: input.dispatchId },
+        select: { warehouseId: true }
+      });
+      if (!dispatch) {
+        throw apiError("NOT_FOUND", "Dispatch not found");
+      }
+      assertWarehouseScope(ctx, dispatch.warehouseId);
+
+      const events = await ctx.prisma.dispatchTimeline.findMany({
+        where: { dispatchId: input.dispatchId },
+        orderBy: { happenedAt: "asc" }
+      });
+
+      return events.map((e) => ({
+        id: e.id,
+        dispatchId: e.dispatchId,
+        status: normalizeDeliveryStatus(e.status) as z.infer<typeof deliveryStatusSchema>,
+        actorId: e.actorId,
+        actorRole: e.actorRole,
+        note: e.note,
+        happenedAt: e.happenedAt.toISOString()
+      }));
     }),
 
   create: perm(P.dispatches.write)
@@ -251,6 +308,8 @@ export const dispatchesRouter = createTRPCRouter({
         if (existing) return toDispatchItem(existing);
       }
 
+      const actorRole = deriveActorRole(ctx);
+
       const createdId = await ctx.prisma.$transaction(async (tx) => {
         const validatedLines: Array<{
           orderLineId: string;
@@ -264,15 +323,10 @@ export const dispatchesRouter = createTRPCRouter({
 
         for (const requested of input.lines) {
           const line = await tx.saleOrderLine.findUnique({
-            where: {
-              id: requested.orderLineId
-            },
+            where: { id: requested.orderLineId },
             include: {
               order: {
-                select: {
-                  id: true,
-                  status: true
-                }
+                select: { id: true, status: true }
               }
             }
           });
@@ -294,9 +348,7 @@ export const dispatchesRouter = createTRPCRouter({
               productId: line.productId,
               currentQty: { gte: requested.qtyDispatched }
             },
-            data: {
-              currentQty: { decrement: requested.qtyDispatched }
-            }
+            data: { currentQty: { decrement: requested.qtyDispatched } }
           });
           if (stockUpdate.count !== 1) {
             throw apiError("CONFLICT", `Insufficient stock for product ${line.sku}`);
@@ -304,10 +356,7 @@ export const dispatchesRouter = createTRPCRouter({
 
           const newQtyDispatched = line.qtyDispatched + requested.qtyDispatched;
           const lineUpdate = await tx.saleOrderLine.updateMany({
-            where: {
-              id: line.id,
-              qtyDispatched: line.qtyDispatched
-            },
+            where: { id: line.id, qtyDispatched: line.qtyDispatched },
             data: {
               qtyDispatched: newQtyDispatched,
               status: toLineStatus(line.qtyOrdered, newQtyDispatched)
@@ -354,16 +403,24 @@ export const dispatchesRouter = createTRPCRouter({
           },
           include: {
             lines: {
-              include: {
-                orderLine: {
-                  select: {
-                    orderId: true
-                  }
-                }
-              }
+              include: { orderLine: { select: { orderId: true } } }
             }
           }
         });
+
+        const orderLineSerials = new Map(
+          input.lines.map((l) => [l.orderLineId, l.serialNumbers ?? []])
+        );
+        const serialsToCreate: Array<{ dispatchLineId: string; normalizedSerial: string }> = [];
+        for (const line of dispatch.lines) {
+          for (const serial of orderLineSerials.get(line.orderLineId) ?? []) {
+            const ns = normalizeSerial(serial);
+            if (ns) serialsToCreate.push({ dispatchLineId: line.id, normalizedSerial: ns });
+          }
+        }
+        if (serialsToCreate.length > 0) {
+          await tx.dispatchLineSerial.createMany({ data: serialsToCreate, skipDuplicates: true });
+        }
 
         const touchedOrderIds = [...new Set(validatedLines.map((line) => line.orderId))];
         for (const orderId of touchedOrderIds) {
@@ -373,86 +430,151 @@ export const dispatchesRouter = createTRPCRouter({
           });
           const status = deriveOrderDispatchStatus(order);
           if (status !== order.status) {
-            await tx.saleOrder.update({
-              where: { id: order.id },
-              data: { status }
-            });
+            await tx.saleOrder.update({ where: { id: order.id }, data: { status } });
           }
         }
+
+        await tx.dispatchTimeline.create({
+          data: {
+            dispatchId: dispatch.id,
+            status: "created",
+            actorId,
+            actorRole
+          }
+        });
 
         return dispatch.id;
       });
 
       const created = await ctx.prisma.dispatch.findUniqueOrThrow({
         where: { id: createdId },
-        include: {
-          lines: {
-            include: {
-              orderLine: {
-                select: {
-                  orderId: true
-                }
-              }
-            }
-          }
-        }
+        include: dispatchLinesInclude
       });
 
       return toDispatchItem(created);
     }),
 
-  markDelivered: perm(P.dispatches.deliver)
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        deliveredAt: z.string().datetime().optional()
-      })
-    )
+  markInTransit: perm(P.dispatches.write)
+    .input(z.object({
+      id: z.string().uuid(),
+      note: z.string().optional()
+    }))
     .output(dispatchSchema)
     .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id!;
+
       const existing = await ctx.prisma.dispatch.findUnique({ where: { id: input.id } });
       if (!existing) {
         throw apiError("NOT_FOUND", "Dispatch not found");
       }
       if (!isAdmin(ctx) && existing.warehouseId !== ctx.managedWarehouseId) {
-        throw apiError("FORBIDDEN", "You can only mark deliveries for your assigned warehouse");
+        throw apiError("FORBIDDEN", "You can only update dispatches for your assigned warehouse");
+      }
+      if (existing.deliveryStatus !== "created") {
+        throw apiError("CONFLICT", "Only dispatches in 'created' status can be marked in transit");
+      }
+
+      const updated = await ctx.prisma.$transaction(async (tx) => {
+        const dispatch = await tx.dispatch.update({
+          where: { id: input.id },
+          data: { deliveryStatus: "in_transit" },
+          include: dispatchLinesInclude
+        });
+
+        await tx.dispatchTimeline.create({
+          data: {
+            dispatchId: dispatch.id,
+            status: "in_transit",
+            actorId,
+            actorRole: "warehouse",
+            note: input.note
+          }
+        });
+
+        return dispatch;
+      });
+
+      return toDispatchItem(updated);
+    }),
+
+  markDelivered: perm(P.dispatches.deliver)
+    .input(z.object({
+      id: z.string().uuid(),
+      deliveredAt: z.string().datetime().optional(),
+      note: z.string().optional()
+    }))
+    .output(dispatchSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id!;
+
+      const existing = await ctx.prisma.dispatch.findUnique({ where: { id: input.id } });
+      if (!existing) {
+        throw apiError("NOT_FOUND", "Dispatch not found");
       }
       if (existing.deliveryStatus === "delivered") {
         throw apiError("CONFLICT", "Dispatch is already delivered");
       }
 
-      const updated = await ctx.prisma.dispatch.update({
-        where: { id: input.id },
-        data: {
-          deliveryStatus: "delivered",
-          deliveredAt: input.deliveredAt ? new Date(input.deliveredAt) : new Date()
-        },
-        include: {
-          lines: {
-            include: {
-              orderLine: {
-                include: {
-                  order: {
-                    select: {
-                      id: true,
-                      orderType: true,
-                      sourceComplaintId: true
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+
+      if (linkedOutletId) {
+        // Outlet user — must own at least one order in this dispatch
+        const match = await ctx.prisma.dispatchLine.findFirst({
+          where: {
+            dispatchId: existing.id,
+            orderLine: { order: { outletId: linkedOutletId } }
+          }
+        });
+        if (!match) {
+          throw apiError("FORBIDDEN", "This dispatch does not belong to your outlet");
+        }
+      } else if (!isAdmin(ctx) && existing.warehouseId !== ctx.managedWarehouseId) {
+        throw apiError("FORBIDDEN", "You can only mark deliveries for your assigned warehouse");
+      }
+
+      const actorRole = linkedOutletId ? "outlet" : deriveActorRole(ctx);
+      const deliveredAt = input.deliveredAt ? new Date(input.deliveredAt) : new Date();
+
+      const updated = await ctx.prisma.$transaction(async (tx) => {
+        const dispatch = await tx.dispatch.update({
+          where: { id: input.id },
+          data: { deliveryStatus: "delivered", deliveredAt },
+          include: {
+            lines: {
+              include: {
+                orderLine: {
+                  include: {
+                    order: {
+                      select: { id: true, orderType: true, sourceComplaintId: true }
                     }
                   }
                 }
               }
             }
           }
-        }
+        });
+
+        await tx.dispatchTimeline.create({
+          data: {
+            dispatchId: dispatch.id,
+            status: "delivered",
+            actorId,
+            actorRole,
+            note: input.note,
+            happenedAt: deliveredAt
+          }
+        });
+
+        return dispatch;
       });
 
-      const actorId = ctx.actor.id;
+      // Auto-resolve warranty replacement complaints
       const complaintIds = Array.from(
         new Set(
           updated.lines
             .map((line) => line.orderLine.order)
             .filter((order) => order.orderType === "warranty_replacement" && order.sourceComplaintId)
-            .map((order) => order.sourceComplaintId!) 
+            .map((order) => order.sourceComplaintId!)
         )
       );
 
@@ -464,7 +586,11 @@ export const dispatchesRouter = createTRPCRouter({
           });
 
           for (const complaint of complaints) {
-            if (complaint.status === "resolved" || complaint.status === "telephonic_closure" || complaint.status === "cancelled") {
+            if (
+              complaint.status === "resolved" ||
+              complaint.status === "telephonic_closure" ||
+              complaint.status === "cancelled"
+            ) {
               continue;
             }
 
@@ -477,16 +603,14 @@ export const dispatchesRouter = createTRPCRouter({
               }
             });
 
-            if (actorId) {
-              await recordComplaintActivity(tx, {
-                complaintId: complaint.id,
-                actorId,
-                action: "replacement_delivered",
-                fromStatus: complaint.status,
-                toStatus: "resolved",
-                note: `Resolved on dispatch delivery ${updated.id}`,
-              });
-            }
+            await recordComplaintActivity(tx, {
+              complaintId: complaint.id,
+              actorId,
+              action: "replacement_delivered",
+              fromStatus: complaint.status,
+              toStatus: "resolved",
+              note: `Resolved on dispatch delivery ${updated.id}`
+            });
 
             const replacementLines = await tx.serviceComplaintLine.findMany({
               where: {
@@ -503,7 +627,7 @@ export const dispatchesRouter = createTRPCRouter({
                   eventType: "replacement_delivered",
                   entityType: "dispatch",
                   entityId: updated.id,
-                  eventAt: updated.deliveredAt ?? new Date(),
+                  eventAt: deliveredAt
                 }))
               });
             }

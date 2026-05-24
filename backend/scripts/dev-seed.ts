@@ -1,6 +1,6 @@
 import { PrismaClient, UserType } from "@prisma/client";
 import { validatePermissionKeys } from "../src/rbac/catalog";
-import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS } from "./seed-permissions";
+import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS, OUTLET_PERMISSIONS } from "./seed-permissions";
 
 const prisma = new PrismaClient();
 
@@ -8,6 +8,7 @@ const IDS = {
   adminRole: "d0000000-0000-4000-8000-000000000001",
   salesRole: "d0000000-0000-4000-8000-000000000002",
   warehouseRole: "d0000000-0000-4000-8000-000000000003",
+  outletRole: "d0000000-0000-4000-8000-000000000004",
   adminUser: "d1000000-0000-4000-8000-000000000001",
   outletUser: "d1000000-0000-4000-8000-000000000002",
   warehouseUser: "d1000000-0000-4000-8000-000000000003"
@@ -23,6 +24,7 @@ function assertValidSeedPermissions(roleName: string, permissions: readonly stri
 async function main() {
   assertValidSeedPermissions("Sales", DEV_SALES_PERMISSIONS);
   assertValidSeedPermissions("Warehouse Manager", DEV_WAREHOUSE_PERMISSIONS);
+  assertValidSeedPermissions("Outlet", OUTLET_PERMISSIONS);
 
   const adminPasswordHash = await Bun.password.hash("admin123");
   const outletPasswordHash = await Bun.password.hash("outlet123");
@@ -49,6 +51,12 @@ async function main() {
       permissions: [...DEV_WAREHOUSE_PERMISSIONS],
       isSystem: false
     }
+  });
+
+  await prisma.role.upsert({
+    where: { id: IDS.outletRole },
+    update: { name: "Outlet", permissions: [...OUTLET_PERMISSIONS], isSystem: false },
+    create: { id: IDS.outletRole, name: "Outlet", permissions: [...OUTLET_PERMISSIONS], isSystem: false }
   });
 
   await prisma.user.upsert({
@@ -79,9 +87,9 @@ async function main() {
       name: "Outlet User",
       passwordHash: outletPasswordHash,
       userType: UserType.outlet,
-      roleId: IDS.salesRole,
+      roleId: IDS.outletRole,
       isActive: true,
-      isFieldEnabled: true
+      isFieldEnabled: false
     },
     create: {
       id: IDS.outletUser,
@@ -89,9 +97,9 @@ async function main() {
       name: "Outlet User",
       passwordHash: outletPasswordHash,
       userType: UserType.outlet,
-      roleId: IDS.salesRole,
+      roleId: IDS.outletRole,
       isActive: true,
-      isFieldEnabled: true
+      isFieldEnabled: false
     }
   });
 
@@ -122,7 +130,7 @@ async function main() {
         seeded: true,
         users: [
           { email: "admin@syrex.local", password: "admin123", role: "Admin" },
-          { email: "outlet@syrex.local", password: "outlet123", role: "Sales" },
+          { email: "outlet@syrex.local", password: "outlet123", role: "Outlet" },
           { email: "warehouse@syrex.local", password: "warehouse123", role: "Warehouse Manager" }
         ]
       },

@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
@@ -141,10 +142,26 @@ export const outletsRouter = createTRPCRouter({
         skip: offset,
         take: input.limit + 1
       });
+      const outletIds = outlets.map((o) => o.id);
+      const liveOutstandingRows = outletIds.length
+        ? await ctx.prisma.invoice.groupBy({
+            by: ["outletId"],
+            where: { outletId: { in: outletIds } },
+            _sum: { amountDue: true },
+          })
+        : [];
+      const outstandingByOutletId = new Map(
+        liveOutstandingRows.map((row) => [row.outletId, row._sum.amountDue ?? new Prisma.Decimal(0)]),
+      );
       const hasMore = outlets.length > input.limit;
       const pageItems = hasMore ? outlets.slice(0, input.limit) : outlets;
       return {
-        items: pageItems.map(toOutlet),
+        items: pageItems.map((outlet) =>
+          toOutlet({
+            ...outlet,
+            outstandingBalance: outstandingByOutletId.get(outlet.id) ?? new Prisma.Decimal(0),
+          }),
+        ),
         nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
       };
     }),
@@ -157,7 +174,14 @@ export const outletsRouter = createTRPCRouter({
       if (!outlet) {
         throw apiError("NOT_FOUND", "Outlet not found");
       }
-      return toOutlet(outlet);
+      const liveOutstanding = await ctx.prisma.invoice.aggregate({
+        where: { outletId: input.id },
+        _sum: { amountDue: true },
+      });
+      return toOutlet({
+        ...outlet,
+        outstandingBalance: liveOutstanding._sum.amountDue ?? new Prisma.Decimal(0),
+      });
     }),
 
   create: perm(P.outlets.write).input(createOutletSchema).output(outletSchema).mutation(async ({ ctx, input }) => {

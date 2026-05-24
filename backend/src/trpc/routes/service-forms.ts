@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { recordComplaintActivity } from "./service-shared";
+import { assertOrgAccess, recordComplaintActivity, FINAL_STATUSES } from "./service-shared";
 import type { ServiceFormTemplateField } from "@prisma/client";
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -31,13 +31,14 @@ function validateFieldValue(
       if (typeof rules.maxLength === "number" && val.length > rules.maxLength) {
         return { isValid: false, error: `Maximum length is ${rules.maxLength} characters` };
       }
-      if (typeof rules.regex === "string") {
+      if (rules?.regex) {
+        if ((rules.regex as string).length > 500) return { isValid: false, error: "Validation configuration error" };
         try {
-          if (!new RegExp(rules.regex).test(val)) {
-            return { isValid: false, error: "Value does not match the required format" };
+          if (!new RegExp(rules.regex as string).test(val)) {
+            return { isValid: false, error: (rules.regexError as string | undefined) ?? "Invalid format" };
           }
         } catch {
-          // invalid regex stored in DB — skip
+          return { isValid: false, error: "Validation configuration error" };
         }
       }
       return { isValid: true };
@@ -63,9 +64,9 @@ function validateFieldValue(
     }
 
     case "select": {
-      const options = Array.isArray(rules.options) ? (rules.options as string[]) : [];
-      if (!options.includes(val)) {
-        return { isValid: false, error: `Must be one of: ${options.join(", ")}` };
+      if (!rules?.options || (rules.options as string[]).length === 0) return { isValid: true };
+      if (!(rules.options as string[]).includes(val)) {
+        return { isValid: false, error: `Must be one of: ${(rules.options as string[]).join(", ")}` };
       }
       return { isValid: true };
     }
@@ -93,8 +94,10 @@ function validateFieldValue(
     }
 
     case "date": {
+      const isoDateRegex = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?Z?)?$/;
+      if (!isoDateRegex.test(val)) return { isValid: false, error: "Invalid date format. Use YYYY-MM-DD" };
       const d = new Date(val);
-      if (isNaN(d.getTime())) return { isValid: false, error: "Must be a valid ISO date" };
+      if (isNaN(d.getTime())) return { isValid: false, error: "Invalid date" };
       if (typeof rules.minDate === "string") {
         if (d < new Date(rules.minDate)) {
           return { isValid: false, error: `Date must be on or after ${rules.minDate}` };
@@ -109,6 +112,7 @@ function validateFieldValue(
     }
 
     default:
+      console.warn(`Unknown field type: ${field.fieldType}`);
       return { isValid: true };
   }
 }
@@ -208,7 +212,10 @@ export const serviceFormsRouter = createTRPCRouter({
     .output(z.array(templateSchema))
     .query(async ({ ctx, input }) => {
       const rows = await ctx.prisma.serviceFormTemplate.findMany({
-        where: input.isActive !== undefined ? { isActive: input.isActive } : undefined,
+        where: {
+          orgId: ctx.actor.orgId ?? undefined,
+          ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+        },
         include: { fields: { orderBy: { displayOrder: "asc" } } },
         orderBy: { createdAt: "desc" },
       });
@@ -234,6 +241,7 @@ export const serviceFormsRouter = createTRPCRouter({
         include: { fields: { orderBy: { displayOrder: "asc" } } },
       });
       if (!t) throw apiError("NOT_FOUND", "Form template not found");
+      assertOrgAccess(ctx.actor.orgId, t.orgId, "Form template");
       return {
         id: t.id,
         name: t.name,
@@ -269,10 +277,25 @@ export const serviceFormsRouter = createTRPCRouter({
     .output(templateSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+
+      if (input.fields) {
+        const fieldKeys = input.fields.map((f) => f.fieldKey);
+        if (new Set(fieldKeys).size !== fieldKeys.length) {
+          throw apiError("BAD_REQUEST", "Duplicate fieldKey values in template fields");
+        }
+        for (const f of input.fields) {
+          if (f.fieldType === "select" || f.fieldType === "multiselect") {
+            const options = f.validationRules?.options;
+            if (!Array.isArray(options) || options.length === 0) {
+              throw apiError("BAD_REQUEST", `Field '${f.fieldKey}' of type '${f.fieldType}' must have a non-empty validationRules.options array`);
+            }
+          }
+        }
+      }
 
       const t = await ctx.prisma.serviceFormTemplate.create({
         data: {
+          orgId: ctx.actor.orgId ?? null,
           name: input.name,
           description: input.description ?? null,
           createdById: actorId,
@@ -315,8 +338,9 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(templateSchema)
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.id }, select: { id: true } });
+      const existing = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.id }, select: { id: true, orgId: true } });
       if (!existing) throw apiError("NOT_FOUND", "Form template not found");
+      assertOrgAccess(ctx.actor.orgId, existing.orgId, "Form template");
 
       const t = await ctx.prisma.serviceFormTemplate.update({
         where: { id: input.id },
@@ -354,28 +378,43 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(templateFieldSchema)
     .mutation(async ({ ctx, input }) => {
-      const tmpl = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.templateId }, select: { id: true } });
+      const tmpl = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.templateId }, select: { id: true, orgId: true } });
       if (!tmpl) throw apiError("NOT_FOUND", "Form template not found");
+      assertOrgAccess(ctx.actor.orgId, tmpl.orgId, "Form template");
 
-      const [field] = await ctx.prisma.$transaction([
-        ctx.prisma.serviceFormTemplateField.create({
-          data: {
-            templateId: input.templateId,
-            fieldKey: input.fieldKey,
-            label: input.label,
-            fieldType: input.fieldType,
-            isRequired: input.isRequired,
-            displayOrder: input.displayOrder,
-            validationRules: input.validationRules ? (input.validationRules as Prisma.InputJsonValue) : undefined,
-          },
-        }),
-        ctx.prisma.serviceFormTemplate.update({
-          where: { id: input.templateId },
-          data: { version: { increment: 1 } },
-        }),
-      ]);
+      if (input.fieldType === "select" || input.fieldType === "multiselect") {
+        const options = input.validationRules?.options;
+        if (!Array.isArray(options) || options.length === 0) {
+          throw apiError("BAD_REQUEST", `Field of type '${input.fieldType}' must have a non-empty validationRules.options array`);
+        }
+      }
 
-      return toTemplateField(field);
+      try {
+        const [field] = await ctx.prisma.$transaction([
+          ctx.prisma.serviceFormTemplateField.create({
+            data: {
+              templateId: input.templateId,
+              fieldKey: input.fieldKey,
+              label: input.label,
+              fieldType: input.fieldType,
+              isRequired: input.isRequired,
+              displayOrder: input.displayOrder,
+              validationRules: input.validationRules ? (input.validationRules as Prisma.InputJsonValue) : undefined,
+            },
+          }),
+          ctx.prisma.serviceFormTemplate.update({
+            where: { id: input.templateId },
+            data: { version: { increment: 1 } },
+          }),
+        ]);
+
+        return toTemplateField(field);
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          throw apiError("CONFLICT", "A field with this key already exists on the template");
+        }
+        throw err;
+      }
     }),
 
   updateField: perm(P.service.manage)
@@ -403,7 +442,11 @@ export const serviceFormsRouter = createTRPCRouter({
             label: input.label,
             isRequired: input.isRequired,
             displayOrder: input.displayOrder,
-            validationRules: input.validationRules ? (input.validationRules as Prisma.InputJsonValue) : undefined,
+            validationRules: input.validationRules !== undefined
+              ? (input.validationRules === null
+                  ? Prisma.NullableJsonNullValueInput.DbNull
+                  : (input.validationRules as Prisma.InputJsonValue))
+              : undefined,
           },
         }),
         ctx.prisma.serviceFormTemplate.update({
@@ -443,8 +486,9 @@ export const serviceFormsRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(z.object({ id: z.string(), isActive: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.id }, select: { id: true } });
+      const existing = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.id }, select: { id: true, orgId: true } });
       if (!existing) throw apiError("NOT_FOUND", "Form template not found");
+      assertOrgAccess(ctx.actor.orgId, existing.orgId, "Form template");
 
       const t = await ctx.prisma.serviceFormTemplate.update({
         where: { id: input.id },
@@ -471,13 +515,12 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(submissionSchema)
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+      const actorId = ctx.actor.id as string;
 
       const [complaint, template] = await Promise.all([
         ctx.prisma.serviceComplaint.findUnique({
           where: { id: input.complaintId },
-          select: { id: true, status: true },
+          select: { id: true, orgId: true, status: true },
         }),
         ctx.prisma.serviceFormTemplate.findUnique({
           where: { id: input.templateId },
@@ -486,8 +529,19 @@ export const serviceFormsRouter = createTRPCRouter({
       ]);
 
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+      assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
       if (!template) throw apiError("NOT_FOUND", "Form template not found");
+      assertOrgAccess(ctx.actor.orgId, template.orgId, "Form template");
       if (!template.isActive) throw apiError("BAD_REQUEST", "Cannot submit a disabled form template");
+
+      if (FINAL_STATUSES.has(complaint.status)) {
+        throw apiError("CONFLICT", `Cannot submit a form to a complaint with status '${complaint.status}'`);
+      }
+
+      const keys = input.values.map((v) => v.fieldKey);
+      if (new Set(keys).size !== keys.length) {
+        throw apiError("BAD_REQUEST", "Duplicate field keys in submission values");
+      }
 
       const valueMap = new Map(input.values.map((v) => [v.fieldKey, v.rawValue]));
       const validatedValues: Array<{
@@ -518,6 +572,10 @@ export const serviceFormsRouter = createTRPCRouter({
         throw apiError("BAD_REQUEST", `Form validation failed: ${fieldErrors.join("; ")}`);
       }
 
+      type SubmissionWithIncludes = Prisma.ServiceFormSubmissionGetPayload<{
+        include: { values: true; template: { select: { name: true } } };
+      }>;
+
       const submission = await ctx.prisma.$transaction(async (tx) => {
         const sub = await tx.serviceFormSubmission.create({
           data: {
@@ -532,7 +590,7 @@ export const serviceFormsRouter = createTRPCRouter({
             values: true,
             template: { select: { name: true } },
           },
-        });
+        }) as SubmissionWithIncludes;
 
         await recordComplaintActivity(tx, {
           complaintId: input.complaintId,
@@ -575,13 +633,20 @@ export const serviceFormsRouter = createTRPCRouter({
     .input(z.object({ complaintId: z.string().uuid() }))
     .output(z.array(submissionSchema))
     .query(async ({ ctx, input }) => {
+      const complaint = await ctx.prisma.serviceComplaint.findUnique({
+        where: { id: input.complaintId },
+        select: { id: true, orgId: true },
+      });
+      if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+      assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
+
       const subs = await ctx.prisma.serviceFormSubmission.findMany({
         where: { complaintId: input.complaintId },
         include: {
           values: true,
           template: { select: { name: true } },
         },
-        orderBy: { createdAt: "asc" },
+        orderBy: { submittedAt: "asc" },
       });
 
       return subs.map((s) => ({
@@ -615,7 +680,6 @@ export const serviceFormsRouter = createTRPCRouter({
     .output(z.object({ id: z.string(), isDisabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const existing = await ctx.prisma.serviceFormSubmission.findUnique({
         where: { id: input.submissionId },
@@ -626,8 +690,9 @@ export const serviceFormsRouter = createTRPCRouter({
 
       const complaint = await ctx.prisma.serviceComplaint.findUnique({
         where: { id: existing.complaintId },
-        select: { status: true },
+        select: { orgId: true, status: true },
       });
+      assertOrgAccess(ctx.actor.orgId, complaint?.orgId ?? null, "Complaint");
 
       await ctx.prisma.$transaction(async (tx) => {
         await tx.serviceFormSubmission.update({

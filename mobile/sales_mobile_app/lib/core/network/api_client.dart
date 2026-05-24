@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -54,6 +52,8 @@ final dioProvider = Provider<Dio>((ref) {
 
         try {
           if (!refreshInFlight) {
+            // Set flag and create completer atomically before any await so
+            // concurrent 401s don't both enter the refresh block.
             refreshInFlight = true;
             refreshCompleter = Completer<void>();
             final current = await tokenStore.read();
@@ -62,13 +62,15 @@ final dioProvider = Provider<Dio>((ref) {
             }
 
             final refreshDio = Dio(BaseOptions(baseUrl: config.baseUrl));
-            final refreshResponse = await refreshDio.get(
+            final refreshResponse = await refreshDio.post(
               '/auth.refresh',
-              queryParameters: {
-                'input': jsonEncode({
-                  'json': {'refreshToken': current.refreshToken},
-                }),
+              data: {
+                'json': {'refreshToken': current.refreshToken},
               },
+              options: Options(headers: {
+                'Content-Type': 'application/json',
+                'ngrok-skip-browser-warning': '1',
+              }),
             );
 
             final refreshData = refreshResponse.data;
@@ -92,19 +94,26 @@ final dioProvider = Provider<Dio>((ref) {
                 refreshToken: refreshToken ?? current.refreshToken,
               ),
             );
-            refreshCompleter?.complete();
+            refreshCompleter!.complete();
           } else {
-            await refreshCompleter?.future;
+            // Another caller is already refreshing — wait for it to finish,
+            // then fall through to retry with the new token.
+            await refreshCompleter!.future;
           }
 
           requestOptions.extra['retried'] = true;
           final retryResponse = await dio.fetch(requestOptions);
           handler.resolve(retryResponse);
-        } catch (_) {
+        } catch (e) {
+          // Complete the completer with an error so waiting callers unblock.
+          if (refreshCompleter != null && !refreshCompleter!.isCompleted) {
+            refreshCompleter!.completeError(e);
+          }
           await tokenStore.clear();
           handler.next(error);
         } finally {
           refreshInFlight = false;
+          refreshCompleter = null;
         }
       },
     ),

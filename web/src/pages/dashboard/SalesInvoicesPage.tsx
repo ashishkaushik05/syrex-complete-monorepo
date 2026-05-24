@@ -12,11 +12,14 @@ type Invoice = {
   id: string
   invoiceNumber: string
   invoiceDate: string
+  dueDate?: string | null
   total: number | string
   paidAmount?: number | string
   remainingAmount?: number | string
-  paymentStatus?: 'paid' | 'partially_paid' | 'unpaid'
+  paymentStatus?: 'paid' | 'partially_paid' | 'unpaid' | 'overdue'
   isOverdue?: boolean
+  daysPastDue?: number | null
+  agingBucket?: 'current' | '1_30' | '31_60' | '61_90' | '90_plus' | null
   createdAt: string
   outlet?: {
     id: string
@@ -46,10 +49,19 @@ function toNumber(value: number | string | null | undefined) {
 }
 
 function paymentStatus(invoice: Invoice): 'paid' | 'partially_paid' | 'unpaid' | 'overdue' {
+  if (invoice.paymentStatus === 'overdue') return 'overdue'
   if (invoice.paymentStatus === 'paid') return 'paid'
   if (invoice.paymentStatus === 'partially_paid') return 'partially_paid'
-  if (invoice.paymentStatus === 'unpaid' && invoice.isOverdue) return 'overdue'
+  if (invoice.paymentStatus === 'unpaid' && (invoice.isOverdue || Number(invoice.daysPastDue ?? 0) > 0)) return 'overdue'
   return 'unpaid'
+}
+
+function agingLabel(bucket: Invoice['agingBucket']) {
+  if (bucket === '1_30') return '1-30'
+  if (bucket === '31_60') return '31-60'
+  if (bucket === '61_90') return '61-90'
+  if (bucket === '90_plus') return '90+'
+  return 'Current'
 }
 
 function statusBadgeClass(status: 'paid' | 'partially_paid' | 'unpaid' | 'overdue') {
@@ -91,6 +103,8 @@ export function SalesInvoicesPage() {
                     <TableHead>Outlet</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Due Date</TableHead>
+                    <TableHead>Aging</TableHead>
                     <TableHead>Created</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -119,6 +133,15 @@ export function SalesInvoicesPage() {
                                   ? 'Overdue'
                                   : 'Unpaid'}
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : '-'}
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-0.5">
+                            <p className="text-sm text-slate-800">{agingLabel(invoice.agingBucket)}</p>
+                            <p className="text-xs text-slate-500">{invoice.daysPastDue ?? 0} days past due</p>
+                          </div>
                         </TableCell>
                         <TableCell>{timeAgo(invoice.createdAt)}</TableCell>
                       </TableRow>

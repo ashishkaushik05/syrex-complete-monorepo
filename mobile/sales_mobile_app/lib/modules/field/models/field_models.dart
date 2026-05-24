@@ -8,6 +8,8 @@ class ShiftModel {
     required this.startType,
     required this.endType,
     required this.status,
+    this.clientShiftId,
+    this.syncState,
   });
 
   final String id;
@@ -18,6 +20,8 @@ class ShiftModel {
   final String startType;
   final String? endType;
   final String status;
+  final String? clientShiftId;
+  final String? syncState;
 
   bool get isActive => status == 'active';
 
@@ -30,6 +34,69 @@ class ShiftModel {
         startType: json['startType'] as String,
         endType: json['endType'] as String?,
         status: json['status'] as String,
+        clientShiftId: json['clientShiftId'] as String?,
+        syncState: json['syncState'] as String?,
+      );
+}
+
+class ShiftSyncResult {
+  const ShiftSyncResult({
+    required this.shift,
+    required this.serverShiftId,
+    required this.clientShiftId,
+    required this.status,
+  });
+
+  final ShiftModel shift;
+  final String serverShiftId;
+  final String clientShiftId;
+  final String status;
+
+  factory ShiftSyncResult.fromJson(Map<String, dynamic> json) => ShiftSyncResult(
+        shift: ShiftModel.fromJson(json['shift'] as Map<String, dynamic>),
+        serverShiftId: json['serverShiftId'] as String,
+        clientShiftId: json['clientShiftId'] as String,
+        status: json['status'] as String,
+      );
+}
+
+class LocationSyncAck {
+  const LocationSyncAck({
+    required this.serverShiftId,
+    required this.clientShiftId,
+    required this.accepted,
+    required this.duplicates,
+    required this.rejected,
+    required this.retryable,
+  });
+
+  final String? serverShiftId;
+  final String clientShiftId;
+  final List<String> accepted;
+  final List<String> duplicates;
+  final List<String> rejected;
+  final bool retryable;
+
+  Set<String> get removablePointIds => {
+        ...accepted,
+        ...duplicates,
+        if (!retryable) ...rejected,
+      };
+
+  factory LocationSyncAck.fromJson(Map<String, dynamic> json) => LocationSyncAck(
+        serverShiftId: json['serverShiftId'] as String?,
+        clientShiftId: json['clientShiftId'] as String,
+        accepted: ((json['accepted'] as List<dynamic>?) ?? const [])
+            .map((value) => value.toString())
+            .toList(),
+        duplicates: ((json['duplicates'] as List<dynamic>?) ?? const [])
+            .map((value) => value.toString())
+            .toList(),
+        rejected: ((json['rejected'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((entry) => entry['clientPointId'].toString())
+            .toList(),
+        retryable: json['retryable'] == true,
       );
 }
 

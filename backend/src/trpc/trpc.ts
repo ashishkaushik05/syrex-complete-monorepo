@@ -1,5 +1,6 @@
 import { initTRPC } from "@trpc/server";
 import { TRPCError } from "@trpc/server";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 import { type CatalogPermission, SUPER_ADMIN_PERMISSION } from "../rbac/catalog";
@@ -73,17 +74,28 @@ const serviceCredentialMiddleware = t.middleware(async ({ ctx, next }) => {
     });
   }
 
-  const client = await ctx.prisma.serviceMachineClient.findUnique({
-    where: { clientId },
-    select: {
-      id: true,
-      clientId: true,
-      secretHash: true,
-      status: true,
-      scopes: true,
-      expiresAt: true,
-    },
-  });
+  let client: { id: string; clientId: string; secretHash: string; status: string; scopes: string[]; expiresAt: Date | null } | null;
+  try {
+    client = await ctx.prisma.serviceMachineClient.findUnique({
+      where: { clientId },
+      select: {
+        id: true,
+        clientId: true,
+        secretHash: true,
+        status: true,
+        scopes: true,
+        expiresAt: true,
+      },
+    });
+  } catch (err) {
+    if (err instanceof PrismaClientKnownRequestError) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Invalid service client",
+      });
+    }
+    throw err;
+  }
 
   if (!client || client.status !== "active") {
     throw new TRPCError({

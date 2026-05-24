@@ -1,20 +1,26 @@
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { api } from '@/lib/api'
 import { formatCurrencyINR } from '@/lib/format'
 import { apiErrorMessage } from '@/lib/http'
 
+type ARAgingBucket = 'current' | '1_30' | '31_60' | '61_90' | '90_plus'
+
 type ARAgingRow = {
+  invoiceId: string
+  invoiceNumber: string
   outletId: string
   outletCode: string
   outletName: string
-  current: number
-  band0_30: number
-  band31_60: number
-  band60_plus: number
-  total: number
+  invoiceDate: string
+  dueDate: string | null
+  amountDue: number
+  daysPastDue: number
+  agingBucket: ARAgingBucket
 }
 
 type ARAgingResponse = {
@@ -22,16 +28,28 @@ type ARAgingResponse = {
     generatedAt: string
     totals: {
       current: number
-      band0_30: number
+      band1_30: number
       band31_60: number
-      band60_plus: number
+      band61_90: number
+      band90_plus: number
       totalOutstanding: number
     }
     rows: ARAgingRow[]
   }
 }
 
+function agingLabel(bucket: ARAgingBucket) {
+  if (bucket === '1_30') return '1-30'
+  if (bucket === '31_60') return '31-60'
+  if (bucket === '61_90') return '61-90'
+  if (bucket === '90_plus') return '90+'
+  return 'Current'
+}
+
 export function AccountsARAgingPage() {
+  const [query, setQuery] = useState('')
+  const [bucketFilter, setBucketFilter] = useState<'all' | ARAgingBucket>('all')
+
   const reportQuery = useQuery({
     queryKey: ['accounts-ar-aging'],
     queryFn: async () => {
@@ -41,6 +59,20 @@ export function AccountsARAgingPage() {
   })
 
   const report = reportQuery.data
+
+  const filteredRows = useMemo(() => {
+    const allRows = report?.rows ?? []
+    const keyword = query.trim().toLowerCase()
+    return allRows.filter((row) => {
+      if (bucketFilter !== 'all' && row.agingBucket !== bucketFilter) return false
+      if (!keyword) return true
+      return (
+        row.invoiceNumber.toLowerCase().includes(keyword) ||
+        row.outletName.toLowerCase().includes(keyword) ||
+        row.outletCode.toLowerCase().includes(keyword)
+      )
+    })
+  }, [bucketFilter, query, report?.rows])
 
   return (
     <div className="space-y-4">
@@ -57,14 +89,13 @@ export function AccountsARAgingPage() {
             </p>
           ) : report ? (
             <div className="space-y-3">
-              <p className="text-xs text-slate-500">
-                Generated at: {new Date(report.generatedAt).toLocaleString()}
-              </p>
-              <div className="grid gap-2 sm:grid-cols-5">
+              <p className="text-xs text-slate-500">Generated at: {new Date(report.generatedAt).toLocaleString()}</p>
+              <div className="grid gap-2 sm:grid-cols-6">
                 <AmountCard label="Current" amount={report.totals.current} />
-                <AmountCard label="0-30 Days" amount={report.totals.band0_30} />
-                <AmountCard label="31-60 Days" amount={report.totals.band31_60} />
-                <AmountCard label="60+ Days" amount={report.totals.band60_plus} />
+                <AmountCard label="1-30" amount={report.totals.band1_30} />
+                <AmountCard label="31-60" amount={report.totals.band31_60} />
+                <AmountCard label="61-90" amount={report.totals.band61_90} />
+                <AmountCard label="90+" amount={report.totals.band90_plus} />
                 <AmountCard label="Total" amount={report.totals.totalOutstanding} />
               </div>
             </div>
@@ -73,34 +104,58 @@ export function AccountsARAgingPage() {
       </Card>
 
       <Card className="border-slate-200 bg-white shadow-sm">
+        <CardHeader>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search outlet or invoice"
+            />
+            <select
+              value={bucketFilter}
+              onChange={(event) => setBucketFilter(event.target.value as 'all' | ARAgingBucket)}
+              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm"
+            >
+              <option value="all">All Buckets</option>
+              <option value="current">Current</option>
+              <option value="1_30">1-30</option>
+              <option value="31_60">31-60</option>
+              <option value="61_90">61-90</option>
+              <option value="90_plus">90+</option>
+            </select>
+          </div>
+        </CardHeader>
         <CardContent className="p-0">
-          {report && report.rows.length > 0 ? (
+          {filteredRows.length > 0 ? (
             <div className="overflow-hidden rounded-lg border border-slate-200">
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead>Invoice</TableHead>
                     <TableHead>Outlet</TableHead>
-                    <TableHead>Current</TableHead>
-                    <TableHead>0-30</TableHead>
-                    <TableHead>31-60</TableHead>
-                    <TableHead>60+</TableHead>
-                    <TableHead>Total</TableHead>
+                    <TableHead>Invoice Date</TableHead>
+                    <TableHead>Due Date</TableHead>
+                    <TableHead>Amount Due</TableHead>
+                    <TableHead>Days Past Due</TableHead>
+                    <TableHead>Bucket</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {report.rows.map((row) => (
-                    <TableRow key={row.outletId}>
+                  {filteredRows.map((row) => (
+                    <TableRow key={row.invoiceId}>
+                      <TableCell>
+                        <p className="font-medium text-slate-900">{row.invoiceNumber}</p>
+                        <p className="text-xs text-slate-500">{row.invoiceId.slice(0, 8)}</p>
+                      </TableCell>
                       <TableCell>
                         <p className="font-medium text-slate-900">{row.outletName}</p>
                         <p className="text-xs text-slate-500">{row.outletCode}</p>
                       </TableCell>
-                      <TableCell>{formatCurrencyINR(row.current)}</TableCell>
-                      <TableCell>{formatCurrencyINR(row.band0_30)}</TableCell>
-                      <TableCell>{formatCurrencyINR(row.band31_60)}</TableCell>
-                      <TableCell>{formatCurrencyINR(row.band60_plus)}</TableCell>
-                      <TableCell className="font-medium text-slate-900">
-                        {formatCurrencyINR(row.total)}
-                      </TableCell>
+                      <TableCell>{new Date(row.invoiceDate).toLocaleDateString()}</TableCell>
+                      <TableCell>{row.dueDate ? new Date(row.dueDate).toLocaleDateString() : '-'}</TableCell>
+                      <TableCell>{formatCurrencyINR(row.amountDue)}</TableCell>
+                      <TableCell>{row.daysPastDue}</TableCell>
+                      <TableCell>{agingLabel(row.agingBucket)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

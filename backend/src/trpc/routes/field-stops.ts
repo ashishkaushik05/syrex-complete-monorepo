@@ -69,15 +69,17 @@ export const fieldStopsRouter = createTRPCRouter({
     .output(stopSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      const orgId = ctx.actor.orgId;
+      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
 
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, status: "active" },
+        where: { agentId, orgId, status: "active" },
         select: { id: true, orgId: true }
       });
       if (!shift) throw apiError("BAD_REQUEST", "No active shift — stops require an active shift");
 
       const openStop = await ctx.prisma.fieldStop.findFirst({
-        where: { agentId, endedAt: null },
+        where: { agentId, orgId, endedAt: null },
         select: { id: true }
       });
       if (openStop) throw apiError("BAD_REQUEST", "A stop is already open — end it before starting another");
@@ -116,7 +118,7 @@ export const fieldStopsRouter = createTRPCRouter({
       let stop;
       try {
         stop = await ctx.prisma.fieldStop.update({
-          where: { id: input.stopId, agentId, endedAt: null },
+          where: { id: input.stopId, agentId, orgId, endedAt: null },
           data: {
             endedAt: input.endedAt ? new Date(input.endedAt) : new Date(),
             notes: input.notes ?? undefined

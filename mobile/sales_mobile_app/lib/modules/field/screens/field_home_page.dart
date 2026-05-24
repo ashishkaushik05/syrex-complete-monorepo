@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -7,6 +8,8 @@ import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/location/background_location_service.dart';
+import '../../../core/location/field_sync_store.dart';
+import '../../../core/permissions/field_permission_service.dart';
 import '../../../core/permissions/permission_service.dart';
 import '../../../shared/widgets/premium_surfaces.dart';
 import '../models/field_models.dart';
@@ -31,7 +34,26 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
       _message = null;
     });
     try {
-      await ref.read(fieldRepositoryProvider).startShift();
+      final permissions = await FieldPermissionService.requestAll();
+      if (!permissions.location || !permissions.backgroundLocation) {
+        setState(() {
+          _message = 'Location and background tracking permissions are required.';
+        });
+        return;
+      }
+      final syncStore = ref.read(fieldSyncStoreProvider);
+      final deviceId = await syncStore.getOrCreateDeviceId();
+      final clientShiftId = FieldSyncStore.newClientShiftId(deviceId);
+      final result = await ref.read(fieldRepositoryProvider).syncStartShift(
+            clientShiftId: clientShiftId,
+            startedAt: DateTime.now(),
+            deviceId: deviceId,
+            platform: Platform.isIOS ? 'ios' : 'android',
+          );
+      await syncStore.saveActiveShift(
+        clientShiftId: result.clientShiftId,
+        serverShiftId: result.serverShiftId,
+      );
       await BackgroundLocationService.start();
       ref.invalidate(activeShiftProvider);
       setState(() => _message = 'Shift started.');
@@ -48,8 +70,24 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
       _message = null;
     });
     try {
+      final syncStore = ref.read(fieldSyncStoreProvider);
+      final active = await syncStore.readActiveShift();
+      final deviceId = await syncStore.getOrCreateDeviceId();
       await BackgroundLocationService.stop();
-      await ref.read(fieldRepositoryProvider).endShift();
+      if (active != null) {
+        await _flushQueuedLocations(active, deviceId);
+        await ref.read(fieldRepositoryProvider).syncEndShift(
+              clientShiftId: active.clientShiftId,
+              endedAt: DateTime.now(),
+              deviceId: deviceId,
+            );
+        final remaining = await syncStore.readPendingPoints();
+        if (remaining.isEmpty) {
+          await syncStore.clearActiveShift();
+        }
+      } else {
+        await ref.read(fieldRepositoryProvider).endShift();
+      }
       ref.invalidate(activeShiftProvider);
       ref.invalidate(activeStopProvider);
       setState(() => _message = 'Shift ended.');
@@ -57,6 +95,32 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
       setState(() => _message = _friendlyError(e));
     } finally {
       if (mounted) setState(() => _pending = false);
+    }
+  }
+
+  Future<void> _flushQueuedLocations(
+    ActiveFieldShift active,
+    String deviceId,
+  ) async {
+    final syncStore = ref.read(fieldSyncStoreProvider);
+    var queue = await syncStore.readPendingPoints();
+    const maxBatch = 500;
+    while (queue.isNotEmpty) {
+      final end = queue.length < maxBatch ? queue.length : maxBatch;
+      final batch = List<Map<String, dynamic>>.from(queue.sublist(0, end));
+      final ack = await ref.read(fieldRepositoryProvider).ingestLocationsV2(
+            clientShiftId: active.clientShiftId,
+            serverShiftId: active.serverShiftId,
+            deviceId: deviceId,
+            points: batch,
+          );
+      if (ack.retryable) return;
+      final removable = ack.removablePointIds;
+      queue = queue
+          .where((point) => !removable.contains(point['clientPointId']))
+          .toList();
+      await syncStore.writePendingPoints(queue);
+      if (removable.isEmpty) return;
     }
   }
 

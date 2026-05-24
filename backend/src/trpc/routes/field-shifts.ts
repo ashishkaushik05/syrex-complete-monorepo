@@ -147,8 +147,8 @@ async function inferOrgIdForShiftStart(
   if (orgIds.size > 1) {
     throw apiError("BAD_REQUEST", "orgId required: multiple organizations detected");
   }
-  // Single-tenant deployment with no field records yet — use the env default.
-      return process.env.DEFAULT_ORG_ID ?? "default";
+  if (process.env.DEFAULT_ORG_ID) return process.env.DEFAULT_ORG_ID;
+  throw apiError("BAD_REQUEST", "orgId required: send x-org-id or orgId");
 }
 
 async function assertFieldEnabled(prisma: PrismaClient, userId: string) {

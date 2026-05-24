@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { recordComplaintActivity, resolveTransition } from "./service-shared";
+import { assertOrgAccess, recordComplaintActivity, resolveTransition } from "./service-shared";
 
 const testOutputSchema = z.object({
   id: z.string(),
@@ -13,7 +13,7 @@ const testOutputSchema = z.object({
   verdict: z.string(),
   summary: z.string().nullable(),
   structuredData: z.unknown().nullable(),
-  createdAt: z.string(),
+  createdAt: z.date(),
 });
 
 export const serviceTestsRouter = createTRPCRouter({
@@ -29,15 +29,22 @@ export const serviceTestsRouter = createTRPCRouter({
     )
     .output(testOutputSchema)
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+      const actorId = ctx.actor.id!;
 
       const created = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findUnique({
           where: { id: input.complaintId },
-          select: { id: true, status: true },
+          select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
+
+        if (input.complaintLineId) {
+          const line = await tx.serviceComplaintLine.findFirst({
+            where: { id: input.complaintLineId, complaintId: input.complaintId },
+          });
+          if (!line) throw apiError("NOT_FOUND", "Complaint line not found or does not belong to this complaint");
+        }
 
         const transition = resolveTransition(complaint.status, "test_submitted");
 
@@ -75,7 +82,7 @@ export const serviceTestsRouter = createTRPCRouter({
         const unlinkedIds = activeSubs.filter((s) => !s.testReportId).map((s) => s.id);
         if (unlinkedIds.length > 0) {
           await tx.serviceFormSubmission.updateMany({
-            where: { id: { in: unlinkedIds } },
+            where: { id: { in: unlinkedIds }, complaintId: input.complaintId },
             data: { testReportId: test.id },
           });
         }
@@ -104,7 +111,7 @@ export const serviceTestsRouter = createTRPCRouter({
         verdict: created.verdict,
         summary: created.summary,
         structuredData: created.structuredData ?? null,
-        createdAt: created.createdAt.toISOString(),
+        createdAt: created.createdAt,
       };
     }),
 
@@ -122,15 +129,15 @@ export const serviceTestsRouter = createTRPCRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+      const actorId = ctx.actor.id!;
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findUnique({
           where: { id: input.complaintId },
-          select: { id: true, status: true },
+          select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const transition = resolveTransition(complaint.status, "retest_requested");
         const row = await tx.serviceComplaint.update({

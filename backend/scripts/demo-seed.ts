@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient, UserType } from "@prisma/client";
 import { validatePermissionKeys } from "../src/rbac/catalog";
-import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS } from "./seed-permissions";
+import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS, OUTLET_PERMISSIONS } from "./seed-permissions";
 
 const prisma = new PrismaClient();
 
@@ -38,7 +38,7 @@ const IDS = {
 } as const;
 
 // ── Users — password = email-prefix + "123" ───────────────────────────────────
-type RoleName = "Admin" | "Sales" | "Warehouse Manager";
+type RoleName = "Admin" | "Sales" | "Warehouse Manager" | "Outlet";
 
 type UserSeed = {
   email: string;
@@ -61,9 +61,9 @@ const INTERNAL_USERS: UserSeed[] = [
 ];
 
 const OUTLET_USERS: UserSeed[] = [
-  { email: "prime@syrex.local", name: "Prime Outlet User", role: "Sales", userType: UserType.outlet },
-  { email: "city@syrex.local",  name: "City Outlet User",  role: "Sales", userType: UserType.outlet },
-  { email: "metro@syrex.local", name: "Metro Outlet User", role: "Sales", userType: UserType.outlet },
+  { email: "prime@syrex.local", name: "Prime Outlet User", role: "Outlet", userType: UserType.outlet },
+  { email: "city@syrex.local",  name: "City Outlet User",  role: "Outlet", userType: UserType.outlet },
+  { email: "metro@syrex.local", name: "Metro Outlet User", role: "Outlet", userType: UserType.outlet },
 ];
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
@@ -98,6 +98,9 @@ async function ensureRoles() {
   const { invalid: badWh } = validatePermissionKeys([...DEV_WAREHOUSE_PERMISSIONS]);
   if (badWh.length > 0) throw new Error(`[demo-seed] Invalid Warehouse Manager permission keys: ${badWh.join(", ")}`);
 
+  const { invalid: badOutlet } = validatePermissionKeys([...OUTLET_PERMISSIONS]);
+  if (badOutlet.length > 0) throw new Error(`[demo-seed] Invalid Outlet permission keys: ${badOutlet.join(", ")}`);
+
   const adminRole = await prisma.role.upsert({
     where: { name: "Admin" },
     update: { permissions: ["*"], isSystem: true },
@@ -113,12 +116,18 @@ async function ensureRoles() {
     update: { permissions: [...DEV_WAREHOUSE_PERMISSIONS], isSystem: false },
     create: { name: "Warehouse Manager", permissions: [...DEV_WAREHOUSE_PERMISSIONS], isSystem: false },
   });
+  const outletRole = await prisma.role.upsert({
+    where: { name: "Outlet" },
+    update: { permissions: [...OUTLET_PERMISSIONS], isSystem: false },
+    create: { name: "Outlet", permissions: [...OUTLET_PERMISSIONS], isSystem: false },
+  });
 
   return {
     byName: {
       Admin: adminRole.id,
       Sales: salesRole.id,
       "Warehouse Manager": warehouseRole.id,
+      Outlet: outletRole.id,
     } as Record<RoleName, string>,
   };
 }

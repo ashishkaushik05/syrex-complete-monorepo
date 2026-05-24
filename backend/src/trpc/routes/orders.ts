@@ -21,26 +21,171 @@ const orderLineInputSchema = z.object({
 
 const transitionActionSchema = z.enum(["approve", "hold", "reject", "cancel"]);
 
+type ChargeType = "percentage" | "fixed";
+
+type ChargeDefinition = {
+  taxChargeId: string | null;
+  name: string;
+  type: ChargeType;
+  rate: Prisma.Decimal;
+  displayOrder: number;
+};
+
+function parseDecimal(value: unknown): Prisma.Decimal | null {
+  try {
+    if (typeof value === "string" || typeof value === "number") {
+      return new Prisma.Decimal(value);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function computeDiscountAmount(
+  subtotal: Prisma.Decimal,
+  discountType: ChargeType | null,
+  discountRate: Prisma.Decimal,
+) {
+  if (subtotal.lte(0) || discountRate.lte(0) || !discountType) {
+    return new Prisma.Decimal(0);
+  }
+  if (discountType === "percentage") {
+    const rate = Prisma.Decimal.min(discountRate, new Prisma.Decimal(100));
+    return subtotal.mul(rate).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  }
+  return Prisma.Decimal.min(subtotal, discountRate).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+}
+
+function computeChargeRows(
+  taxableSubtotal: Prisma.Decimal,
+  charges: ChargeDefinition[],
+) {
+  return charges.map((c) => {
+    const amount =
+      c.type === "percentage"
+        ? taxableSubtotal.mul(c.rate).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+        : c.rate.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+    return {
+      taxChargeId: c.taxChargeId,
+      name: c.name,
+      type: c.type,
+      rate: c.rate,
+      amount,
+      displayOrder: c.displayOrder,
+    };
+  });
+}
+
+function parseChargeSnapshot(snapshot: Prisma.JsonValue | null): ChargeDefinition[] {
+  if (!snapshot || !Array.isArray(snapshot)) return [];
+  const rows: ChargeDefinition[] = [];
+  for (const item of snapshot) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const type = row.type === "percentage" || row.type === "fixed" ? row.type : null;
+    const name = typeof row.name === "string" ? row.name : null;
+    const displayOrder = typeof row.displayOrder === "number" && Number.isInteger(row.displayOrder)
+      ? row.displayOrder
+      : null;
+    const rate = parseDecimal(row.rate);
+    if (!type || !name || displayOrder === null || !rate) continue;
+    const taxChargeId = typeof row.taxChargeId === "string" ? row.taxChargeId : null;
+    rows.push({
+      taxChargeId,
+      name,
+      type,
+      rate,
+      displayOrder,
+    });
+  }
+  return rows.sort((a, b) => a.displayOrder - b.displayOrder);
+}
+
 async function nextOrderNumber(tx: Prisma.TransactionClient, now: Date) {
   const year = now.getUTCFullYear();
+  const prefix = `SO-${year}-`;
   const row = await tx.orderSequence.upsert({
     where: { year },
     create: { year, lastSequence: 1 },
     update: { lastSequence: { increment: 1 } },
     select: { lastSequence: true },
   });
-  return `SO-${year}-${String(row.lastSequence).padStart(6, "0")}`;
+  let sequence = row.lastSequence;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const orderNumber = `${prefix}${String(sequence).padStart(6, "0")}`;
+    const existing = await tx.saleOrder.findUnique({
+      where: { orderNumber },
+      select: { id: true },
+    });
+    if (!existing) {
+      return orderNumber;
+    }
+
+    const existingOrders = await tx.saleOrder.findMany({
+      where: { orderNumber: { startsWith: prefix } },
+      select: { orderNumber: true },
+    });
+    const maxExistingSequence = existingOrders.reduce((max, order) => {
+      const suffix = order.orderNumber.slice(prefix.length);
+      if (!/^\d+$/.test(suffix)) {
+        return max;
+      }
+      return Math.max(max, Number.parseInt(suffix, 10));
+    }, sequence);
+
+    sequence = maxExistingSequence + 1;
+    await tx.orderSequence.update({
+      where: { year },
+      data: { lastSequence: sequence },
+    });
+  }
+
+  throw apiError("CONFLICT", "Could not allocate a unique order number");
 }
 
 async function nextInvoiceNumber(tx: Prisma.TransactionClient, now: Date) {
   const year = now.getUTCFullYear();
+  const prefix = `INV-${year}-`;
   const row = await tx.invoiceSequence.upsert({
     where: { year },
     create: { year, lastSequence: 1 },
     update: { lastSequence: { increment: 1 } },
     select: { lastSequence: true },
   });
-  return `INV-${year}-${String(row.lastSequence).padStart(6, "0")}`;
+  let sequence = row.lastSequence;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const invoiceNumber = `${prefix}${String(sequence).padStart(6, "0")}`;
+    const existing = await tx.invoice.findUnique({
+      where: { invoiceNumber },
+      select: { id: true },
+    });
+    if (!existing) {
+      return invoiceNumber;
+    }
+
+    const existingInvoices = await tx.invoice.findMany({
+      where: { invoiceNumber: { startsWith: prefix } },
+      select: { invoiceNumber: true },
+    });
+    const maxExistingSequence = existingInvoices.reduce((max, invoice) => {
+      const suffix = invoice.invoiceNumber.slice(prefix.length);
+      if (!/^\d+$/.test(suffix)) {
+        return max;
+      }
+      return Math.max(max, Number.parseInt(suffix, 10));
+    }, sequence);
+
+    sequence = maxExistingSequence + 1;
+    await tx.invoiceSequence.update({
+      where: { year },
+      data: { lastSequence: sequence },
+    });
+  }
+
+  throw apiError("CONFLICT", "Could not allocate a unique invoice number");
 }
 
 export const ordersRouter = createTRPCRouter({
@@ -91,6 +236,9 @@ export const ordersRouter = createTRPCRouter({
         priority: z
           .enum(["low", "medium", "high", "critical"])
           .default("medium"),
+        discountType: z.enum(["percentage", "fixed"]).nullable().optional(),
+        discountRate: z.string().optional(),
+        paymentTermsDays: z.number().int().min(0).max(365).default(30),
         notes: z.string().nullable().optional(),
         lines: z.array(orderLineInputSchema).min(1),
       }),
@@ -142,8 +290,22 @@ export const ordersRouter = createTRPCRouter({
       const created = await ctx.prisma.$transaction(async (tx) => {
         const orderNumber = await nextOrderNumber(tx, now);
 
+        let discountRate = new Prisma.Decimal(0);
+        if (input.discountRate) {
+          discountRate = new Prisma.Decimal(input.discountRate);
+          if (discountRate.lt(0)) {
+            throw apiError("BAD_REQUEST", "Discount rate must be non-negative");
+          }
+          if (input.discountType === "percentage" && discountRate.gt(100)) {
+            throw apiError("BAD_REQUEST", "Percentage discount cannot exceed 100");
+          }
+        }
+
         const linesData = input.lines.map((line) => {
           const unitPrice = new Prisma.Decimal(line.unitPrice);
+          if (unitPrice.lt(0)) {
+            throw apiError("BAD_REQUEST", "Unit price must be non-negative");
+          }
           const lineTotal = unitPrice.mul(line.qtyOrdered);
           return {
             productId: line.productId,
@@ -160,6 +322,33 @@ export const ordersRouter = createTRPCRouter({
           (sum, line) => sum.add(line.lineTotal),
           new Prisma.Decimal(0),
         );
+        const discountAmount = computeDiscountAmount(totalValue, input.discountType ?? null, discountRate);
+        const taxableValue = Prisma.Decimal.max(new Prisma.Decimal(0), totalValue.sub(discountAmount));
+
+        const activeCharges = await tx.taxCharge.findMany({
+          where: { isActive: true },
+          orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+        });
+        const chargeDefs: ChargeDefinition[] = activeCharges.map((c) => ({
+          taxChargeId: c.id,
+          name: c.name,
+          type: c.type,
+          rate: c.rate,
+          displayOrder: c.displayOrder,
+        }));
+        const estimatedCharges = computeChargeRows(taxableValue, chargeDefs);
+        const taxTotal = estimatedCharges.reduce(
+          (sum, c) => sum.add(c.amount),
+          new Prisma.Decimal(0),
+        );
+        const grandTotal = taxableValue.add(taxTotal);
+        const taxSnapshot = chargeDefs.map((c) => ({
+          taxChargeId: c.taxChargeId,
+          name: c.name,
+          type: c.type,
+          rate: c.rate.toFixed(2),
+          displayOrder: c.displayOrder,
+        }));
 
         return tx.saleOrder.create({
           data: {
@@ -170,7 +359,15 @@ export const ordersRouter = createTRPCRouter({
             deliveryAddress: input.deliveryAddress,
             status: "pending_approval",
             priority: input.priority,
-            totalValue,
+            subtotalValue: totalValue,
+            discountType: input.discountType ?? null,
+            discountRate,
+            discountAmount,
+            taxableValue,
+            taxSnapshot,
+            taxTotal,
+            paymentTermsDays: input.paymentTermsDays,
+            totalValue: grandTotal,
             notes: input.notes,
             lines: {
               create: linesData,
@@ -330,31 +527,47 @@ export const ordersRouter = createTRPCRouter({
 
           if (!existingInvoice) {
             const invoiceNumber = await nextInvoiceNumber(tx, now);
+            const lineSubtotal = updatedOrder.lines.reduce(
+              (sum, line) => sum.add(line.lineTotal),
+              new Prisma.Decimal(0),
+            );
+            const subtotal = updatedOrder.subtotalValue.gt(0) || lineSubtotal.eq(0)
+              ? updatedOrder.subtotalValue
+              : lineSubtotal;
+            const discountRate = updatedOrder.discountRate;
+            const discountType = updatedOrder.discountType;
+            const discountAmount = computeDiscountAmount(subtotal, discountType, discountRate);
+            const taxableSubtotal = Prisma.Decimal.max(new Prisma.Decimal(0), subtotal.sub(discountAmount));
 
-            const subtotal = updatedOrder.totalValue;
-            const activeCharges = await tx.taxCharge.findMany({
-              where: { isActive: true },
-              orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
-            });
-            const chargesData = activeCharges.map((c) => {
-              const amount =
-                c.type === "percentage"
-                  ? subtotal.mul(c.rate).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
-                  : c.rate.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-              return {
+            let chargeDefs = parseChargeSnapshot(updatedOrder.taxSnapshot);
+            if (chargeDefs.length === 0) {
+              const activeCharges = await tx.taxCharge.findMany({
+                where: { isActive: true },
+                orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+              });
+              chargeDefs = activeCharges.map((c) => ({
                 taxChargeId: c.id,
                 name: c.name,
                 type: c.type,
                 rate: c.rate,
-                amount,
                 displayOrder: c.displayOrder,
-              };
-            });
+              }));
+            }
+            const chargesData = computeChargeRows(taxableSubtotal, chargeDefs);
             const chargesTotal = chargesData.reduce(
               (sum, c) => sum.add(c.amount),
               new Prisma.Decimal(0)
             );
-            const total = subtotal.add(chargesTotal);
+            const total = taxableSubtotal.add(chargesTotal);
+            const dueDate = new Date(now);
+            dueDate.setUTCDate(dueDate.getUTCDate() + updatedOrder.paymentTermsDays);
+            const taxSnapshot = chargeDefs.map((c) => ({
+              taxChargeId: c.taxChargeId,
+              name: c.name,
+              type: c.type,
+              rate: c.rate.toFixed(2),
+              displayOrder: c.displayOrder,
+            }));
 
             await tx.invoice.create({
               data: {
@@ -362,7 +575,12 @@ export const ordersRouter = createTRPCRouter({
                 orderId: updatedOrder.id,
                 outletId: updatedOrder.outletId,
                 invoiceDate: now,
+                dueDate,
                 subtotal,
+                discountType,
+                discountRate,
+                discountAmount,
+                taxSnapshot,
                 total,
                 amountPaid: new Prisma.Decimal(0),
                 amountDue: total,

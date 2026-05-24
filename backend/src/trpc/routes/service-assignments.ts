@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { recordComplaintActivity, resolveTransition } from "./service-shared";
+import { FINAL_STATUSES, assertOrgAccess, recordComplaintActivity, resolveTransition } from "./service-shared";
 
 const assignmentOutputSchema = z.object({
   id: z.string(),
@@ -12,29 +12,42 @@ const assignmentOutputSchema = z.object({
   assignedById: z.string(),
   action: z.string(),
   note: z.string().nullable(),
-  createdAt: z.string(),
+  createdAt: z.date(),
 });
 
-const assignInputSchema = z.object({
-  complaintId: z.string().uuid(),
-  asiUserId: z.string().uuid().nullable().optional(),
-  seUserId: z.string().uuid().nullable().optional(),
-  note: z.string().max(1000).optional(),
-});
+const assignInputSchema = z
+  .object({
+    complaintId: z.string().uuid(),
+    asiUserId: z.string().uuid().nullable().optional(),
+    seUserId: z.string().uuid().nullable().optional(),
+    note: z.string().max(1000).optional(),
+  })
+  .refine((val) => val.asiUserId != null || val.seUserId != null, {
+    message: "At least one of asiUserId or seUserId must be provided",
+  });
 
 export const serviceAssignmentsRouter = createTRPCRouter({
   assign: perm(P.service.assign)
     .input(assignInputSchema)
     .output(assignmentOutputSchema)
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+      const actorId = ctx.actor.id!;
 
       const complaint = await ctx.prisma.serviceComplaint.findUnique({
         where: { id: input.complaintId },
-        select: { id: true, status: true },
+        select: { id: true, orgId: true, status: true },
       });
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+      assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
+
+      if (input.asiUserId) {
+        const asiUser = await ctx.prisma.user.findUnique({ where: { id: input.asiUserId }, select: { id: true, isActive: true } });
+        if (!asiUser || !asiUser.isActive) throw apiError("NOT_FOUND", "ASI user not found or inactive");
+      }
+      if (input.seUserId) {
+        const seUser = await ctx.prisma.user.findUnique({ where: { id: input.seUserId }, select: { id: true, isActive: true } });
+        if (!seUser || !seUser.isActive) throw apiError("NOT_FOUND", "SE user not found or inactive");
+      }
 
       const created = await ctx.prisma.$transaction(async (tx) => {
         const row = await tx.serviceAssignmentHistory.create({
@@ -82,7 +95,7 @@ export const serviceAssignmentsRouter = createTRPCRouter({
         assignedById: created.assignedById,
         action: created.action,
         note: created.note,
-        createdAt: created.createdAt.toISOString(),
+        createdAt: created.createdAt,
       };
     }),
 
@@ -90,14 +103,27 @@ export const serviceAssignmentsRouter = createTRPCRouter({
     .input(assignInputSchema)
     .output(assignmentOutputSchema)
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
+      const actorId = ctx.actor.id!;
 
       const complaint = await ctx.prisma.serviceComplaint.findUnique({
         where: { id: input.complaintId },
-        select: { id: true, status: true },
+        select: { id: true, orgId: true, status: true },
       });
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+      assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
+
+      if (FINAL_STATUSES.has(complaint.status)) {
+        throw apiError("CONFLICT", `Cannot reassign a complaint with status '${complaint.status}'`);
+      }
+
+      if (input.asiUserId) {
+        const asiUser = await ctx.prisma.user.findUnique({ where: { id: input.asiUserId }, select: { id: true, isActive: true } });
+        if (!asiUser || !asiUser.isActive) throw apiError("NOT_FOUND", "ASI user not found or inactive");
+      }
+      if (input.seUserId) {
+        const seUser = await ctx.prisma.user.findUnique({ where: { id: input.seUserId }, select: { id: true, isActive: true } });
+        if (!seUser || !seUser.isActive) throw apiError("NOT_FOUND", "SE user not found or inactive");
+      }
 
       const created = await ctx.prisma.$transaction(async (tx) => {
         const row = await tx.serviceAssignmentHistory.create({
@@ -135,7 +161,7 @@ export const serviceAssignmentsRouter = createTRPCRouter({
         assignedById: created.assignedById,
         action: created.action,
         note: created.note,
-        createdAt: created.createdAt.toISOString(),
+        createdAt: created.createdAt,
       };
     }),
 });

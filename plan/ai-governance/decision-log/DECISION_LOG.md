@@ -4,6 +4,341 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260525-008
+- Decision ID: `DEC-20260525-008`
+- Model: `codex`
+- Branch/Commit: `master`
+- Task: `Fix dispatches.create 500 caused by missing dispatch_timeline table in local database`
+- Decision: `Apply a non-destructive local DB schema patch to create dispatch_timeline (table, index, and FK constraints) expected by backend dispatch lifecycle code.`
+- Rationale: `User-provided backend trace shows tx.dispatchTimeline.create failing because public.dispatch_timeline does not exist; dispatch creation now writes timeline events by design.`
+- Alternatives Considered:
+  - `Disable timeline writes in code` rejected because it regresses intended dispatch lifecycle/audit behavior.
+  - `Force-reset and reseed DB` rejected because a targeted additive patch is safer and faster.
+- Scope:
+  - `Local PostgreSQL schema (public.dispatch_timeline table + index + FK constraints)`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Verified current local schema had dispatches/dispatch_lines/dispatch_line_serials but not dispatch_timeline.`
+  - Done: `Created public.dispatch_timeline with columns id, dispatchId, status, actorId, actorRole, note, happenedAt.`
+  - Done: `Added dispatch_timeline_dispatchId_idx and FK constraints to dispatches(id) and users(id).`
+  - Done: `Verified Prisma model access by running dispatchTimeline.count() successfully.`
+  - Not Done: `Did not run full prisma db push in this turn.`
+- Impact/Risk:
+  - `Low: additive local schema patch aligned with existing checked-in Prisma model.`
+- Cleanup Required:
+  - `Run full migration/db-push pipeline when broader schema drift cleanup is scheduled.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex/repo owner during schema hygiene pass`
+- Owner Timestamp: `codex @ 2026-05-25T03:27:00Z`
+
+---
+
+## DEC-20260525-007
+- Decision ID: `DEC-20260525-007`
+- Model: `codex`
+- Branch/Commit: `master`
+- Task: `Fix Order Detail financial breakdown showing zero subtotal/taxable/tax for orders that still have non-zero line totals and linked invoices`
+- Decision: `Add resilient fallback calculations in OrderDetailPage so financial rows use line/invoice-derived values when legacy order financial fields are missing or zeroed.`
+- Rationale: `User reported order detail showing Subtotal/Taxable/Tax as zero while line totals and linked invoice totals are non-zero. This is a UI fallback issue for mixed legacy/new financial data.`
+- Alternatives Considered:
+  - `Leave backend values as-is` rejected because it produces clearly incorrect financial display for users.
+  - `Backfill all legacy orders first` rejected for immediate fix because UI should remain robust even before data cleanup.
+- Scope:
+  - `web/src/pages/dashboard/OrderDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Identified direct cause: UI trusted order.subtotalValue/taxableValue/taxTotal zero values without legacy fallback.`
+  - Done: `Added fallback logic in OrderDetailPage to derive subtotal from line totals when order subtotalValue is zero/missing.`
+  - Done: `Added fallback logic to infer taxable/tax/total from available order totals and linked invoice totals when legacy order financial fields are zero.`
+  - Done: `Updated tax snapshot section message when snapshot is missing but tax is inferred from linked invoice totals.`
+  - Done: `Verified with web production build (tsc -b && vite build).`
+  - Not Done: `No backend/data backfill changes were made in this fix.`
+- Impact/Risk:
+  - `Low: display-only fallback logic in one page.`
+- Cleanup Required:
+  - `Finalize same entry with completed/partial/blocked status.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T03:19:00Z`
+
+---
+
+## DEC-20260525-006
+- Decision ID: `DEC-20260525-006`
+- Model: `codex`
+- Branch/Commit: `master`
+- Task: `Fix orders.transition approve 500 caused by duplicate invoiceNumber on tx.invoice.create`
+- Decision: `Harden invoice number allocation in backend orders transition flow by making nextInvoiceNumber detect and recover from invoice_sequences drift against existing invoices before create.`
+- Rationale: `User-provided runtime trace shows tx.invoice.create failing with Prisma unique constraint on invoiceNumber during approve transition. Existing allocator increments sequence but does not verify generated number is actually unused.`
+- Alternatives Considered:
+  - `Frontend retry only` rejected because conflict is deterministic backend numbering drift.
+  - `Manual DB sequence reset only` rejected because it fixes one environment once but does not make allocation robust in code.
+- Scope:
+  - `backend/src/trpc/routes/orders.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Confirmed failure location and cause from user logs: orders.transition -> tx.invoice.create unique constraint on invoiceNumber.`
+  - Done: `Confirmed current nextInvoiceNumber implementation has no collision check against existing invoices.`
+  - Done: `Updated nextInvoiceNumber to detect existing invoiceNumber collisions, scan existing INV-{year}-* rows, advance invoice_sequences, and retry allocation.`
+  - Done: `Added bounded retry loop and explicit conflict error when unique allocation cannot be achieved.`
+  - Done: `Verified backend compiles with bun run typecheck (tsc --noEmit).`
+  - Not Done: `Did not run a live approve-transition API replay in this turn.`
+- Impact/Risk:
+  - `Low-to-medium: touches only number allocation logic in approval path; incorrect fix could block invoice generation.`
+- Cleanup Required:
+  - `Finalize same entry with completed/partial/blocked and verification results.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T03:07:00Z`
+
+---
+
+## DEC-20260525-005
+- Decision ID: `DEC-20260525-005`
+- Model: `codex`
+- Branch/Commit: `master`
+- Task: `Fix web runtime warning and AR aging 400: missing React list key in AccountsApprovalQueuePage and invalid invoices.arAging input limit`
+- Decision: `Apply a focused web-only fix: add stable keying for approval-queue list rendering and align the adapter invoices.arAging call with backend pagination limits.`
+- Rationale: `User reported a React key warning tied to AccountsApprovalQueuePage and repeated 400 responses from invoices.arAging. Both are deterministic contract/render issues and should be fixed directly in web without backend behavior changes.`
+- Alternatives Considered:
+  - `Ignore warning and only fix 400` rejected because warning indicates unstable list reconciliation and can cause subtle UI state bugs.
+  - `Increase backend arAging limit cap` rejected for this pass because issue is a frontend contract mismatch and should not broaden backend pagination policy.
+- Scope:
+  - `web/src/pages/dashboard/AccountsApprovalQueuePage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Identified backend constraint: paginationInputSchema enforces limit <= 100 while adapter called invoices.arAging with limit 500.`
+  - Done: `Identified unkeyed fragment in AccountsApprovalQueuePage rows map as source of React key warning.`
+  - Done: `Updated /accounts/ar-aging adapter call to invoices.arAging with limit 100 to match backend contract and stop 400s.`
+  - Done: `Wrapped approval queue row pair in keyed React Fragment to resolve TableBody key warning.`
+  - Done: `Verified with web production build (tsc -b && vite build).`
+  - Not Done: `No backend, permission, or role changes were made.`
+- Impact/Risk:
+  - `Low risk: scoped web changes only; no permissions, routes, or data model updates.`
+- Cleanup Required:
+  - `Finalize this entry with completed/partial/blocked and verification results.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T02:55:00Z`
+
+---
+
+## DEC-20260525-004
+- Decision ID: `DEC-20260525-004`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master`
+- Task: `Implement production-ready dispatch lifecycle: queue auto-population on order approval, priority ranking, dispatch timeline, in-transit transition, and dual-role delivery confirmation (outlet + warehouse manager)`
+- Decision: `Add DispatchTimeline model to schema, add markInTransit mutation, update markDelivered to accept outlet users with scope enforcement, add timeline tRPC query, expose all via REST wrappers in api.ts, overhaul DispatchDetailPage with timeline display and action buttons, grant outlets dispatches:read + dispatches:deliver permissions.`
+- Rationale: `Queue auto-population already worked (approved orders shown to warehouse). Missing pieces were: no in-transit step (dispatch went straight from created to delivered), no timeline audit trail, outlet users had no way to confirm delivery, and DispatchDetailPage had no actions at all.`
+- Alternatives Considered:
+  - `DispatchQueue as a persisted DB model` rejected because current on-the-fly computation from approved/partially_dispatched orders is correct and performant; a persisted queue table would add sync complexity with no benefit.
+  - `Separate outlet_deliver permission` rejected; using existing dispatches:deliver with outlet scope enforcement (orderLine → order → outletId check) is simpler and consistent with pattern used in outlet-access.ts.
+  - `Moving queue ranking to backend tRPC` deferred; current api.ts BFF computation is live and correct, refactor is out of scope for this task.
+- Scope:
+  - `schema.prisma` — DispatchTimeline model + relation on Dispatch + User back-relation
+  - `backend/src/trpc/routes/dispatches.ts` — create (timeline event), markInTransit (new), markDelivered (outlet scope + timeline), timeline (new query)
+  - `backend/scripts/seed-permissions.ts` — OUTLET_PERMISSIONS adds dispatches:read + dispatches:deliver
+  - `web/src/lib/api.ts` — GET /dispatches/:id/timeline, POST /dispatches/:id/mark-in-transit, POST /dispatches/:id/mark-delivered
+  - `web/src/pages/dashboard/DispatchDetailPage.tsx` — full overhaul: timeline, status badge, Mark In Transit + Confirm Delivery action buttons
+- Status: `completed`
+- Completion Notes:
+  - Done: `DispatchTimeline model added; Prisma client regenerated; typecheck passes.`
+  - Done: `markInTransit creates timeline event with actorRole=warehouse; guards created→in_transit only.`
+  - Done: `markDelivered accepts outlet users (dispatchLine → order → outletId scope check); writes timeline event with actorRole=outlet|warehouse|admin; warranty complaint auto-resolve preserved.`
+  - Done: `timeline query returns events ordered happenedAt ASC; warehouse scope enforced.`
+  - Done: `OUTLET_PERMISSIONS now includes dispatches:read and dispatches:deliver.`
+  - Done: `DispatchDetailPage shows 3-step visual timeline (created→in_transit→delivered), action buttons gated by permission + current status, ConfirmDialog for both actions, error display.`
+  - Done: `Web build passes with no TypeScript errors.`
+- Impact/Risk:
+  - `Outlet users can now call markDelivered — scope check (dispatchLine.orderLine.order.outletId) prevents cross-outlet access. Existing warehouse manager deliver flow unchanged.`
+  - `DispatchTimeline rows are written inside the same transaction as status updates for create/markInTransit; markDelivered writes timeline inside the status update transaction before the complaint-resolution side-effect transaction, so timeline is always consistent.`
+- Cleanup Actions:
+  - `Run db:reset + seed to pick up new OUTLET_PERMISSIONS in dev environments.`
+  - `Mobile app delivery confirmation (outlet side) is a separate task — backend is ready.`
+
+---
+
+## DEC-20260525-003
+- Decision ID: `DEC-20260525-003`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Implement web UI alignment for orders/invoices/taxes/discounts/due-date AR aging against updated backend financial contracts`
+- Decision: `Update web adapter + dashboard screens to consume the new backend invoice/order financial fields and expose full financial invoice editing, due-date aging, and discount-aware order creation.`
+- Rationale: `Backend financial model was expanded; current web logic still assumes invoiceDate-based overdue, charge-only edits, and line-subtotal-only order totals. User requested end-to-end UI alignment without permission changes.`
+- Alternatives Considered:
+  - `Partial UI retrofit` rejected because it would leave inconsistent financial behavior across screens.
+  - `Frontend-only re-derivation of aging and totals` rejected because backend now exposes authoritative due-date aging and recomputed totals.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/InvoiceDetailPage.tsx`
+  - `web/src/pages/dashboard/SalesOrdersPage.tsx`
+  - `web/src/pages/dashboard/OrderDetailPage.tsx`
+  - `web/src/pages/dashboard/SalesInvoicesPage.tsx`
+  - `web/src/pages/dashboard/AccountsARAgingPage.tsx`
+  - `web/src/components/InvoicePDF.tsx`
+  - `web/src/components/InvoicePDFButton.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated web adapter invoice status/overdue logic to use backend due-date aging fields (daysPastDue/agingBucket) instead of invoiceDate-derived overdue math.`
+  - Done: `Updated adapter invoice routes for /invoices and /invoices/:id to carry dueDate, discountType/rate/amount, taxableSubtotal, daysPastDue, agingBucket, and charge rows.`
+  - Done: `Added PATCH /invoices/:id adapter mapping to invoices.update with editable lines + discount + dueDate + charges (charge amounts remain server-authoritative).`
+  - Done: `Updated order creation adapter flow to submit discountType, discountRate, and paymentTermsDays.`
+  - Done: `Updated /settings/billing/charges/preview adapter payload to include discountType/discountRate.`
+  - Done: `Replaced /accounts/ar-aging adapter logic with backend invoices.arAging mapping and invoice-level rows.`
+  - Done: `Ensured /accounts/outstanding and /accounts/outlet/:id/financial-profile are derived from live invoice aggregates, not outlet snapshot balances.`
+  - Done: `Refactored Invoice Detail UI to full financial edit dialog (lines, discount, due date, charge definitions) and removed manual charge-amount editing in favor of computed preview.`
+  - Done: `Updated Sales Orders create flow with discount/payment terms inputs and discount-aware charges preview; payload now sends financial fields.`
+  - Done: `Updated Order Detail page to show backend financial breakdown and tax snapshot summary instead of line-subtotal-only total.`
+  - Done: `Updated Sales Invoices list with due-date and aging columns and due-date-aware status rendering.`
+  - Done: `Reworked AR Aging page to backend-summary cards + invoice-level aging table with search/filter controls.`
+  - Done: `Updated invoice PDF payload/types to include due-date + discount/taxable fields in rendered totals.`
+  - Done: `Ran web production build successfully (tsc -b && vite build).`
+  - Not Done: `No route/permission model changes were made by design.`
+- Impact/Risk:
+  - `Adapter contract drift can break multiple screens at once; changes must be validated with web build.`
+  - `Financial UI fields can mislead operations if stale logic persists in any view.`
+- Cleanup Required:
+  - `Optional UX cleanup: reduce bundle size for InvoicePDF chunk if build warning on large chunks becomes a release concern.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T06:22:00Z`
+
+---
+
+## DEC-20260525-002
+- Decision ID: `DEC-20260525-002`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Backend financial model hardening: tax snapshots on orders/invoices, discounts, invoice due date + AR aging, invoice editability, and live-recomputed outstanding metrics`
+- Decision: `Implement schema + route changes so order creation snapshots the tax system at order-time, invoice payloads always carry charges, invoice financial fields are editable through backend mutation with server-side recomputation, discounts are first-class, due dates are first-class, and AR aging is computed from dueDate while outlet/account outstanding metrics are read from live invoice aggregates instead of stored snapshots.`
+- Rationale: `Current implementation leaves gaps in tax transparency, tax-drift protection between order and approval, discount support, due-date aging, and metric consistency. The user asked for backend-only implementation without permission-role changes.`
+- Alternatives Considered:
+  - `Frontend-only fixes` rejected because these are backend data contract and persistence behaviors.
+  - `Add parallel legacy paths` rejected to avoid conflicting financial implementations.
+- Scope:
+  - `schema.prisma`
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/routes/orders-shared.ts`
+  - `backend/src/trpc/routes/invoices.ts`
+  - `backend/src/trpc/routes/outlet-portal.ts`
+  - `backend/src/trpc/routes/outlets.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added schema fields for order-time tax snapshots, order/invoice discounts, invoice dueDate, and due-date index for AR aging reads.`
+  - Done: `Updated orders.create to snapshot active tax config at order creation, compute discount/taxable/tax totals, and persist financial fields for deterministic approval-time invoicing.`
+  - Done: `Updated order approval invoice generation to use the order tax snapshot (fallback to active charges only when snapshot missing), set dueDate from paymentTermsDays, and persist invoice discount/tax snapshot fields.`
+  - Done: `Expanded invoice contracts with dueDate/discount/aging fields, added backend AR aging query, and added invoice update mutation for editable lines/charges/discount/dueDate with server-side recomputation.`
+  - Done: `Hardened invoices.updateCharges so charge amounts are always recomputed server-side (client amount ignored).`
+  - Done: `Updated outlet portal invoice detail/history to include dueDate and detailed custom tax charges.`
+  - Done: `Updated outlet and outlet-portal outstanding views to return live-recomputed outstanding values from invoice aggregates instead of relying on stored snapshot values for reads.`
+  - Done: `Ran Prisma generate and backend typecheck successfully.`
+  - Not Done: `No DB migration push/reset was executed in this turn; schema changes need migration/db push in target environments.`
+- Impact/Risk:
+  - `Schema changes require Prisma migration/push before runtime use.`
+  - `Invoice math and outlet metrics are sensitive; regressions can affect accounting outputs.`
+- Cleanup Required:
+  - `Backfill policy may be needed for existing invoices/orders if historical due dates or discount fields are required.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-24T20:35:06Z`
+
+---
+
+## DEC-20260525-001
+- Decision ID: `DEC-20260525-001`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Fix orders.create 500 from sales order create request`
+- Decision: `Make order number allocation self-heal when order_sequences is behind existing sale_orders, so valid orders.create requests do not fail with a raw Prisma unique-constraint 500.`
+- Rationale: `The user provided a concrete failing XHR POST to /trpc/orders.create returning HTTP 500. Order creation should return a typed validation/business error for bad outlet/product/permission data, or create the order successfully for valid seeded data; an internal 500 indicates an unhandled backend path or schema/runtime mismatch.`
+- Alternatives Considered:
+  - `Frontend-only handling` rejected because the reported response is a server 500 from the tRPC mutation.
+  - `Broad order lifecycle refactor` rejected because the failure is limited to create-time behavior and should not change approval/dispatch semantics.
+- Scope:
+  - `backend/src/trpc/routes/orders.ts`
+  - `backend/src/trpc/routes/orders-shared.ts`
+  - `backend/src/trpc/routes/orders*.test.ts` if a focused regression test exists or is added
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Started from the exact failing XHR payload and identified the active backend route/serializer scope.`
+  - Done: `Reproduced the provided request locally through http://localhost:5173/trpc/orders.create and confirmed the 500 was Prisma unique constraint failure on sale_orders.orderNumber.`
+  - Done: `Updated nextOrderNumber to detect an occupied generated order number, scan existing SO-{year}- numbers, advance order_sequences, and return the next free number.`
+  - Done: `Verified the same payload returns 200 OK and creates order SO-2026-000003 in the local dev database.`
+  - Done: `Ran backend typecheck successfully.`
+  - Not Done: `No broad order lifecycle refactor or database reset was performed.`
+- Impact/Risk:
+  - `Order creation touches financial totals and downstream dispatch/invoice workflows; keep the fix narrow.`
+  - `Existing dirty worktree contains unrelated backend/web/mobile edits; do not revert or fold them into this fix.`
+- Cleanup Required:
+  - `Optional: audit local/staging order_sequences rows against sale_orders before release if databases have been manually reseeded.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-24T20:07:08Z`
+
+---
+
+## DEC-20260524-011
+- Decision ID: `DEC-20260524-011`
+- Model: `claude-code`
+- Branch/Commit: `master@HEAD`
+- Task: `Service module multi-tenant isolation — add orgId to all service models and enforce per-org filtering in all routes`
+- Decision: `Added nullable orgId String? to ServiceComplaint, ServiceSerialIndex, ServiceSerialEvent, ServiceMachineClient, ServiceFormTemplate. Restructured ServiceComplaintSequence from single-year PK to composite (orgId, year) PK with empty-string default for legacy rows. Added assertOrgAccess helper to service-shared.ts. All service route list queries filter by ctx.actor.orgId when present; all single-record lookups assert org ownership (returns NOT_FOUND on cross-org access to avoid info leakage). Prisma regenerated. Typecheck passes clean.`
+- Rationale: `DEC-20260524-007 deferred this as P1 after the 9-agent audit pass. Any service:read token could read all tenants' complaints, serial records, machine client credentials, and form templates — a full IDOR across every service resource. Nullable orgId migration strategy: store orgId on create, filter on read, enforce on all single-record fetches. No enforcement when actor.orgId is null (legacy / single-tenant compatibility). Completes the P1 backlog item from DEC-20260524-007.`
+- Alternatives Considered:
+  - `Non-nullable orgId immediately` rejected — would break existing single-tenant deployments that never send x-org-id; nullable + default-empty for sequences is the safe graduated approach.
+  - `Row-level security (Postgres RLS)` deferred — requires DB migration and infrastructure changes; application-layer filtering achieves the same isolation with lower risk.
+  - `Compound @@unique([orgId, normalizedSerial]) on ServiceSerialIndex immediately` deferred — requires orgId to be non-nullable first; @@index([orgId, normalizedSerial]) added for query performance; compound unique scheduled for P1 non-nullable phase.
+- Scope (files changed):
+  - `schema.prisma` — orgId String? on ServiceComplaint (+@@index orgId/status/createdAt), ServiceSerialIndex (+@@index orgId/normalizedSerial), ServiceSerialEvent (+@@index orgId/normalizedSerial/eventAt), ServiceMachineClient (+@@index orgId/status/createdAt), ServiceFormTemplate (+@@index orgId/isActive/createdAt); ServiceComplaintSequence PK changed from year to @@id([orgId, year]) with @default("")
+  - `backend/src/trpc/routes/service-shared.ts` — nextComplaintNumber(tx, now, orgId) signature; INSERT ON CONFLICT uses (org_id, year); assertOrgAccess() helper exported; ensureSerialIndex stores orgId on create + orgId on legacy events
+  - `backend/src/trpc/routes/service-complaints.ts` — list: orgId filter; get/detail/update/transition: assertOrgAccess; create: stores orgId, passes orgId to nextComplaintNumber
+  - `backend/src/trpc/routes/service-assignments.ts` — assign/reassign: assertOrgAccess on complaint lookup
+  - `backend/src/trpc/routes/service-tests.ts` — submit/requestRetest: assertOrgAccess on complaint lookup
+  - `backend/src/trpc/routes/service-forms.ts` — listTemplates: orgId filter; getTemplate/updateTemplate/addField/disableTemplate: assertOrgAccess; createTemplate: stores orgId; submitForm: assertOrgAccess on both complaint and template; listSubmissions/disableSubmission: assertOrgAccess on complaint
+  - `backend/src/trpc/routes/service-warranty.ts` — approve/reject/assignReplacement/createFulfillmentOrder: assertOrgAccess on complaint
+  - `backend/src/trpc/routes/service-integrations.ts` — listClients: orgId filter; createClient: stores orgId; rotateSecret/revokeClient: assertOrgAccess on client
+- Completion Notes:
+  - Done: orgId on all 5 models + ServiceComplaintSequence composite PK.
+  - Done: assertOrgAccess enforced on every service route that accepts a resource ID.
+  - Done: List queries scoped to org when ctx.actor.orgId is set.
+  - Done: Prisma client regenerated successfully.
+  - Done: bun run typecheck passes clean (no errors).
+  - Deferred: Backfill script (complaint → outlet → orgId, serial → soldOutlet → orgId). Tracked as P1.
+  - Deferred: Making orgId non-nullable and adding @@unique([orgId, normalizedSerial]) on ServiceSerialIndex. Tracked as P1 (requires backfill completion first).
+  - Deferred: serviceCredentialMiddleware orgId propagation — machine clients authenticate without a user session, so ctx.actor.orgId is null during machine-client calls; authProbe/machine API remains accessible to all orgs until client-side orgId header support is added.
+- Impact/Risk:
+  - `assertOrgAccess` returns NOT_FOUND (not FORBIDDEN) for cross-org access — intentional: avoids leaking resource existence to malicious tenants.
+  - Actors without x-org-id header (legacy web dashboard users) continue to see all records — no regression until all clients send x-org-id.
+  - ServiceComplaintSequence PK change requires `prisma migrate` against staging DB before deploy; existing rows with PK `year` must be migrated to `(orgId='', year)`.
+  - Machine client rotate/revoke: now asserts client.orgId === actor.orgId; clients created before this deploy have null orgId and are accessible to any actor (null actor.orgId skips the check).
+- Cleanup Required:
+  - Run `prisma migrate` against staging DB to apply schema changes.
+  - Write and run a one-time backfill script: ServiceComplaint orgId ← complaint.outlet.soldBy (if a selling-org concept exists) or a fixed platform org; ServiceSerialIndex orgId ← soldOutlet's owning org.
+  - Once backfill complete, make orgId non-nullable, add @@unique([orgId, normalizedSerial]), remove backward-compat null branches from assertOrgAccess and list filters.
+  - Update machine client auth to pass orgId via x-org-id so serviceScopedProcedure routes also become org-isolated.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: `ashish`
+- Status: `completed`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-24T00:00:00Z`
+
+---
+
 ## DEC-20260524-010
 - Decision ID: `DEC-20260524-010`
 - Model: `claude-sonnet-4-5`
@@ -93,16 +428,46 @@ Use `DECISION_TEMPLATE.md` for every new entry.
   - Done: `Confirmed service_complaint_sequences has only year and lastSequence locally while schema.prisma expects orgId, year, lastSequence with composite primary key.`
   - Done: `Confirmed nextComplaintNumber raw SQL uses org_id/last_sequence, which conflicts with schema.prisma field mapping for orgId/lastSequence.`
   - Done: `Confirmed the create path's serial indexing dependencies are also behind schema.prisma: dispatch_line_serials is missing and service_serial_index/service_serial_events lack orgId.`
-  - Not Done: `Code fix, database adjustment, mutation-path verification, and final decision update pending.`
+  - Done: `Updated nextComplaintNumber raw SQL to use "orgId" and "lastSequence" columns.`
+  - Done: `Updated local service_complaint_sequences to add "orgId" and use primary key ("orgId", year).`
+  - Done: `Created local dispatch_line_serials table/indexes/FK and added orgId columns/indexes to service_serial_index and service_serial_events.`
+  - Done: `Verified serviceComplaints.create succeeds through appRouter.createCaller with a temporary complaint, then cleaned up the verification complaint and serial rows.`
+  - Done: `Ran backend typecheck successfully.`
+  - Not Done: `No full Prisma db push, forced reset, dispatch_line_serials backfill, or broader enum/data migration was performed.`
 - Impact/Risk:
   - `Existing sequence rows will be assigned the default empty orgId, matching the create path when ctx.actor.orgId is absent.`
   - `This does not complete the broader full-schema migration blocked by unrelated enum conversion work.`
 - Cleanup Required:
-  - `Finalize this decision after local schema adjustment and verification.`
+  - `Run backend/src/scripts/backfill-dispatch-line-serials.ts separately if legacy dispatch serial lookup needs existing dispatch data.`
+  - `Create a separate full schema migration plan for remaining Prisma drift, especially populated enum conversions.`
 - Dead Paths Introduced: `none`
 - Conflicting Implementations: `none`
 - Next Cleanup Owner: `codex during current execution`
 - Owner Timestamp: `codex @ 2026-05-24T15:08:50Z`
+
+### DEC-20260524-010 Final Update
+- Decision ID: `DEC-20260524-010`
+- Model: `codex`
+- Branch/Commit: `master@01036da`
+- Task: `Fix local serviceComplaints.create 500 from sequence schema drift`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Fixed nextComplaintNumber to target schema.prisma's actual service_complaint_sequences columns: "orgId", year, and "lastSequence".`
+  - Done: `Applied non-destructive local DB updates for service_complaint_sequences, dispatch_line_serials, service_serial_index.orgId, and service_serial_events.orgId.`
+  - Done: `Verified serviceComplaints.create succeeds and removed the temporary verification rows.`
+  - Done: `Backend typecheck passes.`
+  - Not Done: `Did not force reset the database or perform unrelated full-schema enum migrations.`
+- Impact/Risk:
+  - `Complaint numbers in the local dev DB advanced by one during verification.`
+  - `dispatch_line_serials exists but is not backfilled for historical dispatch_lines until the existing backfill script is run.`
+  - `Remaining schema drift can still affect unrelated routes until handled by a proper migration pass.`
+- Cleanup Required:
+  - `Run dispatch-line serial backfill when legacy dispatch serial lookup must include existing rows.`
+  - `Plan the remaining full-schema drift migration separately rather than using force reset on useful dev/prod data.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `repo owner/codex when scheduling remaining schema migration cleanup`
+- Owner Timestamp: `codex @ 2026-05-24T15:11:08Z`
 
 ---
 
@@ -4805,3 +5170,126 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Conflicting Implementations: `none`
 - Next Cleanup Owner: `n/a`
 - Owner Timestamp: `codex @ 2026-05-22T12:13:42Z`
+
+---
+
+## DEC-20260524-001
+- Decision ID: `DEC-20260524-001`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Fix Sales Mobile Flutter debug build failure caused by CardThemeData API mismatch`
+- Decision: `Replace the app theme's CardThemeData usage with the Flutter SDK-compatible CardTheme API while preserving the existing Material 3 card styling.`
+- Rationale: `flutter run fails during kernel snapshot compilation because the local Flutter SDK does not expose CardThemeData; the styling only needs the stable cardTheme contract.`
+- Alternatives Considered:
+  - `Upgrade the local Flutter SDK` rejected because the app should compile on the currently configured project SDK without requiring a toolchain change for this narrow failure.
+  - `Remove cardTheme entirely` rejected because it would silently drop the existing visual styling.
+- Scope:
+  - `mobile/sales_mobile_app/lib/app/theme/app_theme.dart`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before code edits.`
+  - Not Done: `Theme compatibility patch and Flutter validation pending.`
+- Impact/Risk:
+  - `Low: change is limited to the ThemeData card theme type and should preserve existing elevation, color, and shape behavior.`
+- Cleanup Required:
+  - `Finalize this same decision entry after validation with completed/partial/blocked status.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-24T16:56:23Z`
+
+### DEC-20260524-001 Final Update
+- Decision ID: `DEC-20260524-001`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Fix Sales Mobile Flutter debug build failure caused by CardThemeData API mismatch`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Replaced CardThemeData with CardTheme in mobile/sales_mobile_app/lib/app/theme/app_theme.dart while preserving existing elevation, color, and rounded shape values.`
+  - Done: `Validated with flutter analyze and flutter build apk --debug.`
+  - Not Done: `flutter run was not executed against the attached device in this environment; the debug APK compile path that failed previously now passes.`
+- Impact/Risk:
+  - `Low: scoped to ThemeData card theme construction and keeps the same visual styling.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-24T16:58:30Z`
+
+---
+
+## DEC-20260524-002
+- Decision ID: `DEC-20260524-002`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Audit and harden Sales Mobile application production readiness across mobile, backend, web, and RBAC`
+- Decision: `Run a cross-layer Sales Mobile/Field Sense production-readiness pass, prioritize concrete defects that block safe field use, and migrate the mobile tracking path to the existing backend V2 sync contracts instead of extending the legacy in-memory uploader.`
+- Rationale: `The sales application spans Flutter modules, background location capture, backend Field Sense routes, web/admin visibility, and default role permissions. Production readiness requires one primary sync path, durable offline behavior, scoped permissions, and clear audit findings instead of isolated file fixes.`
+- Alternatives Considered:
+  - `Only write an audit report` rejected because the user explicitly requested bug finding and patching where safe.
+  - `Keep patching fieldLocation.ingest` rejected because prior backend work established syncStart, ingestV2, syncEnd, clientShiftId, and clientPointId as the primary production path.
+  - `Change unrelated service-module work already in the tree` rejected because those edits are outside this sales application scope and appear to be pre-existing worktree state.
+- Scope:
+  - `mobile/sales_mobile_app/lib/**`
+  - `mobile/sales_mobile_app/android/**`
+  - `mobile/sales_mobile_app/ios/**`
+  - `backend/src/trpc/routes/field-*`
+  - `backend/src/rbac/**`
+  - `backend/scripts/seed-permissions.ts`
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/*Field*`
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `web/src/lib/api.ts`
+  - `plan/service-audit/** or a new sales audit artifact if needed`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision opened before Sales Mobile production code edits.`
+  - Not Done: `Parallel audit, scoped fixes, verification, audit artifact, and final decision update pending.`
+- Impact/Risk:
+  - `Mobile sync changes can affect live Field Sense tracking semantics and must preserve auth/org headers, shift lifecycle behavior, and retry safety.`
+  - `RBAC/default-role changes can affect which users can access Sales Mobile and Field Sense surfaces.`
+  - `Existing uncommitted service-module changes are present and must not be reverted or mixed into this implementation.`
+- Cleanup Required:
+  - `Finalize this same decision entry after implementation with completed/partial/blocked status and exact remaining production gaps.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `fieldLocation.ingest and fieldLocation.ingestV2 currently coexist by prior migration decision; this pass should reduce mobile dependence on the legacy path where feasible.`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-24T17:14:04Z`
+- Follow-up Notes:
+  - `2026-05-24T17:23:36Z: User reported app stuck on splash. Patched Sales Mobile startup/login blocker by making background service configuration non-blocking, bounding session bootstrap token/auth calls, and stopping tracking asynchronously on expiry/logout. Verified flutter analyze and debug APK build.`
+  - `2026-05-24T17:24:00Z: Device log showed Dio Uri.parse crash from a leading-space API_BASE_URL. Removed the leading space from AppConfig default URL and added trim/validation fallback so malformed dart-define whitespace cannot crash main or background isolates. Verified flutter analyze and flutter build apk --debug.`
+
+---
+
+## DEC-20260525-004
+- Decision ID: `DEC-20260525-004`
+- Model: `codex`
+- Branch/Commit: `master@8a07772`
+- Task: `Fix invoices.list/orders queries 500 caused by Prisma schema-database drift (missing dueDate/subtotalValue columns)`
+- Decision: `Sync the local database schema to ../schema.prisma using Prisma db push, keeping the existing backend query path unchanged.`
+- Rationale: `Runtime errors show Prisma is querying columns that exist in the checked-in schema/contracts but are absent from the active database. The least risky single-path fix is to bring DB structure in sync with schema instead of adding fallback query branches.`
+- Alternatives Considered:
+  - `Patch routes to avoid missing columns` rejected because it would create a conflicting legacy path and break current financial contracts.
+  - `Force reset database` rejected because it is destructive and unnecessary for additive column drift.
+- Scope:
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+  - `Local database schema via Prisma push using ../schema.prisma`
+  - `Verification via invoices.list runtime path`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Captured failing runtime evidence showing missing invoices.dueDate and sale_orders.subtotalValue columns.`
+  - Done: `Attempted prisma db push --schema ../schema.prisma --skip-generate; blocked by unrelated non-castable service_assignment_history.action type change on populated data.`
+  - Done: `Applied non-destructive SQL patch via prisma db execute to add sale_orders.subtotalValue (DECIMAL(65,30) NOT NULL DEFAULT 0), invoices.dueDate (TIMESTAMP(3)), and invoices_outletId_dueDate_idx.`
+  - Done: `Verified both columns exist and both Prisma queries invoice.findMany(select dueDate) and saleOrder.findMany(select subtotalValue) execute successfully.`
+  - Not Done: `Full schema sync via prisma db push remains pending until service_assignment_history.action drift is migrated safely.`
+- Impact/Risk:
+  - `DB schema mutation can fail if local DB has incompatible existing data types/constraints.`
+  - `Until schema sync completes, invoices/orders endpoints continue returning 500.`
+- Cleanup Required:
+  - `Update this same decision entry to completed/partial/blocked with exact verification outcome.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-24T21:40:00Z`

@@ -2,6 +2,10 @@ import { z } from "zod";
 import { createTRPCRouter, perm, serviceScopedProcedure } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
+import { assertOrgAccess } from "./service-shared";
+
+// SI-014: Only these scopes are valid for machine clients
+const ALLOWED_MACHINE_SCOPES = ["service.read", "service.write", "service.form"] as const;
 
 const clientMetaSchema = z.object({
   id: z.string(),
@@ -54,6 +58,7 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     .output(z.array(clientMetaSchema))
     .query(async ({ ctx }) => {
       const rows = await ctx.prisma.serviceMachineClient.findMany({
+        where: { orgId: ctx.actor.orgId ?? undefined },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       });
       return rows.map(toClientMeta);
@@ -63,7 +68,7 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     .input(
       z.object({
         name: z.string().min(2).max(120),
-        scopes: z.array(z.string().min(1)).min(1),
+        scopes: z.array(z.enum(ALLOWED_MACHINE_SCOPES)).min(1, "At least one scope required"),
         expiresAt: z.string().datetime().optional(),
       }),
     )
@@ -75,7 +80,6 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
       const clientId = `svc_${crypto.randomUUID().replace(/-/g, "")}`;
       const secret = `sk_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
@@ -85,6 +89,7 @@ export const serviceIntegrationsRouter = createTRPCRouter({
       const created = await ctx.prisma.serviceMachineClient.create({
         data: {
           clientId,
+          orgId: ctx.actor.orgId ?? null,
           name: input.name,
           scopes: input.scopes,
           secretHash,
@@ -112,7 +117,7 @@ export const serviceIntegrationsRouter = createTRPCRouter({
   rotateSecret: perm(P.service.manage)
     .input(
       z.object({
-        clientId: z.string().min(8),
+        clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format"),
       }),
     )
     .output(
@@ -123,53 +128,63 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
-      const existing = await ctx.prisma.serviceMachineClient.findUnique({
-        where: { clientId: input.clientId },
-      });
-      if (!existing) throw apiError("NOT_FOUND", "Service client not found");
+      // SI-007: atomic findUnique + update inside a transaction to prevent TOCTOU race
+      const { client: updated, newSecret } = await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.serviceMachineClient.findUnique({
+          where: { clientId: input.clientId },
+        });
+        if (!existing) throw apiError("NOT_FOUND", "Client not found");
+        assertOrgAccess(ctx.actor.orgId, existing.orgId, "Client");
+        if (existing.status !== "active") throw apiError("CONFLICT", "Cannot rotate secret for inactive client");
 
-      const secret = `sk_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
-      const secretHash = await Bun.password.hash(secret);
-      const secretLast4 = secret.slice(-4);
+        const newSecret = `sk_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
+        const secretHash = await Bun.password.hash(newSecret, { algorithm: "bcrypt", cost: 12 });
 
-      const updated = await ctx.prisma.serviceMachineClient.update({
-        where: { id: existing.id },
-        data: {
-          secretHash,
-          secretLast4,
-          rotatedAt: new Date(),
-          auditLogs: {
-            create: {
-              action: "rotated_secret",
-              actorId,
-            },
+        const client = await tx.serviceMachineClient.update({
+          where: { clientId: input.clientId },
+          data: {
+            secretHash,
+            secretLast4: newSecret.slice(-4),
+            rotatedAt: new Date(),
           },
-        },
+        });
+
+        await tx.serviceMachineClientAudit.create({
+          data: {
+            serviceClientId: existing.id,
+            action: "rotated_secret",
+            actorId,
+            meta: {},
+          },
+        });
+
+        return { client, newSecret };
       });
 
       return {
         client: toClientMeta(updated),
-        secret,
+        secret: newSecret,
       };
     }),
 
   revokeClient: perm(P.service.manage)
     .input(
       z.object({
-        clientId: z.string().min(8),
+        clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format"),
       }),
     )
     .output(clientMetaSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-      if (!actorId) throw apiError("UNAUTHORIZED", "Missing actor context");
 
+      // SI-008: prevent double-revocation
       const existing = await ctx.prisma.serviceMachineClient.findUnique({
         where: { clientId: input.clientId },
       });
       if (!existing) throw apiError("NOT_FOUND", "Service client not found");
+      assertOrgAccess(ctx.actor.orgId, existing.orgId, "Client");
+      if (existing.status === "revoked") throw apiError("CONFLICT", "Client is already revoked");
 
       const updated = await ctx.prisma.serviceMachineClient.update({
         where: { id: existing.id },

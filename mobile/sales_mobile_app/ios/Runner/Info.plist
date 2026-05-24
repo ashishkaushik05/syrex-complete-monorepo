@@ -14,6 +14,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>sales_mobile_app</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Syrex Field Sense uses background location during an active shift to record verified field movement.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Syrex Field Sense uses your location to log visits, stops, and shift trails.</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -45,5 +49,10 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+	</array>
 </dict>
 </plist>

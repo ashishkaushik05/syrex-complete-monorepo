@@ -44,6 +44,7 @@ import { FieldSenseLiveMapPage } from '@/pages/dashboard/FieldSenseLiveMapPage'
 import { FieldSenseSchedulePage } from '@/pages/dashboard/FieldSenseSchedulePage'
 import { FieldSenseAttendancePage } from '@/pages/dashboard/FieldSenseAttendancePage'
 import { FieldSenseShiftsPage } from '@/pages/dashboard/FieldSenseShiftsPage'
+import { FieldSenseShiftDetailPage } from '@/pages/dashboard/FieldSenseShiftDetailPage'
 import { FieldSenseVisitsPage } from '@/pages/dashboard/FieldSenseVisitsPage'
 import { FieldSenseStopsPage } from '@/pages/dashboard/FieldSenseStopsPage'
 import { BillingSettingsPage } from '@/pages/dashboard/BillingSettingsPage'
@@ -153,6 +154,7 @@ export default function App() {
             <Route path="field-schedule" element={<FieldSenseSchedulePage />} />
             <Route path="attendance" element={<FieldSenseAttendancePage />} />
             <Route path="field-shifts" element={<FieldSenseShiftsPage />} />
+            <Route path="field-shifts/:id" element={<FieldSenseShiftDetailPage />} />
             <Route path="field-visits" element={<FieldSenseVisitsPage />} />
             <Route path="field-stops" element={<FieldSenseStopsPage />} />
             <Route path="service/catalog/brands" element={<Navigate to="/dashboard/catalog/brands" replace />} />

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../errors/app_error.dart';
 import '../network/api_client.dart';
 import '../storage/token_store.dart';
 import 'auth_models.dart';
@@ -26,6 +27,19 @@ class AuthRepository {
     final result = _extractResult(response.data);
     final accessToken = (result['accessToken'] ?? '') as String;
     final refreshToken = (result['refreshToken'] ?? '') as String;
+
+    if (accessToken.isEmpty) {
+      throw const AppError(
+        type: AppErrorType.server,
+        message: 'Login response did not contain a valid access token.',
+      );
+    }
+    if (refreshToken.isEmpty) {
+      throw const AppError(
+        type: AppErrorType.server,
+        message: 'Login response did not contain a valid refresh token.',
+      );
+    }
 
     final user = AuthUser(
       id: (result['user']?['id'] ?? '') as String,
@@ -88,6 +102,13 @@ class AuthRepository {
     final accessToken = (result['accessToken'] ?? '') as String;
     final refreshToken =
         (result['refreshToken'] ?? current.refreshToken) as String;
+
+    if (accessToken.isEmpty) {
+      throw const AppError(
+        type: AppErrorType.server,
+        message: 'Token refresh response did not contain a valid access token.',
+      );
+    }
 
     await tokenStore
         .write(TokenPair(accessToken: accessToken, refreshToken: refreshToken));

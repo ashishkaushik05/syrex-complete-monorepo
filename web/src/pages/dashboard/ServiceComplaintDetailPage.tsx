@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 
@@ -8,19 +8,30 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {
+  ServiceStatusBadge,
+  StatusPipeline,
+  WarrantyStatusBadge,
+  FINAL_STATUSES,
+} from '@/components/service/ServiceStatusBadge'
+import type { ComplaintStatus } from '@/components/service/ServiceStatusBadge'
+import { DynamicServiceForm } from '@/components/service/DynamicServiceForm'
+import type { FormTemplate, FieldValue } from '@/components/service/DynamicServiceForm'
+import { usePermission } from '@/context/PermissionContext'
 import { api } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 import { apiErrorMessage } from '@/lib/http'
 
-type ComplaintStatus =
-  | 'raised'
-  | 'assigned'
-  | 'visit'
-  | 'test_result_submitted'
-  | 'retest_requested'
-  | 'resolved'
-  | 'telephonic_closure'
-  | 'cancelled'
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type ComplaintLine = {
+  id: string
+  serialNumber: string
+  normalizedSerial: string
+  replacementSerialNumber: string | null
+  productId: string | null
+  notes: string | null
+}
 
 type SerialInsight = {
   lineId: string
@@ -40,15 +51,6 @@ type SerialInsight = {
     }>
     replacementConflict: { hasConflict: boolean; usedInComplaintIds: string[] }
   }
-}
-
-type ComplaintLine = {
-  id: string
-  serialNumber: string
-  normalizedSerial: string
-  replacementSerialNumber: string | null
-  productId: string | null
-  notes: string | null
 }
 
 type ComplaintDetail = {
@@ -89,6 +91,7 @@ type ComplaintDetail = {
     createdAt: string
     fromStatus: string | null
     toStatus: string | null
+    meta?: unknown
   }>
   warrantyDecision: {
     id: string
@@ -104,28 +107,27 @@ type ComplaintDetail = {
 
 type UserOption = { id: string; name: string; email: string; userType: string }
 type WarehouseOption = { id: string; name: string; location: string }
-
-const FINAL_STATUSES: ComplaintStatus[] = ['resolved', 'telephonic_closure', 'cancelled']
-
-function statusTone(status: ComplaintStatus) {
-  if (status === 'resolved') return 'bg-emerald-100 text-emerald-700'
-  if (status === 'telephonic_closure') return 'bg-cyan-100 text-cyan-700'
-  if (status === 'cancelled') return 'bg-rose-100 text-rose-700'
-  if (status === 'retest_requested') return 'bg-amber-100 text-amber-700'
-  if (status === 'test_result_submitted') return 'bg-indigo-100 text-indigo-700'
-  if (status === 'assigned') return 'bg-orange-100 text-orange-700'
-  if (status === 'visit') return 'bg-blue-100 text-blue-700'
-  return 'bg-slate-100 text-slate-700'
+type FormSubmission = {
+  id: string
+  templateId: string
+  templateName: string
+  submittedAt: string
+  isDisabled: boolean
+  values: Array<{ id: string; fieldKey: string; rawValue: string; isValid: boolean; validationError: string | null }>
 }
 
-function warrantyTone(status: 'pending' | 'approved' | 'rejected') {
-  if (status === 'approved') return 'bg-emerald-100 text-emerald-700'
-  if (status === 'rejected') return 'bg-rose-100 text-rose-700'
-  return 'bg-amber-100 text-amber-700'
+// ── Action config ─────────────────────────────────────────────────────────────
+
+const ACTION_LABELS: Record<string, string> = {
+  visit_logged:     'Log Site Visit',
+  tested_ok_close:  'Mark Tested OK',
+  retest_requested: 'Request Retest',
+  telephonic_close: 'Telephonic Close',
+  cancel:           'Cancel Complaint',
 }
 
 function getActions(status: ComplaintStatus): string[] {
-  if (FINAL_STATUSES.includes(status)) return []
+  if (FINAL_STATUSES.has(status)) return []
   const actions: string[] = []
   if (status === 'assigned' || status === 'retest_requested') actions.push('visit_logged')
   if (status === 'visit' || status === 'retest_requested') actions.push('tested_ok_close')
@@ -134,133 +136,148 @@ function getActions(status: ComplaintStatus): string[] {
   return actions
 }
 
-const ACTION_LABELS: Record<string, string> = {
-  visit_logged: 'Log Visit',
-  tested_ok_close: 'Mark Tested OK',
-  retest_requested: 'Request Retest',
-  telephonic_close: 'Telephonic Close',
-  cancel: 'Cancel Complaint',
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function SectionCard({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
+  return (
+    <Card className={`border-slate-200 bg-white shadow-sm ${className}`}>
+      <CardHeader className="pb-3 pt-4 px-5">
+        <CardTitle className="text-sm font-semibold text-slate-700 uppercase tracking-wide">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="px-5 pb-5">{children}</CardContent>
+    </Card>
+  )
 }
+
+function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</span>
+      <span className="text-sm text-slate-800">{value}</span>
+    </div>
+  )
+}
+
+function VerdictBadge({ verdict }: { verdict: string }) {
+  const map: Record<string, string> = {
+    tested_ok:          'bg-emerald-100 text-emerald-700',
+    warranty_candidate: 'bg-amber-100 text-amber-700',
+    failed:             'bg-rose-100 text-rose-700',
+    needs_retest:       'bg-indigo-100 text-indigo-700',
+  }
+  return (
+    <Badge className={`${map[verdict] ?? 'bg-slate-100 text-slate-700'} border-0 text-xs`}>
+      {verdict.replace(/_/g, ' ')}
+    </Badge>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export function ServiceComplaintDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { can } = usePermission()
 
-  // Assignment state
+  // Local UI state
   const [asiUserId, setAsiUserId] = useState('')
   const [seUserId, setSeUserId] = useState('')
   const [assignNote, setAssignNote] = useState('')
-
-  // Test state
-  const [testVerdict, setTestVerdict] = useState<string>('warranty_candidate')
+  const [testVerdict, setTestVerdict] = useState('warranty_candidate')
   const [testSummary, setTestSummary] = useState('')
-
-  // Warranty state
   const [warrantyWarehouseId, setWarrantyWarehouseId] = useState('')
   const [warrantyNote, setWarrantyNote] = useState('')
   const [warrantyRejectReason, setWarrantyRejectReason] = useState('')
-
-  // Replacement state
   const [replacementLineId, setReplacementLineId] = useState('')
   const [replacementSerial, setReplacementSerial] = useState('')
-
-  // Form evidence state
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const [formFieldValues, setFormFieldValues] = useState<Record<string, string>>({})
-
-  // Action state (transition buttons)
   const [actionNote, setActionNote] = useState('')
-
-  // Error state
+  const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set())
   const [mutationError, setMutationError] = useState<string | null>(null)
 
   const invalidate = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['service', 'complaints', id] }),
+      queryClient.invalidateQueries({ queryKey: ['service', 'complaint', id] }),
+      queryClient.invalidateQueries({ queryKey: ['service', 'submissions', id] }),
       queryClient.invalidateQueries({ queryKey: ['service', 'complaints'] }),
     ])
     setMutationError(null)
   }
 
+  function onMutErr(err: unknown) {
+    setMutationError(apiErrorMessage(err, 'Action failed'))
+  }
+
+  // ── Queries ──
   const detailQuery = useQuery<ComplaintDetail>({
-    queryKey: ['service', 'complaints', id],
+    queryKey: ['service', 'complaint', id],
     enabled: Boolean(id),
     queryFn: async () => {
-      const response = await api.get<{ data: ComplaintDetail }>(`/tickets/${id}`)
-      const payload = response.data as any
-      return payload?.data ?? payload
+      const r = await api.get(`/tickets/${id}`)
+      const p = r.data as any
+      return p?.data ?? p
     },
   })
 
   const usersQuery = useQuery<UserOption[]>({
-    queryKey: ['service-internal-users'],
+    queryKey: ['service-users-internal'],
     queryFn: async () => {
-      const response = await api.get<{ data: UserOption[] }>('/users', {
-        params: { limit: 200, isActive: true },
-      })
-      const payload = response.data as any
-      const list: UserOption[] = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : []
+      const r = await api.get('/users', { params: { limit: 200, isActive: true } })
+      const p = r.data as any
+      const list: UserOption[] = Array.isArray(p?.data?.data) ? p.data.data : Array.isArray(p?.data) ? p.data : []
       return list.filter((u) => u.userType === 'internal')
     },
   })
 
   const warehousesQuery = useQuery<WarehouseOption[]>({
-    queryKey: ['warehouses-active-list'],
+    queryKey: ['warehouses-active'],
     queryFn: async () => {
-      const response = await api.get<{ data: { data: WarehouseOption[] } }>('/warehouses', {
-        params: { limit: 100, isActive: true },
-      })
-      const payload = response.data as any
-      if (Array.isArray(payload?.data?.data)) return payload.data.data
-      if (Array.isArray(payload?.data)) return payload.data
+      const r = await api.get('/warehouses', { params: { limit: 100, isActive: true } })
+      const p = r.data as any
+      if (Array.isArray(p?.data?.data)) return p.data.data
+      if (Array.isArray(p?.data)) return p.data
       return []
     },
   })
 
-  const templatesQuery = useQuery<any[]>({
-    queryKey: ['service-form-templates'],
+  const templatesQuery = useQuery<FormTemplate[]>({
+    queryKey: ['service-form-templates-with-fields'],
     queryFn: async () => {
-      const response = await api.get('/service/forms/templates', { params: { withFields: true } })
-      const payload = response.data as any
-      return Array.isArray(payload?.data) ? payload.data : []
+      const r = await api.get('/service/forms/templates', { params: { withFields: true } })
+      const p = r.data as any
+      return Array.isArray(p?.data) ? p.data : []
     },
   })
 
-  const submissionsQuery = useQuery<any[]>({
-    queryKey: ['service-complaint-submissions', id],
+  const submissionsQuery = useQuery<FormSubmission[]>({
+    queryKey: ['service', 'submissions', id],
     enabled: Boolean(id),
     queryFn: async () => {
-      const response = await api.get(`/tickets/${id}/submissions`)
-      const payload = response.data as any
-      return Array.isArray(payload?.data) ? payload.data : []
+      const r = await api.get(`/tickets/${id}/submissions`)
+      const p = r.data as any
+      return Array.isArray(p?.data) ? p.data : []
     },
   })
 
-  function onMutationError(error: unknown) {
-    setMutationError(apiErrorMessage(error, 'Action failed'))
-  }
-
+  // ── Mutations ──
   const transitionMutation = useMutation({
     mutationFn: async (payload: { action: string; note?: string }) =>
       api.post(`/tickets/${id}/transition`, payload),
     onSuccess: invalidate,
-    onError: onMutationError,
+    onError: onMutErr,
   })
 
   const assignMutation = useMutation({
     mutationFn: async () =>
       api.post(`/tickets/${id}/assign`, {
-        reassign: (detailQuery.data?.assignments?.length ?? 0) > 0,
+        reassign: (detail?.assignments?.length ?? 0) > 0,
         asiUserId: asiUserId || null,
         seUserId: seUserId || null,
         note: assignNote.trim() || null,
       }),
-    onSuccess: () => {
-      invalidate()
-      setAssignNote('')
-    },
-    onError: onMutationError,
+    onSuccess: () => { invalidate(); setAssignNote('') },
+    onError: onMutErr,
   })
 
   const testMutation = useMutation({
@@ -269,31 +286,20 @@ export function ServiceComplaintDetailPage() {
         verdict: testVerdict,
         summary: testSummary.trim() || undefined,
       }),
-    onSuccess: () => {
-      invalidate()
-      setTestSummary('')
-    },
-    onError: onMutationError,
+    onSuccess: () => { invalidate(); setTestSummary('') },
+    onError: onMutErr,
   })
 
   const formSubmitMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (values: FieldValue[]) => {
       if (!selectedTemplateId) throw new Error('Select a form template')
-      const values = Object.entries(formFieldValues)
-        .filter(([, v]) => v !== '')
-        .map(([fieldKey, rawValue]) => ({ fieldKey, rawValue }))
-      return api.post(`/tickets/${id}/forms`, {
-        templateId: selectedTemplateId,
-        values,
-      })
+      return api.post(`/tickets/${id}/forms`, { templateId: selectedTemplateId, values })
     },
     onSuccess: () => {
       invalidate()
-      queryClient.invalidateQueries({ queryKey: ['service-complaint-submissions', id] })
       setSelectedTemplateId('')
-      setFormFieldValues({})
     },
-    onError: onMutationError,
+    onError: onMutErr,
   })
 
   const warrantyApproveMutation = useMutation({
@@ -302,11 +308,8 @@ export function ServiceComplaintDetailPage() {
         sourceWarehouseId: warrantyWarehouseId,
         note: warrantyNote.trim() || undefined,
       }),
-    onSuccess: () => {
-      invalidate()
-      setWarrantyNote('')
-    },
-    onError: onMutationError,
+    onSuccess: () => { invalidate(); setWarrantyNote('') },
+    onError: onMutErr,
   })
 
   const warrantyRejectMutation = useMutation({
@@ -314,11 +317,8 @@ export function ServiceComplaintDetailPage() {
       api.post(`/tickets/${id}/warranty/reject`, {
         reason: warrantyRejectReason.trim() || 'Warranty rejected',
       }),
-    onSuccess: () => {
-      invalidate()
-      setWarrantyRejectReason('')
-    },
-    onError: onMutationError,
+    onSuccess: () => { invalidate(); setWarrantyRejectReason('') },
+    onError: onMutErr,
   })
 
   const replacementAssignMutation = useMutation({
@@ -327,612 +327,517 @@ export function ServiceComplaintDetailPage() {
         complaintLineId: replacementLineId,
         replacementSerial: replacementSerial.trim(),
       }),
-    onSuccess: () => {
-      invalidate()
-      setReplacementSerial('')
-    },
-    onError: onMutationError,
+    onSuccess: () => { invalidate(); setReplacementSerial('') },
+    onError: onMutErr,
   })
 
   const fulfillmentMutation = useMutation({
     mutationFn: async () => {
-      const detail = detailQuery.data
-      if (!detail) throw new Error('Complaint data not loaded')
+      if (!detail) throw new Error('No complaint data')
       const line = detail.lines[0]
-      if (!line) throw new Error('No complaint lines')
-      if (!line.productId) throw new Error('Complaint line has no product ID — assign product before creating fulfillment order')
+      if (!line?.productId) throw new Error('Set product ID on complaint lines before creating fulfillment')
       return api.post(`/tickets/${id}/fulfillment-order`, {
         sourceWarehouseId: warrantyWarehouseId || detail.warrantyDecision?.sourceWarehouseId,
         deliveryAddress: detail.outletName ? `${detail.outletName} service delivery` : 'Service delivery',
         lines: detail.lines
           .filter((l) => Boolean(l.productId))
-          .map((l) => ({
-            complaintLineId: l.id,
-            productId: l.productId,
-            qtyOrdered: 1,
-          })),
+          .map((l) => ({ complaintLineId: l.id, productId: l.productId, qtyOrdered: 1 })),
       })
     },
     onSuccess: invalidate,
-    onError: onMutationError,
+    onError: onMutErr,
   })
 
+  // ── Derived data ──
   const detail = detailQuery.data
-  const isFinal = detail ? FINAL_STATUSES.includes(detail.status) : false
+  const isFinal = detail ? FINAL_STATUSES.has(detail.status) : false
   const allowedActions = detail ? getActions(detail.status) : []
   const internalUsers = usersQuery.data ?? []
   const warehouses = warehousesQuery.data ?? []
-  const lastAssignment = detail?.assignments?.[0] ?? null
+  const templates = templatesQuery.data ?? []
+  const submissions = submissionsQuery.data ?? []
+  const activeSubmissions = submissions.filter((s) => !s.isDisabled)
+  const formReady = activeSubmissions.some((s) => s.values.every((v) => v.isValid))
+  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
 
   const isPending =
-    transitionMutation.isPending ||
-    assignMutation.isPending ||
-    testMutation.isPending ||
-    formSubmitMutation.isPending ||
-    warrantyApproveMutation.isPending ||
-    warrantyRejectMutation.isPending ||
-    replacementAssignMutation.isPending ||
-    fulfillmentMutation.isPending
+    transitionMutation.isPending || assignMutation.isPending || testMutation.isPending ||
+    formSubmitMutation.isPending || warrantyApproveMutation.isPending || warrantyRejectMutation.isPending ||
+    replacementAssignMutation.isPending || fulfillmentMutation.isPending
 
-  // Find serialInsight for a given line
-  const insightFor = useMemo(() => {
-    if (!detail) return () => null
-    return (lineId: string) =>
-      detail.serialInsights?.find((s) => s.lineId === lineId && s.role === 'old') ?? null
-  }, [detail])
+  if (!id) return <p className="text-sm text-rose-600">Missing complaint ID.</p>
 
-  if (!id) return <p className="text-sm text-red-600">Missing complaint id.</p>
+  if (detailQuery.isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-24 rounded-2xl bg-slate-100 animate-pulse" />
+        <div className="grid grid-cols-5 gap-4">
+          <div className="col-span-3 h-64 rounded-xl bg-slate-100 animate-pulse" />
+          <div className="col-span-2 h-64 rounded-xl bg-slate-100 animate-pulse" />
+        </div>
+      </div>
+    )
+  }
+
+  if (detailQuery.isError || !detail) {
+    return (
+      <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
+        {apiErrorMessage(detailQuery.error, 'Unable to load complaint.')}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
-      <Button variant="outline" size="sm" onClick={() => navigate('/dashboard/service/complaints')}>
-        ← Back to Complaints
-      </Button>
-
-      {/* ─── A. Header ─── */}
-      <Card className="border-slate-200 bg-white shadow-sm">
-        <CardContent className="pt-6">
-          {detailQuery.isLoading ? <p className="text-sm text-slate-500">Loading complaint...</p> : null}
-          {detailQuery.isError ? (
-            <p className="text-sm text-red-600">{apiErrorMessage(detailQuery.error, 'Unable to load complaint.')}</p>
-          ) : null}
-          {mutationError ? <p className="text-sm text-red-600">{mutationError}</p> : null}
-
-          {detail ? (
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Complaint</p>
-                <p className="text-2xl font-bold text-slate-900">{detail.complaintNumber}</p>
-                <p className="text-sm text-slate-600">{detail.title ?? 'Untitled complaint'}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Status</p>
-                <Badge className={statusTone(detail.status)}>{detail.status.replace(/_/g, ' ')}</Badge>
-                <p className="text-sm text-slate-600">Outlet: {detail.outletName ?? '—'}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Timeline</p>
-                <p className="text-sm text-slate-600">Created {timeAgo(detail.createdAt)}</p>
-                <p className="text-sm text-slate-600">Updated {timeAgo(detail.updatedAt)}</p>
-                {detail.closedAt ? <p className="text-sm text-slate-600">Closed {timeAgo(detail.closedAt)}</p> : null}
-              </div>
-              {detail.description ? (
-                <div className="md:col-span-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Description</p>
-                  <p className="mt-1 text-sm text-slate-700">{detail.description}</p>
-                </div>
-              ) : null}
-              {detail.resolutionNote ? (
-                <div className="md:col-span-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Resolution Note</p>
-                  <p className="mt-1 text-sm text-slate-700">{detail.resolutionNote}</p>
-                </div>
-              ) : null}
+      {/* ── Header bar ── */}
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm px-6 py-4 space-y-4">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard/service/complaints')}
+              className="text-slate-400 hover:text-slate-700 transition-colors"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            <div>
+              <h1 className="text-xl font-bold font-mono text-slate-900">{detail.complaintNumber}</h1>
+              <p className="text-sm text-slate-500 mt-0.5">{detail.title ?? 'Untitled complaint'}</p>
             </div>
-          ) : null}
-        </CardContent>
-      </Card>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <ServiceStatusBadge status={detail.status} />
+            {detail.warrantyDecision ? (
+              <WarrantyStatusBadge status={detail.warrantyDecision.status} />
+            ) : null}
+          </div>
+        </div>
 
-      {detail ? (
-        <>
-          {/* ─── B. Lines & Serial Intelligence ─── */}
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base">Lines &amp; Serial Intelligence</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {detail.lines.map((line) => {
-                const insight = insightFor(line.id)
-                return (
-                  <div key={line.id} className="rounded-lg border border-slate-200 p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div>
-                        <p className="text-xs text-slate-500 uppercase tracking-wide">Serial</p>
-                        <code className="text-sm font-mono font-semibold text-slate-900">{line.serialNumber}</code>
-                        {insight?.resolved?.product ? (
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {insight.resolved.product.name} · {insight.resolved.product.sku}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-500 uppercase tracking-wide">Sold To</p>
-                        <p className="text-sm text-slate-700">
-                          {insight?.resolved?.soldToOutlet?.name ?? '—'}
-                          {insight?.resolved?.soldToOutlet?.outletCode
-                            ? ` (${insight.resolved.soldToOutlet.outletCode})`
-                            : ''}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-500 uppercase tracking-wide">Replacement</p>
-                        {line.replacementSerialNumber ? (
-                          <div className="flex items-center gap-2">
-                            <code className="text-sm font-mono text-slate-700">{line.replacementSerialNumber}</code>
-                            {detail.serialInsights?.find(
-                              (s) => s.lineId === line.id && s.role === 'replacement',
-                            )?.resolved?.replacementConflict?.hasConflict ? (
-                              <Badge className="bg-rose-100 text-rose-700">Conflict</Badge>
-                            ) : null}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-slate-400">Not assigned</p>
-                        )}
-                      </div>
-                    </div>
-                    {insight?.resolved?.salesChain?.length ? (
-                      <div className="overflow-x-auto">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="text-xs">Order</TableHead>
-                              <TableHead className="text-xs">Dispatch Date</TableHead>
-                              <TableHead className="text-xs">Delivery</TableHead>
-                              <TableHead className="text-xs">Invoice</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {insight.resolved.salesChain.map((chain) => (
-                              <TableRow key={chain.dispatchId}>
-                                <TableCell className="text-xs font-mono">{chain.orderNumber}</TableCell>
-                                <TableCell className="text-xs">
-                                  {new Date(chain.dispatchDate).toLocaleDateString()}
-                                </TableCell>
-                                <TableCell className="text-xs">{chain.deliveryStatus}</TableCell>
-                                <TableCell className="text-xs">{chain.invoiceNumber ?? '—'}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </CardContent>
-          </Card>
+        {/* Status pipeline */}
+        <div className="overflow-x-auto">
+          <StatusPipeline current={detail.status} />
+        </div>
 
-          {/* ─── C. Assign ASI/SE (hidden when final) ─── */}
-          {!isFinal ? (
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Assign Service Engineer</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {lastAssignment ? (
-                  <p className="text-xs text-slate-500">
-                    Last assigned {timeAgo(lastAssignment.createdAt)} —
-                    {lastAssignment.asiUserId ? ` ASI: ${lastAssignment.asiUserId}` : ''}
-                    {lastAssignment.seUserId ? ` SE: ${lastAssignment.seUserId}` : ''}
-                  </p>
-                ) : null}
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>ASI User</Label>
-                    <select
-                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                      value={asiUserId}
-                      onChange={(e) => setAsiUserId(e.target.value)}
-                    >
-                      <option value="">— None —</option>
-                      {internalUsers.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name} ({u.email})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>SE User</Label>
-                    <select
-                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                      value={seUserId}
-                      onChange={(e) => setSeUserId(e.target.value)}
-                    >
-                      <option value="">— None —</option>
-                      {internalUsers.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name} ({u.email})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+        {/* Global mutation error */}
+        {mutationError ? (
+          <div className="rounded-lg bg-rose-50 border border-rose-200 px-4 py-2 text-sm text-rose-700 flex items-center gap-2">
+            <span>⚠</span> {mutationError}
+            <button type="button" onClick={() => setMutationError(null)} className="ml-auto text-rose-400 hover:text-rose-700">✕</button>
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── Two-column body ── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+
+        {/* ── Left column: workflow panels (3/5) ── */}
+        <div className="lg:col-span-3 space-y-4">
+
+          {/* A. Assignment panel */}
+          {!isFinal && can('service:assign') ? (
+            <SectionCard title="Assign Service Engineer">
+              {detail.assignments.length > 0 ? (
+                <div className="mb-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-500">
+                  Last assigned {timeAgo(detail.assignments[0].createdAt)}
+                  {detail.assignments[0].asiUserId ? ` · ASI: ${detail.assignments[0].asiUserId.slice(0, 8)}…` : ''}
+                  {detail.assignments[0].seUserId ? ` · SE: ${detail.assignments[0].seUserId.slice(0, 8)}…` : ''}
                 </div>
-                <div className="space-y-2">
-                  <Label>Assignment Note</Label>
-                  <Input
-                    value={assignNote}
-                    onChange={(e) => setAssignNote(e.target.value)}
-                    placeholder="Reason or context for assignment (optional)"
-                  />
+              ) : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">ASI User</Label>
+                  <select
+                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                    value={asiUserId}
+                    onChange={(e) => setAsiUserId(e.target.value)}
+                  >
+                    <option value="">— None —</option>
+                    {internalUsers.map((u) => (
+                      <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+                    ))}
+                  </select>
                 </div>
-                {status === 'raised' && !asiUserId ? (
-                  <p className="text-xs text-amber-600">ASI selection required for initial assignment (transitions status to Assigned)</p>
-                ) : null}
+                <div className="space-y-1.5">
+                  <Label className="text-xs">SE User</Label>
+                  <select
+                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                    value={seUserId}
+                    onChange={(e) => setSeUserId(e.target.value)}
+                  >
+                    <option value="">— None —</option>
+                    {internalUsers.map((u) => (
+                      <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1.5">
+                <Label className="text-xs">Note (optional)</Label>
+                <Input
+                  value={assignNote}
+                  onChange={(e) => setAssignNote(e.target.value)}
+                  placeholder="Reason or context for this assignment"
+                  className="text-sm"
+                />
+              </div>
+              {detail.status === 'raised' && !asiUserId ? (
+                <p className="mt-2 text-xs text-amber-600">
+                  ASI user required to move complaint from Raised → Assigned.
+                </p>
+              ) : null}
+              <div className="mt-3">
                 <Button
                   type="button"
                   size="sm"
                   onClick={() => assignMutation.mutate()}
-                  disabled={isPending || (!asiUserId && !seUserId) || (status === 'raised' && !asiUserId)}
+                  disabled={isPending || (!asiUserId && !seUserId)}
+                  className="bg-teal-600 hover:bg-teal-700 text-white"
                 >
                   {assignMutation.isPending
-                    ? 'Assigning...'
-                    : (detailQuery.data?.assignments?.length ?? 0) > 0
-                      ? 'Reassign'
-                      : 'Assign'}
+                    ? 'Assigning…'
+                    : detail.assignments.length > 0 ? 'Reassign' : 'Assign'}
                 </Button>
-              </CardContent>
-            </Card>
+              </div>
+            </SectionCard>
           ) : null}
 
-          {/* ─── D. Form Evidence ─── */}
-          {!isFinal ? (() => {
-            const templates: any[] = templatesQuery.data ?? []
-            const submissions: any[] = submissionsQuery.data ?? []
-            const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
-            const allValid = submissions.length > 0 && submissions.every((s) => !s.isDisabled && s.values?.every((v: any) => v.isValid))
-            const hasInvalid = submissions.length > 0 && !allValid
-            return (
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-base">Form Evidence</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {/* Evidence readiness status */}
-                  {submissions.length === 0 ? (
-                    <p className="text-sm text-amber-600">No form submission yet — required before test report</p>
-                  ) : allValid ? (
-                    <p className="text-sm text-emerald-600">Form evidence ready</p>
-                  ) : hasInvalid ? (
-                    <p className="text-sm text-rose-600">Form evidence has validation errors</p>
-                  ) : null}
-
-                  {/* Existing submissions list */}
-                  {submissions.length > 0 ? (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Submissions</p>
-                      {submissions.map((sub: any) => (
-                        <div key={sub.id} className="rounded-md border border-slate-200 p-3 text-sm space-y-1">
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <span className="font-medium text-slate-800">{sub.templateName ?? sub.templateId}</span>
-                            <div className="flex gap-1">
-                              <Badge className={sub.isDisabled ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}>
-                                {sub.isDisabled ? 'disabled' : 'active'}
-                              </Badge>
-                              <Badge className={sub.values?.every((v: any) => v.isValid) ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}>
-                                {sub.values?.every((v: any) => v.isValid) ? 'valid' : 'invalid'}
-                              </Badge>
-                            </div>
-                            <span className="text-xs text-slate-400">{timeAgo(sub.submittedAt)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {/* Submit new form section */}
-                  <div className="border-t border-slate-200 pt-4 space-y-4">
-                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Submit New Form</p>
-                    <div className="space-y-2">
-                      <Label>Form Template</Label>
-                      <select
-                        className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                        value={selectedTemplateId}
-                        onChange={(e) => {
-                          setSelectedTemplateId(e.target.value)
-                          setFormFieldValues({})
-                        }}
-                      >
-                        <option value="">— Select template —</option>
-                        {templates.filter((t) => t.isActive !== false).map((t: any) => (
-                          <option key={t.id} value={t.id}>{t.name}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {selectedTemplate && Array.isArray(selectedTemplate.fields) && selectedTemplate.fields.length > 0 ? (
-                      <div className="space-y-3">
-                        {selectedTemplate.fields.map((field: any) => (
-                          <div key={field.fieldKey} className="space-y-1">
-                            <Label>{field.label ?? field.fieldKey}</Label>
-                            {field.fieldType === 'textarea' ? (
-                              <textarea
-                                className="min-h-[80px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                                value={formFieldValues[field.fieldKey] ?? ''}
-                                onChange={(e) => setFormFieldValues((prev) => ({ ...prev, [field.fieldKey]: e.target.value }))}
-                                placeholder={field.placeholder ?? ''}
-                              />
-                            ) : field.fieldType === 'select' && Array.isArray((field.validationRules as any)?.options) ? (
-                              <select
-                                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                                value={formFieldValues[field.fieldKey] ?? ''}
-                                onChange={(e) => setFormFieldValues((prev) => ({ ...prev, [field.fieldKey]: e.target.value }))}
-                              >
-                                <option value="">— Select —</option>
-                                {((field.validationRules as any).options as string[]).map((opt: string) => (
-                                  <option key={opt} value={opt}>{opt}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <Input
-                                value={formFieldValues[field.fieldKey] ?? ''}
-                                onChange={(e) => setFormFieldValues((prev) => ({ ...prev, [field.fieldKey]: e.target.value }))}
-                                placeholder={field.placeholder ?? ''}
-                              />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => formSubmitMutation.mutate()}
-                      disabled={isPending || !selectedTemplateId}
-                    >
-                      {formSubmitMutation.isPending ? 'Submitting Form...' : 'Submit Form'}
-                    </Button>
+          {/* B. Form Evidence */}
+          {!isFinal && can('service:form') ? (
+            <SectionCard title="Form Evidence">
+              {/* Evidence status summary */}
+              <div className="mb-4">
+                {submissions.length === 0 ? (
+                  <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
+                    <span>⚠</span> No form submission yet — required before test report can be submitted.
                   </div>
-                </CardContent>
-              </Card>
-            )
-          })() : null}
-
-          {/* ─── E. Test Report (visit / retest_requested) ─── */}
-          {(detail.status === 'visit' || detail.status === 'retest_requested') ? (() => {
-            const submissions: any[] = submissionsQuery.data ?? []
-            const formReady = submissions.some((s) => !s.isDisabled && s.values?.every((v: any) => v.isValid))
-            return (
-              <Card className="border-slate-200 bg-white shadow-sm">
-                <CardHeader>
-                  <CardTitle className="text-base">Submit Test Report</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {!formReady ? (
-                    <p className="text-sm text-amber-600">Complete a form submission first</p>
-                  ) : (
-                    <>
-                      <div className="space-y-2">
-                        <Label>Verdict</Label>
-                        <select
-                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                          value={testVerdict}
-                          onChange={(e) => setTestVerdict(e.target.value)}
-                        >
-                          <option value="tested_ok">Tested OK — No fault found</option>
-                          <option value="warranty_candidate">Warranty Candidate — Replacement needed</option>
-                          <option value="failed">Failed — Out-of-warranty fault</option>
-                          <option value="needs_retest">Needs Retest — Inconclusive</option>
-                        </select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Summary (optional)</Label>
-                        <textarea
-                          className="min-h-[80px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
-                          value={testSummary}
-                          onChange={(e) => setTestSummary(e.target.value)}
-                          placeholder="Technical findings..."
-                          maxLength={2000}
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => testMutation.mutate()}
-                        disabled={isPending}
-                      >
-                        {testMutation.isPending ? 'Submitting...' : 'Submit Test Report'}
-                      </Button>
-                    </>
-                  )}
-                  {detail.tests.length > 0 ? (
-                    <div className="space-y-2">
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Previous Tests</p>
-                      {detail.tests.map((test) => (
-                        <div key={test.id} className="rounded-md border border-slate-200 p-3 text-sm">
-                          <div className="flex items-center justify-between">
-                            <Badge className="bg-indigo-100 text-indigo-700">{test.verdict}</Badge>
-                            <span className="text-xs text-slate-500">{timeAgo(test.createdAt)}</span>
-                          </div>
-                          {test.summary ? <p className="mt-1 text-slate-600">{test.summary}</p> : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            )
-          })() : null}
-
-          {/* ─── E. Warranty Decision (test_result_submitted) ─── */}
-          {detail.status === 'test_result_submitted' ? (
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Warranty Decision</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {detail.warrantyDecision ? (
-                  <div className="flex items-center gap-3">
-                    <Badge className={warrantyTone(detail.warrantyDecision.status)}>
-                      {detail.warrantyDecision.status}
-                    </Badge>
-                    {detail.warrantyDecision.decidedAt ? (
-                      <span className="text-xs text-slate-500">{timeAgo(detail.warrantyDecision.decidedAt)}</span>
-                    ) : null}
-                    {detail.warrantyDecision.rejectionReason ? (
-                      <span className="text-sm text-slate-600">{detail.warrantyDecision.rejectionReason}</span>
-                    ) : null}
+                ) : formReady ? (
+                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-700">
+                    <span>✓</span> Form evidence ready.
                   </div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-700">
+                    <span>⚠</span> Form submissions have validation errors.
+                  </div>
+                )}
+              </div>
+
+              {/* Existing submissions */}
+              {submissions.length > 0 ? (
+                <div className="mb-4 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Previous Submissions</p>
+                  {submissions.map((sub) => {
+                    const allValid = sub.values.every((v) => v.isValid)
+                    return (
+                      <div key={sub.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-slate-800">{sub.templateName}</span>
+                          <div className="flex items-center gap-1.5">
+                            <Badge className={`border-0 text-xs ${sub.isDisabled ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
+                              {sub.isDisabled ? 'Disabled' : 'Active'}
+                            </Badge>
+                            <Badge className={`border-0 text-xs ${allValid ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                              {allValid ? 'Valid' : 'Has errors'}
+                            </Badge>
+                          </div>
+                          <span className="text-xs text-slate-400">{timeAgo(sub.submittedAt)}</span>
+                        </div>
+                        {/* Show invalid fields */}
+                        {!allValid ? (
+                          <div className="mt-2 space-y-1">
+                            {sub.values.filter((v) => !v.isValid).map((v) => (
+                              <p key={v.id} className="text-xs text-rose-600">
+                                <code className="font-mono">{v.fieldKey}</code>: {v.validationError}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
+
+              {/* Submit new form */}
+              <div className="border-t border-slate-200 pt-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Submit New Form</p>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Form Template</Label>
+                  <select
+                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                    value={selectedTemplateId}
+                    onChange={(e) => { setSelectedTemplateId(e.target.value) }}
+                  >
+                    <option value="">— Select template —</option>
+                    {templates.filter((t) => t.isActive).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedTemplate ? (
+                  <DynamicServiceForm
+                    template={selectedTemplate}
+                    onSubmit={(values) => formSubmitMutation.mutate(values)}
+                    isPending={formSubmitMutation.isPending}
+                    submitLabel="Submit Form Evidence"
+                    disabled={isPending}
+                  />
                 ) : null}
+              </div>
+            </SectionCard>
+          ) : null}
 
-                {(!detail.warrantyDecision || detail.warrantyDecision.status === 'pending') ? (
-                  <>
-                    <div className="space-y-2">
-                      <Label>Source Warehouse</Label>
+          {/* C. Test Report */}
+          {(detail.status === 'visit' || detail.status === 'retest_requested') ? (
+            <SectionCard title="Submit Test Report">
+              {!formReady ? (
+                <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700 mb-4">
+                  <span>⚠</span> Complete a valid form submission above before submitting the test report.
+                </div>
+              ) : null}
+
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Verdict</Label>
+                  <select
+                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                    value={testVerdict}
+                    onChange={(e) => setTestVerdict(e.target.value)}
+                    disabled={!formReady || isPending}
+                  >
+                    <option value="tested_ok">Tested OK — No fault found</option>
+                    <option value="warranty_candidate">Warranty Candidate — Replacement needed</option>
+                    <option value="failed">Failed — Out-of-warranty fault</option>
+                    <option value="needs_retest">Needs Retest — Inconclusive</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Summary <span className="text-slate-400 font-normal">(optional)</span></Label>
+                  <textarea
+                    className="min-h-[72px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 resize-y disabled:opacity-50"
+                    value={testSummary}
+                    onChange={(e) => setTestSummary(e.target.value)}
+                    placeholder="Technical findings, observations…"
+                    maxLength={2000}
+                    disabled={!formReady || isPending}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => testMutation.mutate()}
+                  disabled={!formReady || isPending}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  {testMutation.isPending ? 'Submitting…' : 'Submit Test Report'}
+                </Button>
+              </div>
+
+              {/* Previous test reports */}
+              {detail.tests.length > 0 ? (
+                <div className="mt-4 border-t border-slate-200 pt-4 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Test History</p>
+                  {detail.tests.map((test) => (
+                    <div key={test.id} className="flex items-start gap-3 rounded-lg bg-slate-50 border border-slate-200 p-3">
+                      <VerdictBadge verdict={test.verdict} />
+                      <div className="flex-1 min-w-0">
+                        {test.summary ? <p className="text-sm text-slate-700">{test.summary}</p> : null}
+                        <p className="text-xs text-slate-400 mt-0.5">{timeAgo(test.createdAt)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </SectionCard>
+          ) : null}
+
+          {/* D. Warranty Decision */}
+          {detail.status === 'test_result_submitted' && can('service:approve') ? (
+            <SectionCard title="Warranty Decision">
+              {detail.warrantyDecision ? (
+                <div className="mb-4 flex items-center gap-3">
+                  <WarrantyStatusBadge status={detail.warrantyDecision.status} />
+                  {detail.warrantyDecision.decidedAt ? (
+                    <span className="text-xs text-slate-500">{timeAgo(detail.warrantyDecision.decidedAt)}</span>
+                  ) : null}
+                  {detail.warrantyDecision.rejectionReason ? (
+                    <span className="text-sm text-slate-700">{detail.warrantyDecision.rejectionReason}</span>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {!detail.warrantyDecision || detail.warrantyDecision.status === 'pending' ? (
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {/* Approve */}
+                  <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4 space-y-3">
+                    <p className="text-sm font-semibold text-emerald-800">Approve Warranty</p>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Source Warehouse <span className="text-rose-500">*</span></Label>
                       <select
-                        className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                        className="h-9 w-full rounded-md border border-emerald-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
                         value={warrantyWarehouseId}
                         onChange={(e) => setWarrantyWarehouseId(e.target.value)}
+                        disabled={isPending}
                       >
-                        <option value="">Select warehouse...</option>
+                        <option value="">Select warehouse…</option>
                         {warehouses.map((w) => (
-                          <option key={w.id} value={w.id}>
-                            {w.name} — {w.location}
-                          </option>
+                          <option key={w.id} value={w.id}>{w.name} — {w.location}</option>
                         ))}
                       </select>
                     </div>
-                    <div className="space-y-2">
-                      <Label>Approval Note</Label>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Note (optional)</Label>
                       <Input
                         value={warrantyNote}
                         onChange={(e) => setWarrantyNote(e.target.value)}
-                        placeholder="Note for approval (optional)"
+                        placeholder="Approval note…"
+                        disabled={isPending}
+                        className="text-sm bg-white"
                       />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => warrantyApproveMutation.mutate()}
-                        disabled={isPending || !warrantyWarehouseId}
-                      >
-                        {warrantyApproveMutation.isPending ? 'Approving...' : 'Approve Warranty'}
-                      </Button>
-                    </div>
-                    <div className="space-y-2 border-t border-slate-200 pt-4">
-                      <Label>Rejection Reason</Label>
-                      <Input
-                        value={warrantyRejectReason}
-                        onChange={(e) => setWarrantyRejectReason(e.target.value)}
-                        placeholder="Reason for rejection (required)"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => warrantyRejectMutation.mutate()}
-                        disabled={isPending || !warrantyRejectReason.trim()}
-                      >
-                        {warrantyRejectMutation.isPending ? 'Rejecting...' : 'Reject Warranty'}
-                      </Button>
-                    </div>
-                  </>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {/* ─── F. Replacement Fulfillment (warranty approved) ─── */}
-          {detail.warrantyDecision?.status === 'approved' ? (
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Replacement Fulfillment</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {detail.warrantyDecision.replacementOrderId ? (
-                  <p className="text-sm text-emerald-700">
-                    Replacement order created.{' '}
-                    <button
-                      type="button"
-                      className="underline"
-                      onClick={() =>
-                        navigate(`/dashboard/sales/orders/${detail.warrantyDecision!.replacementOrderId}`)
-                      }
-                    >
-                      View Order
-                    </button>
-                  </p>
-                ) : (
-                  <>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>Complaint Line</Label>
-                        <select
-                          className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                          value={replacementLineId}
-                          onChange={(e) => setReplacementLineId(e.target.value)}
-                        >
-                          <option value="">Select line...</option>
-                          {detail.lines.map((line) => (
-                            <option key={line.id} value={line.id}>
-                              {line.serialNumber}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Replacement Serial</Label>
-                        <Input
-                          value={replacementSerial}
-                          onChange={(e) => setReplacementSerial(e.target.value)}
-                          placeholder="New serial number"
-                        />
-                      </div>
                     </div>
                     <Button
                       type="button"
-                      variant="outline"
                       size="sm"
-                      onClick={() => replacementAssignMutation.mutate()}
-                      disabled={isPending || !replacementLineId || !replacementSerial.trim()}
+                      onClick={() => warrantyApproveMutation.mutate()}
+                      disabled={isPending || !warrantyWarehouseId}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
                     >
-                      {replacementAssignMutation.isPending ? 'Assigning...' : 'Assign Replacement Serial'}
+                      {warrantyApproveMutation.isPending ? 'Approving…' : 'Approve'}
                     </Button>
+                  </div>
 
-                    <div className="border-t border-slate-200 pt-4">
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => fulfillmentMutation.mutate()}
+                  {/* Reject */}
+                  <div className="rounded-xl border-2 border-rose-200 bg-rose-50 p-4 space-y-3">
+                    <p className="text-sm font-semibold text-rose-800">Reject Warranty</p>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Rejection Reason <span className="text-rose-500">*</span></Label>
+                      <textarea
+                        className="min-h-[72px] w-full rounded-md border border-rose-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-400 resize-none disabled:opacity-50"
+                        value={warrantyRejectReason}
+                        onChange={(e) => setWarrantyRejectReason(e.target.value)}
+                        placeholder="Why warranty is being rejected…"
                         disabled={isPending}
-                      >
-                        {fulfillmentMutation.isPending ? 'Creating Order...' : 'Create Fulfillment Order'}
-                      </Button>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Requires product ID on complaint lines. Lines without a product ID are skipped.
-                      </p>
+                      />
                     </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => warrantyRejectMutation.mutate()}
+                      disabled={isPending || !warrantyRejectReason.trim()}
+                      className="w-full border-rose-400 text-rose-700 hover:bg-rose-100"
+                    >
+                      {warrantyRejectMutation.isPending ? 'Rejecting…' : 'Reject'}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </SectionCard>
           ) : null}
 
-          {/* ─── G. Actions ─── */}
+          {/* E. Replacement Fulfillment */}
+          {detail.warrantyDecision?.status === 'approved' ? (
+            <SectionCard title="Replacement Fulfillment">
+              {detail.warrantyDecision.replacementOrderId ? (
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2 text-sm text-emerald-700">
+                    <span>✓</span> Replacement order created.
+                    <button
+                      type="button"
+                      className="underline font-medium"
+                      onClick={() => navigate(`/dashboard/sales/orders/${detail.warrantyDecision!.replacementOrderId}`)}
+                    >
+                      View Order →
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Complaint Line</Label>
+                      <select
+                        className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                        value={replacementLineId}
+                        onChange={(e) => setReplacementLineId(e.target.value)}
+                        disabled={isPending}
+                      >
+                        <option value="">Select line…</option>
+                        {detail.lines.map((line) => (
+                          <option key={line.id} value={line.id}>{line.serialNumber}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Replacement Serial</Label>
+                      <Input
+                        value={replacementSerial}
+                        onChange={(e) => setReplacementSerial(e.target.value)}
+                        placeholder="New serial number"
+                        className="font-mono text-sm"
+                        disabled={isPending}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => replacementAssignMutation.mutate()}
+                    disabled={isPending || !replacementLineId || !replacementSerial.trim()}
+                  >
+                    {replacementAssignMutation.isPending ? 'Assigning…' : 'Assign Replacement Serial'}
+                  </Button>
+
+                  <div className="border-t border-slate-200 pt-4">
+                    {!warrantyWarehouseId ? (
+                      <div className="space-y-1.5 mb-3">
+                        <Label className="text-xs">Source Warehouse</Label>
+                        <select
+                          className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                          value={warrantyWarehouseId}
+                          onChange={(e) => setWarrantyWarehouseId(e.target.value)}
+                          disabled={isPending}
+                        >
+                          <option value="">Select warehouse…</option>
+                          {warehouses.map((w) => (
+                            <option key={w.id} value={w.id}>{w.name} — {w.location}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => fulfillmentMutation.mutate()}
+                      disabled={isPending}
+                      className="bg-teal-600 hover:bg-teal-700 text-white"
+                    >
+                      {fulfillmentMutation.isPending ? 'Creating…' : 'Create Fulfillment Order'}
+                    </Button>
+                    <p className="mt-1.5 text-xs text-slate-500">
+                      Requires product ID on complaint lines. Lines without a product ID are skipped.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </SectionCard>
+          ) : null}
+
+          {/* F. Lifecycle actions */}
           {allowedActions.length > 0 ? (
-            <Card className="border-slate-200 bg-white shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Lifecycle Actions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Action Note / Reason</Label>
+            <SectionCard title="Lifecycle Actions">
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Action Note / Reason</Label>
                   <Input
                     value={actionNote}
                     onChange={(e) => setActionNote(e.target.value)}
                     placeholder="Required for telephonic close and cancel"
+                    className="text-sm"
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -940,8 +845,19 @@ export function ServiceComplaintDetailPage() {
                     <Button
                       key={action}
                       type="button"
-                      variant={action === 'cancel' ? 'outline' : 'default'}
                       size="sm"
+                      variant={action === 'cancel' ? 'outline' : action === 'telephonic_close' ? 'outline' : 'default'}
+                      className={
+                        action === 'cancel'
+                          ? 'border-rose-300 text-rose-700 hover:bg-rose-50'
+                          : action === 'telephonic_close'
+                            ? 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'
+                            : action === 'visit_logged'
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                              : action === 'retest_requested'
+                                ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                                : 'bg-teal-600 hover:bg-teal-700 text-white'
+                      }
                       disabled={
                         isPending ||
                         ((action === 'telephonic_close' || action === 'cancel') && !actionNote.trim())
@@ -950,50 +866,204 @@ export function ServiceComplaintDetailPage() {
                         transitionMutation.mutate({ action, note: actionNote.trim() || undefined })
                       }
                     >
-                      {transitionMutation.isPending ? '...' : ACTION_LABELS[action] ?? action}
+                      {transitionMutation.isPending ? '…' : ACTION_LABELS[action] ?? action}
                     </Button>
                   ))}
                 </div>
                 {(allowedActions.includes('telephonic_close') || allowedActions.includes('cancel')) ? (
-                  <p className="text-xs text-slate-500">Note is required for telephonic close and cancel.</p>
+                  <p className="text-xs text-slate-400">Note is required for telephonic close and cancel actions.</p>
                 ) : null}
-              </CardContent>
-            </Card>
+              </div>
+            </SectionCard>
           ) : null}
 
-          {/* ─── H. Activity Timeline ─── */}
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader>
-              <CardTitle className="text-base">Activity Timeline</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {detail.activities.length === 0 ? (
-                <p className="text-sm text-slate-500">No activities yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {detail.activities.map((activity) => (
-                    <div key={activity.id} className="flex gap-3 rounded-lg border border-slate-100 p-3 text-sm">
-                      <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-teal-400" />
-                      <div className="flex-1 space-y-0.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium text-slate-900">{activity.action.replace(/_/g, ' ')}</span>
-                          <span className="text-xs text-slate-400">{timeAgo(activity.createdAt)}</span>
-                        </div>
-                        {activity.fromStatus || activity.toStatus ? (
-                          <p className="text-xs text-slate-500">
-                            {activity.fromStatus ?? '—'} → {activity.toStatus ?? '—'}
-                          </p>
-                        ) : null}
-                        {activity.note ? <p className="text-slate-600">{activity.note}</p> : null}
-                      </div>
-                    </div>
-                  ))}
+          {/* Closed resolution note */}
+          {isFinal && (detail.resolutionNote || detail.telephonicReason) ? (
+            <SectionCard title="Resolution">
+              <p className="text-sm text-slate-700">{detail.resolutionNote ?? detail.telephonicReason}</p>
+              {detail.closedAt ? (
+                <p className="mt-1 text-xs text-slate-400">Closed {timeAgo(detail.closedAt)}</p>
+              ) : null}
+            </SectionCard>
+          ) : null}
+        </div>
+
+        {/* ── Right column: info + serial intelligence + timeline (2/5) ── */}
+        <div className="lg:col-span-2 space-y-4">
+
+          {/* Complaint metadata */}
+          <SectionCard title="Complaint Details">
+            <div className="space-y-3">
+              <InfoRow label="Outlet" value={detail.outletName ?? <span className="text-slate-400">No outlet</span>} />
+              <InfoRow label="Created" value={timeAgo(detail.createdAt)} />
+              <InfoRow label="Last updated" value={timeAgo(detail.updatedAt)} />
+              {detail.description ? (
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Description</span>
+                  <p className="text-sm text-slate-700 leading-relaxed">{detail.description}</p>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </>
-      ) : null}
+              ) : null}
+            </div>
+          </SectionCard>
+
+          {/* Serial intelligence */}
+          <SectionCard title="Serial Intelligence">
+            <div className="space-y-3">
+              {detail.lines.map((line) => {
+                const insight = detail.serialInsights?.find(
+                  (s) => s.lineId === line.id && s.role === 'old',
+                )
+                const replacementInsight = detail.serialInsights?.find(
+                  (s) => s.lineId === line.id && s.role === 'replacement',
+                )
+                const expanded = expandedSerials.has(line.id)
+
+                return (
+                  <div key={line.id} className="rounded-lg border border-slate-200 overflow-hidden">
+                    <button
+                      type="button"
+                      className="w-full flex items-start justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 transition-colors"
+                      onClick={() =>
+                        setExpandedSerials((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(line.id)) next.delete(line.id)
+                          else next.add(line.id)
+                          return next
+                        })
+                      }
+                    >
+                      <div className="min-w-0">
+                        <code className="text-sm font-mono font-semibold text-slate-900">{line.serialNumber}</code>
+                        {insight?.resolved?.product ? (
+                          <p className="text-xs text-slate-500 truncate">{insight.resolved.product.name}</p>
+                        ) : (
+                          <p className="text-xs text-slate-400 italic">No product match</p>
+                        )}
+                      </div>
+                      <svg
+                        className={`h-4 w-4 text-slate-400 shrink-0 mt-0.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {expanded ? (
+                      <div className="border-t border-slate-100 px-3 py-3 space-y-3 bg-slate-50">
+                        {insight?.resolved?.product ? (
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <p className="text-slate-400 font-medium">SKU</p>
+                              <code className="font-mono text-slate-700">{insight.resolved.product.sku}</code>
+                            </div>
+                            {insight.resolved.soldToOutlet ? (
+                              <div>
+                                <p className="text-slate-400 font-medium">Sold To</p>
+                                <p className="text-slate-700">{insight.resolved.soldToOutlet.name}</p>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        {insight?.resolved?.salesChain?.length ? (
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Sales Chain</p>
+                            <div className="overflow-x-auto">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="text-xs">Order</TableHead>
+                                    <TableHead className="text-xs">Dispatched</TableHead>
+                                    <TableHead className="text-xs">Status</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {insight.resolved.salesChain.map((chain) => (
+                                    <TableRow key={chain.dispatchId}>
+                                      <TableCell className="text-xs font-mono">{chain.orderNumber}</TableCell>
+                                      <TableCell className="text-xs">
+                                        {new Date(chain.dispatchDate).toLocaleDateString()}
+                                      </TableCell>
+                                      <TableCell>
+                                        <Badge className={`border-0 text-xs ${
+                                          chain.deliveryStatus === 'delivered'
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : chain.deliveryStatus === 'in_transit'
+                                              ? 'bg-blue-100 text-blue-700'
+                                              : 'bg-slate-100 text-slate-600'
+                                        }`}>
+                                          {chain.deliveryStatus}
+                                        </Badge>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {/* Replacement serial */}
+                        {line.replacementSerialNumber ? (
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Replacement Serial</p>
+                            <div className="flex items-center gap-2">
+                              <code className="text-sm font-mono text-slate-700">{line.replacementSerialNumber}</code>
+                              {replacementInsight?.resolved?.replacementConflict?.hasConflict ? (
+                                <Badge className="bg-rose-100 text-rose-700 border-0 text-xs">Conflict</Badge>
+                              ) : (
+                                <Badge className="bg-emerald-100 text-emerald-700 border-0 text-xs">OK</Badge>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })}
+            </div>
+          </SectionCard>
+
+          {/* Activity timeline */}
+          <SectionCard title="Activity Timeline">
+            {detail.activities.length === 0 ? (
+              <p className="text-sm text-slate-400 italic">No activities recorded yet.</p>
+            ) : (
+              <div className="relative space-y-0">
+                {detail.activities.map((activity, idx) => (
+                  <div key={activity.id} className="flex gap-3">
+                    <div className="flex flex-col items-center">
+                      <div className="h-2.5 w-2.5 rounded-full bg-teal-500 ring-2 ring-white shrink-0 mt-1" />
+                      {idx < detail.activities.length - 1 ? (
+                        <div className="w-px flex-1 bg-slate-200 min-h-[1.5rem]" />
+                      ) : null}
+                    </div>
+                    <div className="pb-4 flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <span className="text-xs font-semibold text-slate-800">
+                          {activity.action.replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                          {timeAgo(activity.createdAt)}
+                        </span>
+                      </div>
+                      {activity.fromStatus !== activity.toStatus && activity.toStatus ? (
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          {activity.fromStatus ?? '—'} → {activity.toStatus}
+                        </p>
+                      ) : null}
+                      {activity.note ? (
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{activity.note}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+        </div>
+      </div>
     </div>
   )
 }

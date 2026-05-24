@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/auth/session_controller.dart';
 import '../../core/network/api_client.dart';
@@ -65,16 +66,17 @@ class SettingsPage extends ConsumerWidget {
                         style: TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: const Text('Open system settings to manage permissions'),
                     trailing: const Icon(Icons.open_in_new_rounded, size: 18),
-                    onTap: () {
-                      // Platform channel or url_launcher can open app settings.
-                      // Showing a snackbar as placeholder until url_launcher is added.
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                              'Open System Settings > Apps > Syrex Sales > Permissions'),
-                          duration: Duration(seconds: 4),
-                        ),
-                      );
+                    onTap: () async {
+                      final opened = await openAppSettings();
+                      if (!opened && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Open System Settings > Apps > Syrex Sales > Permissions'),
+                            duration: Duration(seconds: 4),
+                          ),
+                        );
+                      }
                     },
                   ),
                 ],

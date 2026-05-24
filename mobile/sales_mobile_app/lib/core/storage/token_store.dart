@@ -28,8 +28,26 @@ class TokenStore {
   }
 
   Future<void> write(TokenPair pair) async {
+    // Read previous values so we can attempt a rollback if the second write
+    // fails, keeping the two keys consistent.
+    final previousAccess = await _storage.read(key: _accessTokenKey);
     await _storage.write(key: _accessTokenKey, value: pair.accessToken);
-    await _storage.write(key: _refreshTokenKey, value: pair.refreshToken);
+    try {
+      await _storage.write(key: _refreshTokenKey, value: pair.refreshToken);
+    } catch (_) {
+      // Second write failed — restore the access token to its previous value
+      // to avoid an inconsistent state, then rethrow.
+      try {
+        if (previousAccess == null) {
+          await _storage.delete(key: _accessTokenKey);
+        } else {
+          await _storage.write(key: _accessTokenKey, value: previousAccess);
+        }
+      } catch (_) {
+        // Rollback itself failed; nothing more we can do.
+      }
+      rethrow;
+    }
   }
 
   Future<void> clear() async {

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Clock, Search, Timer } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -50,6 +51,7 @@ function formatTime(iso: string) {
 }
 
 export function FieldSenseShiftsPage() {
+  const navigate = useNavigate()
   const [date, setDate] = useState(todayISO())
   const [statusFilter, setStatusFilter] = useState<ShiftStatus | ''>('')
   const [search, setSearch] = useState('')
@@ -257,9 +259,13 @@ export function FieldSenseShiftsPage() {
                       <TableCell>
                         <Button
                           size="sm"
-                          variant="ghost"
-                          title="Coming soon"
-                          className="h-7 text-xs text-slate-400 hover:text-slate-600"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          onClick={() =>
+                            navigate(`/dashboard/field-shifts/${shift.id}`, {
+                              state: { shift, agentName },
+                            })
+                          }
                         >
                           View
                         </Button>

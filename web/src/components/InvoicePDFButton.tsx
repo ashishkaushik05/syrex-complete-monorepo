@@ -11,6 +11,10 @@ type InvoicePDFButtonProps = {
     dueDate?: string | null
     total: number | string
     subtotal?: number | string
+    discountType?: 'percentage' | 'fixed' | null
+    discountRate?: string | number
+    discountAmount?: string | number
+    taxableSubtotal?: string | number
     paidAmount?: number | string
     remainingAmount?: number | string
     outlet?: {

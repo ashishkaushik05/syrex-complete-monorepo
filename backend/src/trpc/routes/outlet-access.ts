@@ -59,12 +59,9 @@ export async function assertOutletAccess(
     return;
   }
 
-  const hasLinkedOutlet = await ctx.prisma.outlet.findFirst({
-    where: { userId: actorId },
-    select: { id: true },
-  });
-
-  if (hasLinkedOutlet) {
-    throw apiError("NOT_FOUND", "Outlet not found");
+  if (ctx.permissions.includes(SUPER_ADMIN_PERMISSION)) {
+    return;
   }
+
+  throw apiError("FORBIDDEN", "Access denied to this outlet");
 }

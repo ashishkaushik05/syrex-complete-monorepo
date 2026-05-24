@@ -1,8 +1,14 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'auth_models.dart';
 import 'auth_repository.dart';
+import '../location/background_location_service.dart';
+import '../location/field_sync_store.dart';
 import '../storage/token_store.dart';
+import '../../modules/field/providers/field_providers.dart';
 
 enum SessionStatus {
   unknown,
@@ -30,6 +36,8 @@ class SessionState {
 }
 
 class SessionController extends Notifier<SessionState> {
+  static const _bootstrapTimeout = Duration(seconds: 8);
+
   @override
   SessionState build() {
     _bootstrap();
@@ -40,24 +48,33 @@ class SessionController extends Notifier<SessionState> {
     final tokenStore = ref.read(tokenStoreProvider);
     final authRepository = ref.read(authRepositoryProvider);
 
-    final tokens = await tokenStore.read();
+    final tokens = await tokenStore.read().timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => null,
+        );
     if (tokens == null) {
       state = const SessionState(status: SessionStatus.unauthenticated);
       return;
     }
 
     try {
-      final user = await authRepository.me();
+      final user = await authRepository.me().timeout(_bootstrapTimeout);
       state = SessionState(status: SessionStatus.authenticated, user: user);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[_bootstrap] me() failed: $e\n$st');
       try {
         state = const SessionState(status: SessionStatus.refreshing);
-        await authRepository.refreshTokens();
-        final user = await authRepository.me();
+        await authRepository.refreshTokens().timeout(_bootstrapTimeout);
+        final user = await authRepository.me().timeout(_bootstrapTimeout);
         state = SessionState(status: SessionStatus.authenticated, user: user);
-      } catch (_) {
+      } catch (e, st) {
+        debugPrint('[_bootstrap] refresh/me() failed: $e\n$st');
         await authRepository.forceLogoutLocal();
         state = const SessionState(status: SessionStatus.expired);
+        unawaited(BackgroundLocationService.stop().timeout(
+          const Duration(seconds: 2),
+          onTimeout: () {},
+        ));
       }
     }
   }
@@ -69,7 +86,8 @@ class SessionController extends Notifier<SessionState> {
           .login(LoginInput(email: email, password: password));
       state =
           SessionState(status: SessionStatus.authenticated, user: result.user);
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[login] error: $e\n$st');
       state = const SessionState(
         status: SessionStatus.unauthenticated,
         errorMessage: 'Login failed. Check credentials and backend.',
@@ -82,11 +100,23 @@ class SessionController extends Notifier<SessionState> {
     try {
       final user = await authRepository.me();
       state = state.copyWith(user: user);
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('[refreshSession] error: $e\n$st');
+      state = state.copyWith(
+        errorMessage: 'Session refresh failed: ${e.toString()}',
+      );
+    }
   }
 
   Future<void> logout() async {
     final authRepository = ref.read(authRepositoryProvider);
+    unawaited(BackgroundLocationService.stop().timeout(
+      const Duration(seconds: 2),
+      onTimeout: () {},
+    ));
+    await ref.read(fieldSyncStoreProvider).clearActiveShift();
+    ref.invalidate(activeShiftProvider);
+    ref.invalidate(activeStopProvider);
     await authRepository.logout();
     state = const SessionState(status: SessionStatus.unauthenticated);
   }

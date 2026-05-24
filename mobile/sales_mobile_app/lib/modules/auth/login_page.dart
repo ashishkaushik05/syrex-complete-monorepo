@@ -11,8 +11,8 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
-  final _emailController = TextEditingController(text: 'admin@syrex.local');
-  final _passwordController = TextEditingController(text: 'admin123');
+  final _emailController = TextEditingController(text: '');
+  final _passwordController = TextEditingController(text: '');
   var _submitting = false;
 
   @override
@@ -36,18 +36,22 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             TextField(
               controller: _emailController,
               decoration: const InputDecoration(labelText: 'Email'),
+              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _passwordController,
               obscureText: true,
               decoration: const InputDecoration(labelText: 'Password'),
+              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: _submitting
+                onPressed: (_submitting ||
+                        _emailController.text.trim().isEmpty ||
+                        _passwordController.text.isEmpty)
                     ? null
                     : () async {
                         setState(() => _submitting = true);
@@ -61,7 +65,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           setState(() => _submitting = false);
                         }
                       },
-                child: Text(_submitting ? 'Signing in...' : 'Sign in'),
+                child: _submitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Text('Sign in'),
               ),
             ),
             if (session.errorMessage != null) ...[
