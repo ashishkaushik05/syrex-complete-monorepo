@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
@@ -187,17 +188,26 @@ export const fieldShiftsRouter = createTRPCRouter({
 
       await assertFieldEnabled(ctx.prisma, agentId);
 
-      const existing = await ctx.prisma.shift.findFirst({
-        where: { agentId, orgId, status: "active" }
+      const shift = await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.shift.findFirst({
+          where: { agentId, orgId, status: "active" }
+        });
+        if (existing) {
+          throw new TRPCError({ code: "CONFLICT", message: "Active shift already exists" });
+        }
+        const newShift = await tx.shift.create({
+          data: { agentId, orgId, startType: "manual", status: "active" },
+          select: SHIFT_SELECT
+        });
+        const date = new Date().toISOString().slice(0, 10);
+        await tx.dailyAttendance.upsert({
+          where: { userId_date: { userId: agentId, date } },
+          create: { userId: agentId, orgId, date, status: "present" },
+          update: {}
+        });
+        return newShift;
       });
-      if (existing) throw apiError("CONFLICT", "Active shift already exists");
 
-      const shift = await ctx.prisma.shift.create({
-        data: { agentId, orgId, startType: "manual", status: "active" },
-        select: SHIFT_SELECT
-      });
-
-      await upsertAttendance(ctx.prisma, agentId, orgId);
       return toShift(shift);
     }),
 
@@ -225,74 +235,77 @@ export const fieldShiftsRouter = createTRPCRouter({
       await assertFieldEnabled(ctx.prisma, agentId);
       const startedAt = parseClientDate(input.startedAt, "startedAt");
 
-      const existing = await ctx.prisma.shift.findUnique({
-        where: {
-          orgId_agentId_clientShiftId: {
-            orgId,
-            agentId,
-            clientShiftId: input.clientShiftId
-          }
-        },
-        select: SHIFT_SELECT
-      });
-      if (existing) {
-        return {
-          shift: toShift(existing),
-          serverShiftId: existing.id,
-          clientShiftId: input.clientShiftId,
-          status: "existing"
-        };
-      }
+      const { shift: syncedShift, syncStatus } = await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.shift.findUnique({
+          where: {
+            orgId_agentId_clientShiftId: {
+              orgId,
+              agentId,
+              clientShiftId: input.clientShiftId
+            }
+          },
+          select: SHIFT_SELECT
+        });
+        if (existing) {
+          return { shift: existing, syncStatus: "existing" as const };
+        }
 
-      const active = await ctx.prisma.shift.findFirst({
-        where: { orgId, agentId, status: "active" },
-        select: SHIFT_SELECT,
-        orderBy: { startedAt: "desc" }
-      });
+        const active = await tx.shift.findFirst({
+          where: { orgId, agentId, status: "active" },
+          select: SHIFT_SELECT,
+          orderBy: { startedAt: "desc" }
+        });
 
-      if (active?.clientShiftId && active.clientShiftId !== input.clientShiftId) {
-        throw apiError("CONFLICT", "ACTIVE_SHIFT_CONFLICT");
-      }
+        if (active?.clientShiftId && active.clientShiftId !== input.clientShiftId) {
+          throw new TRPCError({ code: "CONFLICT", message: "ACTIVE_SHIFT_CONFLICT" });
+        }
 
-      if (active && !active.clientShiftId) {
-        const shift = await ctx.prisma.shift.update({
-          where: { id: active.id },
+        if (active && !active.clientShiftId) {
+          const shift = await tx.shift.update({
+            where: { id: active.id },
+            data: {
+              clientShiftId: input.clientShiftId,
+              clientStartedAt: startedAt,
+              syncState: "client_synced"
+            },
+            select: SHIFT_SELECT
+          });
+          const date = startedAt.toISOString().slice(0, 10);
+          await tx.dailyAttendance.upsert({
+            where: { userId_date: { userId: agentId, date } },
+            create: { userId: agentId, orgId, date, status: "present" },
+            update: {}
+          });
+          return { shift, syncStatus: "reconciled" as const };
+        }
+
+        const shift = await tx.shift.create({
           data: {
+            agentId,
+            orgId,
             clientShiftId: input.clientShiftId,
             clientStartedAt: startedAt,
+            startedAt,
+            startType: "manual",
+            status: "active",
             syncState: "client_synced"
           },
           select: SHIFT_SELECT
         });
-        await upsertAttendance(ctx.prisma, agentId, orgId, startedAt);
-        return {
-          shift: toShift(shift),
-          serverShiftId: shift.id,
-          clientShiftId: input.clientShiftId,
-          status: "reconciled"
-        };
-      }
-
-      const shift = await ctx.prisma.shift.create({
-        data: {
-          agentId,
-          orgId,
-          clientShiftId: input.clientShiftId,
-          clientStartedAt: startedAt,
-          startedAt,
-          startType: "manual",
-          status: "active",
-          syncState: "client_synced"
-        },
-        select: SHIFT_SELECT
+        const date = startedAt.toISOString().slice(0, 10);
+        await tx.dailyAttendance.upsert({
+          where: { userId_date: { userId: agentId, date } },
+          create: { userId: agentId, orgId, date, status: "present" },
+          update: {}
+        });
+        return { shift, syncStatus: "created" as const };
       });
-      await upsertAttendance(ctx.prisma, agentId, orgId, startedAt);
 
       return {
-        shift: toShift(shift),
-        serverShiftId: shift.id,
+        shift: toShift(syncedShift),
+        serverShiftId: syncedShift.id,
         clientShiftId: input.clientShiftId,
-        status: "created"
+        status: syncStatus
       };
     }),
 
@@ -301,8 +314,10 @@ export const fieldShiftsRouter = createTRPCRouter({
     .output(shiftSchema)
     .mutation(async ({ ctx }) => {
       const agentId = ctx.actor.id!;
+      const orgId = ctx.actor.orgId;
+      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, status: "active", orgId: ctx.actor.orgId ?? undefined }
+        where: { agentId, status: "active", orgId }
       });
       if (!shift) throw apiError("NOT_FOUND", "No active shift");
 
@@ -380,8 +395,10 @@ export const fieldShiftsRouter = createTRPCRouter({
     .output(shiftSchema)
     .mutation(async ({ ctx }) => {
       const agentId = ctx.actor.id!;
+      const orgId = ctx.actor.orgId;
+      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, status: "active", orgId: ctx.actor.orgId ?? undefined }
+        where: { agentId, status: "active", orgId }
       });
       if (!shift) throw apiError("NOT_FOUND", "No active shift");
 

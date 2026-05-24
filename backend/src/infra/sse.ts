@@ -13,7 +13,11 @@ export function removeSseConnection(
   key: string,
   ctrl: ReadableStreamDefaultController<Uint8Array>
 ) {
-  connections.get(key)?.delete(ctrl);
+  const set = connections.get(key);
+  if (set) {
+    set.delete(ctrl);
+    if (set.size === 0) connections.delete(key);
+  }
 }
 
 export function broadcastLocationUpdate(orgId: string, payload: unknown) {
@@ -23,14 +27,16 @@ export function broadcastLocationUpdate(orgId: string, payload: unknown) {
   for (const ctrl of connections.get(orgId) ?? []) {
     try {
       ctrl.enqueue(data);
-    } catch {
+    } catch (err) {
+      console.warn(`[sse] enqueue failed for org=${orgId}, removing connection:`, err);
       removeSseConnection(orgId, ctrl);
     }
   }
   for (const ctrl of connections.get("*") ?? []) {
     try {
       ctrl.enqueue(data);
-    } catch {
+    } catch (err) {
+      console.warn(`[sse] enqueue failed for org=*, removing connection:`, err);
       removeSseConnection("*", ctrl);
     }
   }

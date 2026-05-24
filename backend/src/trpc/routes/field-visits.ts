@@ -61,7 +61,7 @@ export const fieldVisitsRouter = createTRPCRouter({
       z.object({
         lat: z.number(),
         lng: z.number(),
-        description: z.string().optional(),
+        description: z.string().min(1).optional(),
         audioUrl: z.string().url().optional(),
         outletId: z.string().uuid().optional(),
         customerId: z.string().uuid().optional(),
@@ -80,14 +80,14 @@ export const fieldVisitsRouter = createTRPCRouter({
 
       if (input.outletId) {
         const outlet = await ctx.prisma.outlet.findFirst({
-          where: { id: input.outletId, isActive: true },
+          where: { id: input.outletId, isActive: true, orgId: shift.orgId },
           select: { id: true, userId: true }
         });
         if (!outlet) throw apiError("BAD_REQUEST", "Outlet not found or inactive");
 
         if (input.customerId) {
           const customer = await ctx.prisma.user.findFirst({
-            where: { id: input.customerId, isActive: true, userType: "outlet" },
+            where: { id: input.customerId, isActive: true, userType: "outlet", orgId: shift.orgId },
             select: { id: true }
           });
           if (!customer) throw apiError("BAD_REQUEST", "Customer not found or inactive");

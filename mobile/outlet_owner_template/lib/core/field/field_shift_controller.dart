@@ -130,6 +130,13 @@ class FieldShiftController extends StateNotifier<FieldShiftState> {
 
   Future<void> retrySync() async => _runSync();
 
+  @override
+  void dispose() {
+    // Cancel any pending retry timer and mark the worker as not running.
+    _syncWorker.cancel();
+    super.dispose();
+  }
+
   // ── internal ───────────────────────────────────────────────────────────────
 
   Future<void> _runSync() async {

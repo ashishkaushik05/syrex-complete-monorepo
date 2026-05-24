@@ -151,7 +151,8 @@ const trailMetaSchema = z.object({
   startedAt: z.string().nullable(),
   endedAt: z.string().nullable(),
   simplifyTolerance: z.number(),
-  maxPoints: z.number()
+  maxPoints: z.number(),
+  truncated: z.boolean()
 });
 
 const activeAgentSchema = z.object({
@@ -498,7 +499,7 @@ export const fieldLocationRouter = createTRPCRouter({
     .input(
       z.object({
         shiftId: z.string().uuid(),
-        simplifyTolerance: z.number().default(20),
+        simplifyTolerance: z.number().min(1).max(500).default(20),
         maxPoints: z.number().int().default(1200)
       })
     )
@@ -510,9 +511,11 @@ export const fieldLocationRouter = createTRPCRouter({
           shift: { orgId: resolveReadOrgId(ctx) }
         },
         select: { lat: true, lng: true, recordedAt: true },
-        orderBy: { recordedAt: "asc" }
+        orderBy: { recordedAt: "asc" },
+        take: 50_000
       });
 
+      const truncated = raw.length >= 50_000;
       const rawCount = raw.length;
       if (rawCount === 0) {
         return {
@@ -526,7 +529,8 @@ export const fieldLocationRouter = createTRPCRouter({
           startedAt: null,
           endedAt: null,
           simplifyTolerance: input.simplifyTolerance,
-          maxPoints: input.maxPoints
+          maxPoints: input.maxPoints,
+          truncated: false
         };
       }
 
@@ -557,7 +561,8 @@ export const fieldLocationRouter = createTRPCRouter({
         startedAt: startedAt.toISOString(),
         endedAt: endedAt.toISOString(),
         simplifyTolerance: input.simplifyTolerance,
-        maxPoints: input.maxPoints
+        maxPoints: input.maxPoints,
+        truncated
       };
     }),
 
@@ -568,7 +573,7 @@ export const fieldLocationRouter = createTRPCRouter({
         date: z.string().optional(),
         from: z.string().datetime().optional(),
         to: z.string().datetime().optional(),
-        simplifyTolerance: z.number().default(20),
+        simplifyTolerance: z.number().min(1).max(500).default(20),
         maxPoints: z.number().int().default(1200)
       })
     )
@@ -576,6 +581,17 @@ export const fieldLocationRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       assertCanReadAgent(ctx, input.agentId);
       const orgId = resolveReadOrgId(ctx);
+
+      // Verify agent has activity in this org (User model has no direct orgId field;
+      // org isolation is enforced via shift ownership)
+      const agentInOrg = await ctx.prisma.shift.findFirst({
+        where: { agentId: input.agentId, orgId },
+        select: { id: true }
+      });
+      if (!agentInOrg) {
+        throw apiError("FORBIDDEN", "Agent not in your organization");
+      }
+
       let timeWhere: { gte?: Date; lt?: Date } = {};
       if (input.date) {
         timeWhere = {
@@ -594,9 +610,11 @@ export const fieldLocationRouter = createTRPCRouter({
           recordedAt: Object.keys(timeWhere).length > 0 ? timeWhere : undefined
         },
         select: { lat: true, lng: true, recordedAt: true },
-        orderBy: { recordedAt: "asc" }
+        orderBy: { recordedAt: "asc" },
+        take: 50_000
       });
 
+      const truncated = raw.length >= 50_000;
       const rawCount = raw.length;
       if (rawCount === 0) {
         return {
@@ -610,7 +628,8 @@ export const fieldLocationRouter = createTRPCRouter({
           startedAt: null,
           endedAt: null,
           simplifyTolerance: input.simplifyTolerance,
-          maxPoints: input.maxPoints
+          maxPoints: input.maxPoints,
+          truncated: false
         };
       }
 
@@ -639,7 +658,8 @@ export const fieldLocationRouter = createTRPCRouter({
         startedAt: startedAt.toISOString(),
         endedAt: endedAt.toISOString(),
         simplifyTolerance: input.simplifyTolerance,
-        maxPoints: input.maxPoints
+        maxPoints: input.maxPoints,
+        truncated
       };
     }),
 
@@ -663,52 +683,88 @@ export const fieldLocationRouter = createTRPCRouter({
         }
       });
 
-      const results = await Promise.all(
-        activeShifts.map(async (shift) => {
-          const lastLoc = await ctx.prisma.fieldLocation.findFirst({
-            where: { shiftId: shift.id },
-            select: { lat: true, lng: true, receivedAt: true },
-            orderBy: { receivedAt: "desc" }
-          });
-          const health = await ctx.prisma.fieldSyncStatus.findFirst({
-            where: { orgId: shift.orgId, agentId: shift.agentId },
-            select: {
-              deviceId: true,
-              platform: true,
-              appVersion: true,
-              pendingQueueDepth: true,
-              lastCapturedAt: true,
-              lastReceivedAt: true,
-              lastSyncAttemptAt: true,
-              lastSyncErrorCode: true
-            },
-            orderBy: { updatedAt: "desc" }
-          });
-          return {
-            agentId: shift.agentId,
-            agentName: shift.agent.name,
-            shiftId: shift.id,
-            shiftStartedAt: shift.startedAt.toISOString(),
-            lastPingAt: lastLoc?.receivedAt.toISOString() ?? null,
-            lat: lastLoc?.lat ?? null,
-            lng: lastLoc?.lng ?? null,
-            health: health
-              ? {
-                  deviceId: health.deviceId,
-                  platform: health.platform,
-                  appVersion: health.appVersion,
-                  pendingQueueDepth: health.pendingQueueDepth,
-                  lastCapturedAt: health.lastCapturedAt?.toISOString() ?? null,
-                  lastReceivedAt: health.lastReceivedAt?.toISOString() ?? null,
-                  lastSyncAttemptAt:
-                    health.lastSyncAttemptAt?.toISOString() ?? null,
-                  lastSyncErrorCode: health.lastSyncErrorCode
-                }
-              : null
-          };
-        })
-      );
+      if (activeShifts.length === 0) return [];
 
-      return results;
+      const shiftIds = activeShifts.map((s) => s.id);
+      const agentIds = activeShifts.map((s) => s.agentId);
+
+      // Batch-fetch all last locations per shift (one query)
+      const allLocations = await ctx.prisma.fieldLocation.findMany({
+        where: { shiftId: { in: shiftIds } },
+        select: { shiftId: true, lat: true, lng: true, receivedAt: true },
+        orderBy: { receivedAt: "desc" }
+      });
+      // Keep only the most recent per shiftId
+      const lastLocByShift = new Map<
+        string,
+        { lat: number; lng: number; receivedAt: Date }
+      >();
+      for (const loc of allLocations) {
+        if (!lastLocByShift.has(loc.shiftId)) {
+          lastLocByShift.set(loc.shiftId, {
+            lat: loc.lat,
+            lng: loc.lng,
+            receivedAt: loc.receivedAt
+          });
+        }
+      }
+
+      // Batch-fetch all sync statuses per agent (one query)
+      const allSyncStatuses = await ctx.prisma.fieldSyncStatus.findMany({
+        where: {
+          orgId: orgId ?? undefined,
+          agentId: { in: agentIds }
+        },
+        select: {
+          agentId: true,
+          deviceId: true,
+          platform: true,
+          appVersion: true,
+          pendingQueueDepth: true,
+          lastCapturedAt: true,
+          lastReceivedAt: true,
+          lastSyncAttemptAt: true,
+          lastSyncErrorCode: true,
+          updatedAt: true
+        },
+        orderBy: { updatedAt: "desc" }
+      });
+      // Keep only the most recent per agentId
+      const healthByAgent = new Map<
+        string,
+        (typeof allSyncStatuses)[number]
+      >();
+      for (const status of allSyncStatuses) {
+        if (!healthByAgent.has(status.agentId)) {
+          healthByAgent.set(status.agentId, status);
+        }
+      }
+
+      return activeShifts.map((shift) => {
+        const lastLoc = lastLocByShift.get(shift.id) ?? null;
+        const health = healthByAgent.get(shift.agentId) ?? null;
+        return {
+          agentId: shift.agentId,
+          agentName: shift.agent.name,
+          shiftId: shift.id,
+          shiftStartedAt: shift.startedAt.toISOString(),
+          lastPingAt: lastLoc?.receivedAt.toISOString() ?? null,
+          lat: lastLoc?.lat ?? null,
+          lng: lastLoc?.lng ?? null,
+          health: health
+            ? {
+                deviceId: health.deviceId,
+                platform: health.platform,
+                appVersion: health.appVersion,
+                pendingQueueDepth: health.pendingQueueDepth,
+                lastCapturedAt: health.lastCapturedAt?.toISOString() ?? null,
+                lastReceivedAt: health.lastReceivedAt?.toISOString() ?? null,
+                lastSyncAttemptAt:
+                  health.lastSyncAttemptAt?.toISOString() ?? null,
+                lastSyncErrorCode: health.lastSyncErrorCode
+              }
+            : null
+        };
+      });
     })
 });

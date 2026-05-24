@@ -2435,7 +2435,7 @@ export const api = {
 export { trpcQuery, trpcMutation, getActorId }
 
 const sseBaseURL = import.meta.env.DEV
-  ? ''
+  ? 'http://localhost:3000'
   : (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:3000'
 
 export function openFieldSenseStream(
@@ -2453,36 +2453,77 @@ export function openFieldSenseStream(
   const actorId = getActorId()
   const url = `${sseBaseURL}/field/live-stream`
 
-  fetch(url, {
-    signal,
-    headers: {
-      Accept: 'text/event-stream',
-      ...(actorId ? { 'x-actor-id': actorId } : {}),
-    },
-  })
-    .then(async (res) => {
-      if (!res.ok || !res.body) return
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const chunks = buffer.split('\n\n')
-        buffer = chunks.pop() ?? ''
-        for (const chunk of chunks) {
-          let eventType = 'message'
-          let data = ''
-          for (const line of chunk.split('\n')) {
-            if (line.startsWith('event: ')) eventType = line.slice(7).trim()
-            else if (line.startsWith('data: ')) data = line.slice(6).trim()
-          }
-          if ((eventType === 'location-update' || eventType === 'location') && data) {
-            try { onLocation(JSON.parse(data)) } catch { /* ignore malformed */ }
-          }
-        }
-      }
+  let reconnectDelay = 1000
+  const MAX_DELAY = 30_000
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  function connect() {
+    if (signal.aborted) return
+
+    fetch(url, {
+      signal,
+      headers: {
+        Accept: 'text/event-stream',
+        ...(actorId ? { 'x-actor-id': actorId } : {}),
+      },
     })
-    .catch(() => { /* silently absorb abort + network errors */ })
+      .then(async (res) => {
+        if (signal.aborted) return
+        if (!res.ok || !res.body) {
+          scheduleReconnect()
+          return
+        }
+        // Successful connection — reset backoff
+        reconnectDelay = 1000
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const chunks = buffer.split('\n\n')
+            buffer = chunks.pop() ?? ''
+            for (const chunk of chunks) {
+              let eventType = 'message'
+              let data = ''
+              for (const line of chunk.split('\n')) {
+                if (line.startsWith('event: ')) eventType = line.slice(7).trim()
+                else if (line.startsWith('data: ')) data = line.slice(6).trim()
+              }
+              if ((eventType === 'location-update' || eventType === 'location') && data) {
+                try { onLocation(JSON.parse(data)) } catch { /* ignore malformed */ }
+              }
+            }
+          }
+        } catch {
+          // reader aborted or network error mid-stream
+        }
+        // Stream ended — reconnect unless aborted
+        scheduleReconnect()
+      })
+      .catch(() => {
+        // fetch itself failed (network error or abort)
+        scheduleReconnect()
+      })
+  }
+
+  function scheduleReconnect() {
+    if (signal.aborted) return
+    reconnectTimer = setTimeout(() => {
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY)
+      connect()
+    }, reconnectDelay)
+  }
+
+  // Cancel any pending reconnect when the signal fires
+  signal.addEventListener('abort', () => {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  })
+
+  connect()
 }

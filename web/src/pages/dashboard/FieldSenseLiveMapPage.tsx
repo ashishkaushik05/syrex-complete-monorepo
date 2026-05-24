@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, Component } from 'react'
+import type { ReactNode } from 'react'
 import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { MapPin, Navigation, Radio, Signal, Users, X } from 'lucide-react'
@@ -134,10 +135,17 @@ function AgentMarkers({
 
 function FitBoundsOnAgents({ agents, livePositions }: { agents: ActiveAgent[]; livePositions: LiveState }) {
   const map = useMap()
-  const fitted = useRef(false)
+  const prevCountRef = useRef(0)
 
   useEffect(() => {
-    if (fitted.current || agents.length === 0) return
+    if (agents.length === 0) return
+    // Only re-fit when the agent count increases (new agents joined)
+    if (agents.length <= prevCountRef.current) {
+      prevCountRef.current = agents.length
+      return
+    }
+    prevCountRef.current = agents.length
+
     const points = agents
       .map((a) => {
         const live = livePositions[a.agentId]
@@ -149,12 +157,29 @@ function FitBoundsOnAgents({ agents, livePositions }: { agents: ActiveAgent[]; l
       map.setView([points[0].lat, points[0].lng], 14)
     } else {
       const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]))
-      map.fitBounds(bounds, { padding: [40, 40] })
+      map.fitBounds(bounds, { padding: [50, 50] })
     }
-    fitted.current = true
   }, [agents, livePositions, map])
 
   return null
+}
+
+class MapErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+  static getDerivedStateFromError() { return { hasError: true } }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex items-center justify-center h-full text-red-500">
+          Map failed to load. Please refresh.
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 export function FieldSenseLiveMapPage() {
@@ -230,6 +255,7 @@ export function FieldSenseLiveMapPage() {
   }, [])
 
   const handleSelectAgent = async (agent: AgentWithDetail) => {
+    const capturedAgentId = agent.agentId // Capture at call time to avoid stale closure
     setSelectedAgent({ ...agent, trailLoading: true })
     try {
       const [trailMeta, visitsData, stopsData] = await Promise.all([
@@ -238,13 +264,13 @@ export function FieldSenseLiveMapPage() {
         trpcQuery<Stop[]>('fieldStops.list', { shiftId: agent.shiftId, limit: 100 }),
       ])
       setSelectedAgent((prev) =>
-        prev?.agentId === agent.agentId
+        prev?.agentId === capturedAgentId
           ? { ...prev, trail: trailMeta, visits: visitsData, stops: stopsData, trailLoading: false }
           : prev,
       )
     } catch {
       setSelectedAgent((prev) =>
-        prev?.agentId === agent.agentId ? { ...prev, trailLoading: false } : prev,
+        prev?.agentId === capturedAgentId ? { ...prev, trailLoading: false } : prev,
       )
     }
   }
@@ -286,6 +312,7 @@ export function FieldSenseLiveMapPage() {
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent" />
             </div>
           ) : (
+            <MapErrorBoundary>
             <MapContainer
               center={defaultCenter}
               zoom={5}
@@ -355,6 +382,7 @@ export function FieldSenseLiveMapPage() {
                 </CircleMarker>
               ))}
             </MapContainer>
+            </MapErrorBoundary>
           )}
         </div>
 

@@ -25,6 +25,10 @@ class FieldLocalStore {
       path,
       version: 1,
       onCreate: _onCreate,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        // Future migrations will go here.
+        // Example: if (oldVersion < 2) { await db.execute('ALTER TABLE ...'); }
+      },
     );
   }
 

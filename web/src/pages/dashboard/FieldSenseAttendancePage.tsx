@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarCheck, Edit2, Search, UserPlus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -84,6 +84,13 @@ export function FieldSenseAttendancePage() {
   const [markStatus, setMarkStatus] = useState<AttendanceStatus>('present')
   const [markNote, setMarkNote] = useState('')
   const [markError, setMarkError] = useState<string | null>(null)
+  const [successToast, setSuccessToast] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!successToast) return
+    const timer = window.setTimeout(() => setSuccessToast(null), 3000)
+    return () => window.clearTimeout(timer)
+  }, [successToast])
 
   const attendanceQuery = useQuery({
     queryKey: ['field-attendance', fromDate, toDate],
@@ -125,6 +132,7 @@ export function FieldSenseAttendancePage() {
       setMarkStatus('present')
       setMarkNote('')
       setMarkError(null)
+      setSuccessToast('Attendance marked successfully')
     },
     onError: (err: any) => {
       setMarkError(err?.response?.data?.error?.message ?? 'Failed to mark attendance')
@@ -185,6 +193,11 @@ export function FieldSenseAttendancePage() {
 
   return (
     <div className="space-y-5">
+      {successToast && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+          {successToast}
+        </div>
+      )}
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-slate-900">Attendance</h1>

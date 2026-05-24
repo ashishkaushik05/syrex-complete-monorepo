@@ -160,7 +160,7 @@ export const fieldSyncStatusRouter = createTRPCRouter({
       z.object({
         agentId: z.string().uuid().optional(),
         orgId: z.string().optional(),
-        limit: z.number().int().min(1).max(500).default(100)
+        limit: z.number().int().min(1).max(200).default(100)
       })
     )
     .output(z.array(syncStatusSchema))

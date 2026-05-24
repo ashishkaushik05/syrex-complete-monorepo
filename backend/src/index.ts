@@ -22,3 +22,13 @@ logger.info("backend_starting", {
   port: env.PORT,
   env: env.NODE_ENV
 });
+
+process.on('SIGTERM', () => {
+  console.log('[server] SIGTERM received, shutting down gracefully');
+  // Give in-flight requests 5s to complete
+  setTimeout(() => process.exit(0), 5000);
+});
+process.on('SIGINT', () => {
+  console.log('[server] SIGINT received');
+  process.exit(0);
+});

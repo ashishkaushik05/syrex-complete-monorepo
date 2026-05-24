@@ -93,6 +93,32 @@ enum ChargeType {
   fixed
 }
 
+enum ServiceTestVerdict {
+  tested_ok
+  warranty_candidate
+  failed
+  needs_retest
+}
+
+enum ServiceAssignmentAction {
+  assign
+  reassign
+}
+
+enum ServiceSerialEventType {
+  legacy_dispatch_hydrated
+  replacement_serial_assigned
+  replacement_order_created
+  replacement_delivered
+}
+
+enum ServiceSerialEntityType {
+  dispatch_line
+  service_complaint_line
+  sale_order
+  dispatch
+}
+
 // =============================================================================
 // AUTH + ROLES
 // =============================================================================
@@ -532,10 +558,27 @@ model DispatchLine {
   dispatch  Dispatch      @relation(fields: [dispatchId],  references: [id])
   orderLine SaleOrderLine @relation(fields: [orderLineId], references: [id])
   product   Product       @relation(fields: [productId],   references: [id])
+  serials   DispatchLineSerial[]
 
   @@index([dispatchId])
   @@index([orderLineId])
   @@map("dispatch_lines")
+}
+
+// Normalized serial lookup index — one row per (dispatch_line, normalized_serial).
+// Enables O(log N) lookup in findSerialLegacyDispatchRows instead of full-table JS filter.
+// Backfill: bun backend/src/scripts/backfill-dispatch-line-serials.ts
+model DispatchLineSerial {
+  id               String       @id @default(uuid())
+  dispatchLineId   String
+  normalizedSerial String
+
+  dispatchLine DispatchLine @relation(fields: [dispatchLineId], references: [id], onDelete: Cascade)
+
+  @@unique([dispatchLineId, normalizedSerial])
+  @@index([normalizedSerial])
+  @@index([dispatchLineId])
+  @@map("dispatch_line_serials")
 }
 
 // =============================================================================
@@ -819,6 +862,7 @@ model Shift {
   @@index([agentId, status])
   @@index([orgId, status])
   @@index([agentId, startedAt])
+  @@index([status, startedAt])
   @@index([orgId, agentId, clientShiftId])
   @@map("shifts")
 }
@@ -844,13 +888,14 @@ model FieldLocation {
   isMocked      Boolean?
   receivedAt    DateTime @default(now())
 
-  shift Shift @relation(fields: [shiftId], references: [id])
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
 
   @@unique([orgId, agentId, clientPointId])
   @@index([agentId, recordedAt])
   @@index([shiftId, recordedAt])
   @@index([orgId, recordedAt])
   @@index([orgId, receivedAt])
+  @@index([receivedAt])
   @@index([orgId, agentId, clientPointId])
   @@map("field_locations")
 }
@@ -870,6 +915,7 @@ model FieldSyncStatus {
   lastSyncErrorCode  String?
   pendingQueueDepth  Int?
   permissionsSummary Json?
+  isActive           Boolean  @default(true)
   updatedAt          DateTime @updatedAt
 
   agent User @relation(fields: [agentId], references: [id])
@@ -910,7 +956,7 @@ model FieldVisit {
   createdAt   DateTime @default(now())
 
   agent    User    @relation("FieldVisitAgent", fields: [agentId], references: [id])
-  shift    Shift   @relation(fields: [shiftId], references: [id])
+  shift    Shift   @relation(fields: [shiftId], references: [id], onDelete: Cascade)
   outlet   Outlet? @relation(fields: [outletId], references: [id])
   customer User?   @relation("FieldVisitCustomer", fields: [customerId], references: [id])
 
@@ -936,7 +982,7 @@ model FieldStop {
   createdAt  DateTime  @default(now())
 
   agent User  @relation(fields: [agentId], references: [id])
-  shift Shift @relation(fields: [shiftId], references: [id])
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
 
   @@index([agentId, startedAt])
   @@index([shiftId])
@@ -967,6 +1013,7 @@ model DailyAttendance {
 model ServiceComplaint {
   id               String                 @id @default(uuid())
   complaintNumber  String                 @unique
+  orgId            String?
   status           ServiceComplaintStatus @default(raised)
   title            String?
   description      String?
@@ -989,8 +1036,10 @@ model ServiceComplaint {
   replacementOrders  SaleOrder[]                @relation("ComplaintReplacementOrders")
   formSubmissions    ServiceFormSubmission[]
 
+  @@index([orgId, status, createdAt])
   @@index([status, createdAt])
   @@index([outletId, createdAt])
+  @@index([raisedById, createdAt])
   @@map("service_complaints")
 }
 
@@ -1022,7 +1071,7 @@ model ServiceAssignmentHistory {
   asiUserId    String?
   seUserId     String?
   assignedById String
-  action       String
+  action       ServiceAssignmentAction
   note         String?
   createdAt    DateTime @default(now())
 
@@ -1032,6 +1081,8 @@ model ServiceAssignmentHistory {
   assignedBy User             @relation("ServiceAssignmentBy", fields: [assignedById], references: [id])
 
   @@index([complaintId, createdAt])
+  @@index([asiUserId, createdAt])
+  @@index([seUserId, createdAt])
   @@map("service_assignment_history")
 }
 
@@ -1040,7 +1091,7 @@ model ServiceTestReport {
   complaintId    String
   complaintLineId String?
   submittedById  String
-  verdict        String
+  verdict        ServiceTestVerdict
   summary        String?
   structuredData Json?
   createdAt      DateTime @default(now())
@@ -1051,6 +1102,7 @@ model ServiceTestReport {
   formSubmissions ServiceFormSubmission[]
 
   @@index([complaintId, createdAt])
+  @@index([submittedById, createdAt])
   @@map("service_test_reports")
 }
 
@@ -1069,6 +1121,7 @@ model ServiceComplaintActivity {
   actor     User?            @relation("ServiceActivityActor", fields: [actorId], references: [id])
 
   @@index([complaintId, createdAt])
+  @@index([actorId, createdAt])
   @@map("service_complaint_activities")
 }
 
@@ -1098,6 +1151,7 @@ model ServiceWarrantyDecision {
 model ServiceSerialIndex {
   id               String   @id @default(uuid())
   normalizedSerial String   @unique
+  orgId            String?
   serialNumber     String
   productId        String?
   soldOutletId     String?
@@ -1110,6 +1164,7 @@ model ServiceSerialIndex {
   product    Product? @relation(fields: [productId], references: [id])
   soldOutlet Outlet?  @relation(fields: [soldOutletId], references: [id])
 
+  @@index([orgId, normalizedSerial])
   @@index([soldOutletId, updatedAt])
   @@index([productId, updatedAt])
   @@map("service_serial_index")
@@ -1118,28 +1173,34 @@ model ServiceSerialIndex {
 model ServiceSerialEvent {
   id               String   @id @default(uuid())
   normalizedSerial String
-  eventType        String
-  entityType       String
+  orgId            String?
+  eventType        ServiceSerialEventType
+  entityType       ServiceSerialEntityType
   entityId         String
   eventAt          DateTime @default(now())
   meta             Json?
   createdAt        DateTime @default(now())
 
+  @@unique([normalizedSerial, entityType, entityId, eventType])
+  @@index([orgId, normalizedSerial, eventAt])
   @@index([normalizedSerial, eventAt])
   @@index([entityType, entityId])
   @@map("service_serial_events")
 }
 
 model ServiceComplaintSequence {
-  year         Int @id
-  lastSequence Int @default(0)
+  orgId        String @default("")
+  year         Int
+  lastSequence Int    @default(0)
 
+  @@id([orgId, year])
   @@map("service_complaint_sequences")
 }
 
 model ServiceMachineClient {
   id             String                     @id @default(uuid())
   clientId       String                     @unique
+  orgId          String?
   name           String
   scopes         String[]                   @default([])
   secretHash     String
@@ -1155,6 +1216,7 @@ model ServiceMachineClient {
   createdBy User?                      @relation("ServiceMachineClientCreatedBy", fields: [createdById], references: [id])
   auditLogs  ServiceMachineClientAudit[]
 
+  @@index([orgId, status, createdAt])
   @@index([status, createdAt])
   @@map("service_machine_clients")
 }
@@ -1163,6 +1225,7 @@ model ServiceMachineClient {
 
 model ServiceFormTemplate {
   id          String   @id @default(uuid())
+  orgId       String?
   name        String
   description String?
   version     Int      @default(1)
@@ -1175,6 +1238,7 @@ model ServiceFormTemplate {
   fields      ServiceFormTemplateField[]
   submissions ServiceFormSubmission[]
 
+  @@index([orgId, isActive, createdAt])
   @@index([isActive, createdAt])
   @@map("service_form_templates")
 }
@@ -1209,15 +1273,15 @@ model ServiceFormSubmission {
   isDisabled    Boolean  @default(false)
   disabledReason String?
   submittedAt   DateTime @default(now())
-  createdAt     DateTime @default(now())
 
   complaint   ServiceComplaint    @relation(fields: [complaintId], references: [id], onDelete: Cascade)
-  template    ServiceFormTemplate @relation(fields: [templateId], references: [id])
+  template    ServiceFormTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
   submittedBy User                @relation("ServiceFormSubmittedBy", fields: [submittedById], references: [id])
   testReport  ServiceTestReport?  @relation(fields: [testReportId], references: [id])
   values      ServiceFormSubmissionValue[]
 
-  @@index([complaintId, createdAt])
+  @@index([complaintId, submittedAt])
+  @@index([submittedById, submittedAt])
   @@index([testReportId])
   @@map("service_form_submissions")
 }
@@ -1233,7 +1297,7 @@ model ServiceFormSubmissionValue {
   createdAt       DateTime @default(now())
 
   submission ServiceFormSubmission    @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  field      ServiceFormTemplateField @relation(fields: [fieldId], references: [id])
+  field      ServiceFormTemplateField @relation(fields: [fieldId], references: [id], onDelete: Restrict)
 
   @@unique([submissionId, fieldKey])
   @@index([submissionId])

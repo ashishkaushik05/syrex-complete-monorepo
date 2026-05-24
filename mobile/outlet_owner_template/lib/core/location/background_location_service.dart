@@ -81,16 +81,25 @@ void _onStart(ServiceInstance service) async {
   const storage = FlutterSecureStorage();
   String? clientShiftId = await storage.read(key: 'active_client_shift_id');
 
-  // Listen for stop signal.
+  // Declare before the stop listener so the closure can capture and cancel it.
+  StreamSubscription<Position>? positionSubscription;
+
+  // Listen for stop signal — cancel position stream then stop the service.
   service.on(_kStopService).listen((_) async {
+    await positionSubscription?.cancel();
+    positionSubscription = null;
     await service.stopSelf();
   });
 
-  // Listen for clientShiftId update from main isolate.
-  service.on(_kClientShiftId).listen((event) {
+  // Listen for clientShiftId update from main isolate; persist to storage so
+  // it survives an isolate restart.
+  service.on(_kClientShiftId).listen((event) async {
     if (event == null) return;
     final id = event[_kTokenKey] as String?;
-    if (id != null && id.isNotEmpty) clientShiftId = id;
+    if (id != null && id.isNotEmpty) {
+      clientShiftId = id;
+      await storage.write(key: _kClientShiftId, value: id);
+    }
   });
 
   // Token sync is kept for compatibility but upload no longer happens here.
@@ -105,7 +114,7 @@ void _onStart(ServiceInstance service) async {
 
   const uuid = Uuid();
 
-  Geolocator.getPositionStream(
+  positionSubscription = Geolocator.getPositionStream(
     locationSettings: const LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 10,

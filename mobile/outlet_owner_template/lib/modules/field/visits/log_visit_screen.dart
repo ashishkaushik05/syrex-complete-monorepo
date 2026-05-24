@@ -86,7 +86,7 @@ class _LogVisitScreenState extends ConsumerState<LogVisitScreen> {
             description: _descController.text.trim().isEmpty
                 ? null
                 : _descController.text.trim(),
-            recordedAt: _position!.timestamp,
+            recordedAt: _position!.timestamp ?? DateTime.now(),
           );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

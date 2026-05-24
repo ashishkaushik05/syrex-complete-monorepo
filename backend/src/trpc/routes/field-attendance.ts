@@ -60,9 +60,9 @@ export const fieldAttendanceRouter = createTRPCRouter({
       z.object({
         userId: z.string().uuid().optional(),
         orgId: z.string().optional(),
-        date: z.string().optional(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD").optional(),
         status: attendanceStatusSchema,
-        note: z.string().optional()
+        note: z.string().min(1).optional()
       })
     )
     .output(attendanceSchema)
@@ -106,11 +106,11 @@ export const fieldAttendanceRouter = createTRPCRouter({
       z.object({
         userId: z.string().uuid().optional(),
         orgId: z.string().optional(),
-        date: z.string().optional(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD").optional(),
         from: z.string().optional(),
         to: z.string().optional(),
         status: attendanceStatusSchema.optional(),
-        limit: z.number().int().min(1).max(500).default(100)
+        limit: z.number().int().min(1).max(200).default(100)
       })
     )
     .output(z.array(attendanceSchema))
@@ -159,7 +159,7 @@ export const fieldAttendanceRouter = createTRPCRouter({
       z.object({
         id: z.string().uuid(),
         status: attendanceStatusSchema.optional(),
-        note: z.string().nullable().optional()
+        note: z.string().min(1).nullable().optional()
       })
     )
     .output(attendanceSchema)

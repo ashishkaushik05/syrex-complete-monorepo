@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../db/field_local_store.dart';
 import '../db/local_models.dart';
@@ -269,13 +270,22 @@ class FieldSyncWorker {
   }
 
   Future<void> _syncEnd(LocalShift shift) async {
+    final endedAt = shift.endedAt;
+    if (endedAt == null) {
+      // Cannot sync end without a recorded endedAt — skip and let the next
+      // sync attempt pick it up once the field is populated.
+      debugPrint(
+          '[SyncWorker] Cannot sync end: endedAt is null for shift ${shift.clientShiftId}');
+      return;
+    }
+
     try {
       await _dio.post(
         '/fieldShifts.syncEnd',
         data: jsonEncode({
           'json': {
             'clientShiftId': shift.clientShiftId,
-            'endedAt': shift.endedAt,
+            'endedAt': endedAt,
             'platform': 'flutter',
           }
         }),
@@ -283,7 +293,7 @@ class FieldSyncWorker {
       );
       await FieldLocalStore.instance.completeShift(
         clientShiftId: shift.clientShiftId,
-        endedAt: shift.endedAt!,
+        endedAt: endedAt,
       );
     } on DioException catch (e) {
       if (_isProcedureNotFound(e)) {
@@ -296,7 +306,7 @@ class FieldSyncWorker {
           );
           await FieldLocalStore.instance.completeShift(
             clientShiftId: shift.clientShiftId,
-            endedAt: shift.endedAt!,
+            endedAt: endedAt,
           );
         } catch (_) {
           _consecutiveFailures++;

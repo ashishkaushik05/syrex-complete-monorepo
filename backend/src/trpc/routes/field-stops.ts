@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
@@ -59,8 +61,8 @@ export const fieldStopsRouter = createTRPCRouter({
       z.object({
         lat: z.number(),
         lng: z.number(),
-        reason: z.string().optional(),
-        notes: z.string().optional(),
+        reason: z.string().min(1).optional(),
+        notes: z.string().min(1).optional(),
         startedAt: z.string().datetime().optional()
       })
     )
@@ -100,7 +102,7 @@ export const fieldStopsRouter = createTRPCRouter({
     .input(
       z.object({
         stopId: z.string().uuid(),
-        notes: z.string().optional(),
+        notes: z.string().min(1).optional(),
         endedAt: z.string().datetime().optional()
       })
     )
@@ -108,21 +110,31 @@ export const fieldStopsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
 
-      const existing = await ctx.prisma.fieldStop.findFirst({
-        where: { id: input.stopId, agentId },
-        select: { id: true, endedAt: true }
-      });
-      if (!existing) throw apiError("NOT_FOUND", "Stop not found");
-      if (existing.endedAt) throw apiError("BAD_REQUEST", "Stop is already ended");
+      const orgId = ctx.actor.orgId;
+      if (!orgId) throw apiError("FORBIDDEN", "orgId required");
 
-      const stop = await ctx.prisma.fieldStop.update({
-        where: { id: input.stopId },
-        data: {
-          endedAt: input.endedAt ? new Date(input.endedAt) : new Date(),
-          notes: input.notes ?? undefined
-        },
-        select: STOP_SELECT
-      });
+      let stop;
+      try {
+        stop = await ctx.prisma.fieldStop.update({
+          where: { id: input.stopId, agentId, endedAt: null },
+          data: {
+            endedAt: input.endedAt ? new Date(input.endedAt) : new Date(),
+            notes: input.notes ?? undefined
+          },
+          select: STOP_SELECT
+        });
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2025"
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Stop not found or already ended"
+          });
+        }
+        throw err;
+      }
       return toStop(stop);
     }),
 

@@ -44,7 +44,16 @@ const scheduleInputSchema = z.object({
   autoStartTime: z
     .string()
     .regex(/^\d{2}:\d{2}$/, "Must be HH:MM format"),
-  timezone: z.string().default("Asia/Kolkata"),
+  timezone: z
+    .string()
+    .default("Asia/Kolkata")
+    .refine(
+      (tz) => {
+        try { Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; }
+        catch { return false; }
+      },
+      { message: "Invalid IANA timezone" }
+    ),
   isEnabled: z.boolean().default(true)
 });
 
@@ -93,7 +102,7 @@ export const fieldScheduleRouter = createTRPCRouter({
     .input(
       z.object({
         orgId: z.string().optional(),
-        limit: z.number().int().min(1).max(500).default(100)
+        limit: z.number().int().min(1).max(200).default(100)
       })
     )
     .output(z.array(scheduleSchema))

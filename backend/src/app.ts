@@ -82,7 +82,16 @@ export function createApp() {
       return c.json({ error: "Forbidden" }, 403);
     }
 
-    const orgId = c.req.header("x-org-id") ?? "*";
+    const requestedOrgId = c.req.header("x-org-id");
+    // Users without super-admin/cross-org perms may only subscribe to a specific org
+    // (org ID comes from client header — User model has no direct orgId field).
+    // Wildcard subscription is restricted to super-admins.
+    const canAccessAllOrgs =
+      perms.includes(SUPER_ADMIN_PERMISSION) || perms.includes("orgs:read");
+    if (!requestedOrgId && !canAccessAllOrgs) {
+      return c.json({ error: "x-org-id header required" }, 400);
+    }
+    const orgId = requestedOrgId ?? "*";
     const encoder = new TextEncoder();
     let ctrl: ReadableStreamDefaultController<Uint8Array>;
 

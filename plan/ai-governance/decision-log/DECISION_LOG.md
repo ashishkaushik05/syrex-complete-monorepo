@@ -4,6 +4,251 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260524-010
+- Decision ID: `DEC-20260524-010`
+- Model: `claude-sonnet-4-5`
+- Branch/Commit: `master@01036da`
+- Task: `Full FieldSense production-readiness audit (9 agents) and fix (6 agents)`
+- Decision: `Run comprehensive 9-agent parallel audit across every FieldSense layer, then apply fixes via 6 parallel fix agents.`
+- Rationale: `119 bugs found spanning backend tRPC, SSE/cron infra, Prisma schema, React web, Flutter mobile. Parallel agents provide full coverage efficiently.`
+- Alternatives Considered:
+  - `Sequential audit/fix` rejected — too slow for cross-layer system of this size.
+- Scope:
+  - `backend/src/app.ts` — SSE x-org-id security, graceful shutdown
+  - `backend/src/infra/sse.ts` — memory leak (empty Set), silent broadcast failures
+  - `backend/src/cron/field-auto-start.ts` — overlap lock, unhandled rejections, atomic shift+attendance
+  - `backend/src/cron/field-auto-close.ts` — overlap lock, bounded query, unhandled rejections
+  - `backend/src/index.ts` — SIGTERM/SIGINT graceful shutdown
+  - `backend/src/trpc/routes/field-stops.ts` — IDOR fix, atomic end, empty string validation
+  - `backend/src/trpc/routes/field-shifts.ts` — orgId guard, atomic start transaction
+  - `backend/src/trpc/routes/field-location.ts` — agentTrail org check, take limit, RDP bounds, N+1 fix
+  - `backend/src/trpc/routes/field-visits.ts` — missing orgId on outlet/customer, empty string
+  - `backend/src/trpc/routes/field-schedule.ts` — IANA timezone validation, limit cap
+  - `backend/src/trpc/routes/field-attendance.ts` — date format validation, empty string, limit cap
+  - `backend/src/trpc/routes/field-sync-status.ts` — limit cap
+  - `schema.prisma` — Shift index, cascade deletes on Location/Visit/Stop, receivedAt index, SyncStatus.isActive
+  - `web/src/lib/api.ts` — SSE dev URL fix, exponential backoff reconnect
+  - `web/src/pages/dashboard/FieldSenseLiveMapPage.tsx` — race condition, map bounds re-fit, error boundary
+  - `web/src/pages/dashboard/FieldSenseAttendancePage.tsx` — success toast
+  - `mobile/outlet_owner_template/lib/core/auth/auth_repository.dart` — JSON injection → jsonEncode
+  - `mobile/outlet_owner_template/lib/core/location/background_location_service.dart` — stream leak
+  - `mobile/outlet_owner_template/lib/core/field/field_sync_worker.dart` — null assertion crash
+  - `mobile/outlet_owner_template/lib/core/field/field_shift_controller.dart` — missing dispose()
+  - `mobile/outlet_owner_template/lib/core/db/field_local_store.dart` — DB migration handler
+  - `mobile/outlet_owner_template/lib/modules/field/visits/log_visit_screen.dart` — null timestamp guard
+- Status: `completed`
+- Completion Notes:
+  - Done: `9 audit agents — 119 bugs identified`
+  - Done: `6 fix agents — 40+ fixes applied across all layers`
+  - Done: `Backend typecheck clean (0 errors)`
+  - Done: `Web build clean (0 TS errors)`
+  - Done: `Flutter analyze clean (1 harmless dead_null_aware_expression warning)`
+  - Done: `Prisma schema validated`
+  - Not Done: `ShiftSchedule model/screen/provider missing in outlet_owner_template`
+  - Not Done: `fieldStops.start/end never called from mobile — stop UI not implemented`
+  - Not Done: `Rate limiting on location ingest not implemented`
+  - Not Done: `FieldLocation data retention/purge cron not implemented`
+- Impact/Risk:
+  - `Schema cascade deletes apply to existing data on next db push`
+  - `FieldSyncStatus.isActive column added — requires db push`
+  - `SSE endpoint now requires x-org-id header (400 if missing for non-admins)`
+  - `Shift start/end require orgId in context (400 if header missing)`
+  - `Trail capped at 50k points; truncated:true flag added to response`
+  - `List limits reduced from 500→200 on attendance/schedule/sync-status`
+- Cleanup Required:
+  - `Implement ShiftSchedule model+repo+provider+screen in outlet_owner_template (~4h effort)`
+  - `Implement mobile stop-logging UI (fieldStops.start/end)`
+  - `Add rate limiting middleware for location ingest`
+  - `Add FieldLocation data retention cron (receivedAt < 90d)`
+  - `Wire fieldSyncStatus.list to web dashboard`
+  - `Update DEC-20260520-001 status to partial (V1 fallback still present in mobile)`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `ashish + next session`
+- Owner Timestamp: `claude-sonnet-4-5 @ 2026-05-24`
+
+---
+
+## DEC-20260524-010
+- Decision ID: `DEC-20260524-010`
+- Model: `codex`
+- Branch/Commit: `master@01036da`
+- Task: `Fix local serviceComplaints.create 500 from sequence schema drift`
+- Decision: `Apply the minimal non-destructive local database changes needed for the checked-in complaint creation path and fix nextComplaintNumber raw SQL to use the actual Prisma-mapped camelCase column names.`
+- Rationale: `The service create route uses nextComplaintNumber before inserting complaints. The local table is behind the schema and lacks orgId, and the helper's raw SQL currently uses org_id/last_sequence even though schema.prisma defines orgId/lastSequence columns. Fixing both keeps one org-scoped complaint sequence path without route branching.`
+- Alternatives Considered:
+  - `Change nextComplaintNumber back to year-only sequences` rejected because the checked-in schema defines org-scoped complaint sequences and org-scoped complaints.
+  - `Run backend db:reset` rejected because it would destroy local development data.
+  - `Run full prisma db push` rejected for this immediate fix because it is already blocked by a separate populated service_assignment_history.action enum conversion risk.
+- Scope:
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+  - `backend/src/trpc/routes/service-shared.ts`
+  - `Local PostgreSQL schema: service_complaint_sequences`
+  - `Local PostgreSQL schema: dispatch_line_serials`
+  - `Local PostgreSQL schema: service_serial_index.orgId`
+  - `Local PostgreSQL schema: service_serial_events.orgId`
+  - `Local verification of serviceComplaints.create dependencies`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Confirmed service_complaint_sequences has only year and lastSequence locally while schema.prisma expects orgId, year, lastSequence with composite primary key.`
+  - Done: `Confirmed nextComplaintNumber raw SQL uses org_id/last_sequence, which conflicts with schema.prisma field mapping for orgId/lastSequence.`
+  - Done: `Confirmed the create path's serial indexing dependencies are also behind schema.prisma: dispatch_line_serials is missing and service_serial_index/service_serial_events lack orgId.`
+  - Not Done: `Code fix, database adjustment, mutation-path verification, and final decision update pending.`
+- Impact/Risk:
+  - `Existing sequence rows will be assigned the default empty orgId, matching the create path when ctx.actor.orgId is absent.`
+  - `This does not complete the broader full-schema migration blocked by unrelated enum conversion work.`
+- Cleanup Required:
+  - `Finalize this decision after local schema adjustment and verification.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-24T15:08:50Z`
+
+---
+
+## DEC-20260524-009
+- Decision ID: `DEC-20260524-009`
+- Model: `codex`
+- Branch/Commit: `master@01036da`
+- Task: `Fix local bun dev service complaint Prisma orgId column error`
+- Decision: `Synchronize the local PostgreSQL schema to the checked-in Prisma schema with a non-destructive Prisma db push, because the generated Prisma client and service routes expect ServiceComplaint.orgId but the current local service_complaints table does not have that column.`
+- Rationale: `Runtime failure comes from schema drift, not an incorrect route query: service complaints are now org-scoped in schema and code, while db pull shows the live local table is missing orgId. Applying the schema keeps the single primary service implementation path intact.`
+- Alternatives Considered:
+  - `Remove orgId reads and filters from service routes` rejected because that would undo the current multi-tenant service path and conflict with other service routes already using orgId checks.
+  - `Run backend db:reset` rejected because it force-resets the local database and may destroy existing development data.
+- Scope:
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+  - `Local PostgreSQL schema defined by backend/.env DATABASE_URL`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Confirmed live local service_complaints table is missing orgId via prisma db pull --print.`
+  - Done: `Attempted non-destructive prisma db push; Prisma refused because an unrelated populated service_assignment_history.action type conversion would require dropping/recreating a required column.`
+  - Done: `Applied the minimal non-destructive SQL fix: added nullable service_complaints."orgId" text column and service_complaints_orgId_status_createdAt_idx index.`
+  - Done: `Verified information_schema shows service_complaints."orgId" exists and Prisma serviceComplaint.findMany({ select: { id, orgId } }) succeeds.`
+  - Done: `Ran backend typecheck successfully.`
+  - Not Done: `No full Prisma schema push, forced reset, data backfill, or unrelated enum-column migration was performed.`
+- Impact/Risk:
+  - `Prisma db push may add additional pending columns, indexes, enums, or constraints from schema.prisma beyond only service_complaints.orgId.`
+  - `Existing service complaint rows will receive null orgId unless a later data backfill assigns tenant ownership.`
+- Cleanup Required:
+  - `Create a separate migration decision for service_assignment_history.action enum conversion before attempting a full db push against populated databases.`
+  - `Create a separate tenant backfill decision if existing service_complaints rows need non-null orgId ownership.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during current execution`
+- Owner Timestamp: `codex @ 2026-05-24T15:06:46Z`
+
+### DEC-20260524-009 Final Update
+- Decision ID: `DEC-20260524-009`
+- Model: `codex`
+- Branch/Commit: `master@01036da`
+- Task: `Fix local bun dev service complaint Prisma orgId column error`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Resolved the local runtime drift that caused Prisma to throw "The column service_complaints.orgId does not exist" by adding the expected nullable orgId column and matching index.`
+  - Done: `Confirmed Prisma can now read serviceComplaint rows selecting orgId.`
+  - Done: `Backend typecheck passes.`
+  - Not Done: `Did not run force reset or convert service_assignment_history.action because that is a separate data migration risk.`
+- Impact/Risk:
+  - `Existing service complaints are readable but have null orgId until explicitly backfilled.`
+  - `Full schema synchronization remains blocked by the separate service_assignment_history.action enum conversion.`
+- Cleanup Required:
+  - `Plan and execute a proper enum/data migration for service_assignment_history.action separately.`
+  - `Backfill service_complaints.orgId if tenant ownership is required for existing rows.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `repo owner/codex when scheduling schema migration cleanup`
+- Owner Timestamp: `codex @ 2026-05-24T15:07:36Z`
+
+---
+
+## DEC-20260524-008
+- Decision ID: `DEC-20260524-008`
+- Model: `claude-code`
+- Branch/Commit: `master@HEAD`
+- Task: `Fix SS-002: findSerialLegacyDispatchRows full-table scan — DispatchLineSerial normalization table`
+- Decision: `Option A — add DispatchLineSerial normalized join table mapping normalizedSerial → dispatchLineId with a B-tree index on normalizedSerial. Replace JS-layer filter with an indexed dispatchLineSerial.findMany({ where: { normalizedSerial } }) lookup.`
+- Rationale: `Option B (GIN index on serialNumbers JSON column) was ruled out because stored serial values are raw (e.g., "SN-001") while queries use normalized form (e.g., "SN001") — a JSONB @> containment check would not match across normalization boundaries. Option A stores the canonical normalized serial in a separate indexed column, enabling an O(log N) lookup. Also fixes the write path in dispatches.create to populate the table for new rows, and provides a backfill script for existing data.`
+- Alternatives Considered:
+  - `GIN index + @> JSONB containment (Option B)` rejected — serialNumbers stores raw serials; normalization strips non-alphanumerics, so SN-001 ≠ SN001 at DB level. Would require a computed expression index on the normalized form, which Prisma does not support natively.
+  - `Query timeout guard on the full-table scan` rejected — band-aid; OOM/timeout still occurs as table grows.
+- Scope (files changed):
+  - `schema.prisma` — new DispatchLineSerial model + relation on DispatchLine
+  - `backend/src/trpc/routes/service-shared.ts` — findSerialLegacyDispatchRows replaced with indexed lookup
+  - `backend/src/trpc/routes/dispatches.ts` — create mutation populates dispatch_line_serials inside the transaction
+  - `backend/src/scripts/backfill-dispatch-line-serials.ts` — one-time backfill for existing dispatch_lines
+- Status: `in_progress`
+- Impact/Risk:
+  - `findSerialLegacyDispatchRows` now returns only rows present in dispatch_line_serials. Run backfill script before deploying to production.
+  - New dispatches correctly populate the table going forward.
+- Cleanup Required:
+  - Run backfill script: `cd backend && bun src/scripts/backfill-dispatch-line-serials.ts`
+  - Verify counts: `SELECT COUNT(*) FROM dispatch_line_serials` should equal total serial entries across all dispatch_lines.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Status: `completed`
+- Completion Notes: Schema updated, Prisma client regenerated, typecheck passes clean. Backfill script at backend/src/scripts/backfill-dispatch-line-serials.ts must be run against production DB before deploy.
+- Next Cleanup Owner: `ashish`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-24T00:00:00Z`
+
+---
+
+## DEC-20260524-007
+- Decision ID: `DEC-20260524-007`
+- Model: `claude-code`
+- Branch/Commit: `master@HEAD`
+- Task: `Service module complete production-readiness audit — 9-agent parallel audit + 9-agent parallel fix pass`
+- Decision: `Ran 9 simultaneous audit agents across all service module files (backend routes, schema, RBAC, frontend pages, frontend components). Found 285 bugs. Immediately spawned 9 fix agents to address all critical/high/medium issues. Schema regenerated. Typecheck and lint both pass clean.`
+- Rationale: `The service module had accumulated significant quality debt: a complete logic break in warranty approval (status never advanced), a multi-tenant IDOR on machine client credentials, a full-table scan in serial resolution, atomic/concurrency failures on complaint numbering and credential rotation, missing Prisma indexes on every service model, missing RBAC enforcement (service:assign never checked), and pervasive missing permission guards on frontend panels.`
+- Alternatives Considered:
+  - `Sequential file-by-file review` rejected — too slow; parallel agents gave full coverage simultaneously.
+  - `Fixing only critical bugs` rejected — high/medium bugs compound into production incidents; fixing all in one pass is more efficient.
+  - `Adding orgId to all service models in this pass` deferred — architectural migration requiring data backfill strategy; flagged as P1 follow-up.
+- Scope (files changed):
+  - `backend/src/trpc/routes/service-shared.ts` — atomic sequence via INSERT ON CONFLICT, telephonic_close guard, meta null fix, serial casing preservation, event dedup guard
+  - `backend/src/trpc/routes/service-complaints.ts` — tabCounts Zod schema (assigned), transactional update, filter-scoped counts, service:assign enforcement, cancel dedup, 50-line cap, audit diff
+  - `backend/src/trpc/routes/service-warranty.ts` — SW-002 resolveTransition return captured (approve now advances status), re-approval guard, TOCTOU fix, productId dedup, phantom event filter
+  - `backend/src/trpc/routes/service-integrations.ts` — atomic rotation in transaction, double-revocation guard, Prisma error catch in middleware, scope registry, clientId format validation
+  - `backend/src/trpc/routes/service-assignments.ts` — terminal-status guard on reassign, user existence validation, neither-user refine, superjson date type fix, dead guard removal
+  - `backend/src/trpc/routes/service-tests.ts` — complaintLineId ownership check, updateMany complaintId scope, superjson date type fix
+  - `backend/src/trpc/routes/service-forms.ts` — closed complaint guard, duplicate fieldKey detection, validationRules null via DbNull, empty select options, ISO date regex, ReDoS guard, P2002 to CONFLICT
+  - `backend/src/trpc/trpc.ts` — Prisma error catch in serviceCredentialMiddleware
+  - `schema.prisma` — 4 new enums (ServiceTestVerdict, ServiceAssignmentAction, ServiceSerialEventType, ServiceSerialEntityType), 6 missing indexes, @@unique on ServiceSerialEvent, onDelete: Restrict on form FKs, duplicate timestamp removed
+  - `web/src/pages/dashboard/ServiceComplaintsPage.tsx` — search debounce, permission guard on create
+  - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx` — permission guards on assign/warranty/form panels
+  - `web/src/pages/dashboard/ServiceFormsPage.tsx` — permission guards, confirm dialog replacing window.confirm(), onError handling
+  - `web/src/pages/dashboard/ServiceWarrantyPage.tsx` — permission guard, reduce() crash fix
+  - `web/src/pages/dashboard/ServiceSerialsPage.tsx` — refactored to useQuery
+  - `web/src/components/service/DynamicServiceForm.tsx` — submit validation race fixed (synchronous error recompute), label/id associations
+  - `web/src/components/service/ServiceStatusBadge.tsx` — neutral fallback for unknown statuses
+  - `web/src/pages/dashboard/ServiceIntegrationsPage.tsx` — rotate confirmation dialog, per-row pending state, memory leak fix, revoke Dialog
+- Completion Notes:
+  - Done: All 22 critical/high bugs across backend fixed and typechecking clean.
+  - Done: Schema enums, indexes, constraints — Prisma regenerated successfully.
+  - Done: Frontend permission guards, search debounce, confirm dialogs, memory leaks.
+  - Deferred: `orgId` on ServiceComplaint/SerialIndex/MachineClient/FormTemplate — architectural migration, requires data backfill plan. Tracked as P1.
+  - Deferred: `findSerialLegacyDispatchRows` full-table scan (SS-002) — requires GIN index on JSON column or DispatchLineSerial normalization table. Tracked as P1.
+  - Deferred: `x-service-client-secret` header → Authorization Bearer migration (SI-001) — protocol change, requires coordinated client update. Tracked as P1.
+- Impact/Risk:
+  - `service:assign` is now enforced — users who were using `transition` to assign without the permission will get FORBIDDEN. Check role assignments.
+  - `telephonic_close` from `test_result_submitted` now throws CONFLICT — was previously silently allowed.
+  - `ServiceFormSubmission.createdAt` removed — any direct DB queries using this column name will break. Use `submittedAt`.
+  - `ServiceTestReport.verdict`, `ServiceAssignmentHistory.action`, `ServiceSerialEvent.eventType/entityType` are now typed enums — any existing rows with non-enum values will fail Prisma reads until migrated.
+- Cleanup Required:
+  - Run `prisma migrate` against staging DB to apply schema changes before deploying.
+  - Verify existing `verdict`, `action`, `eventType`, `entityType` values in DB match the new enums.
+  - Assign roles with `service:assign` to appropriate users.
+  - P1: orgId migration design doc.
+  - P1: DispatchLine serial normalization.
+  - P1: Machine client auth protocol change.
+- Dead Paths Introduced: none
+- Conflicting Implementations: none
+- Next Cleanup Owner: `ashish`
+- Status: `completed`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-24T00:00:00Z`
+
+---
+
 ## DEC-20260522-006
 - Decision ID: `DEC-20260522-006`
 - Model: `claude-code`
