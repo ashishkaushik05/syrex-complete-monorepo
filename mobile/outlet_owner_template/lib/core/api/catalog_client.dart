@@ -81,7 +81,7 @@ class CatalogClient {
 
   Future<List<Brand>> brands() async {
     final res = await _dio.get(
-      '/brands.list',
+      '/trpc/brands.list',
       queryParameters: {'input': '{"json":{"limit":100}}'},
     );
     final data = _extract(res.data);
@@ -92,7 +92,7 @@ class CatalogClient {
 
   Future<List<Category>> categories() async {
     final res = await _dio.get(
-      '/categories.list',
+      '/trpc/categories.list',
       queryParameters: {'input': '{"json":{"limit":100}}'},
     );
     final data = _extract(res.data);
@@ -115,7 +115,7 @@ class CatalogClient {
     if (cursor != null) params['cursor'] = cursor;
 
     final res = await _dio.get(
-      '/products.list',
+      '/trpc/products.list',
       queryParameters: {'input': '{"json":${jsonEncode(params)}}'},
     );
     final data = _extract(res.data);
@@ -130,4 +130,28 @@ class CatalogClient {
 
 final catalogClientProvider = Provider<CatalogClient>((ref) {
   return CatalogClient(ref.watch(dioProvider));
+});
+
+final brandsProvider = FutureProvider.autoDispose<List<Brand>>((ref) {
+  return ref.watch(catalogClientProvider).brands();
+});
+
+final categoriesProvider = FutureProvider.autoDispose<List<Category>>((ref) {
+  return ref.watch(catalogClientProvider).categories();
+});
+
+final productsProvider = FutureProvider.autoDispose.family<PagedResult<Product>, ({String? brandId, String? categoryId, String? q})>((ref, params) {
+  return ref.watch(catalogClientProvider).products(
+    brandId: params.brandId,
+    categoryId: params.categoryId,
+    q: params.q,
+  );
+});
+
+final productDetailProvider = FutureProvider.autoDispose.family<Product, String>((ref, productId) async {
+  final result = await ref.watch(catalogClientProvider).products();
+  return result.items.firstWhere(
+    (p) => p.id == productId,
+    orElse: () => throw Exception('Product not found'),
+  );
 });

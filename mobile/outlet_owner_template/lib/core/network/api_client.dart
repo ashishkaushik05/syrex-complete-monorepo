@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../storage/token_store.dart';
 import '../config/app_env.dart';
@@ -34,6 +35,17 @@ final dioProvider = Provider<Dio>((ref) {
         if (tokens != null) {
           options.headers['Authorization'] = 'Bearer ${tokens.accessToken}';
         }
+        // Inject org context
+        try {
+          final userJson = await const FlutterSecureStorage().read(key: 'cached_user_json');
+          if (userJson != null) {
+            final user = jsonDecode(userJson) as Map<String, dynamic>;
+            final orgId = user['orgId'] as String?;
+            if (orgId != null) {
+              options.headers['x-org-id'] = orgId;
+            }
+          }
+        } catch (_) {}
         handler.next(options);
       },
       onError: (error, handler) async {
@@ -59,13 +71,12 @@ final dioProvider = Provider<Dio>((ref) {
             }
 
             final refreshDio = Dio(BaseOptions(baseUrl: config.baseUrl));
-            final refreshResponse = await refreshDio.get(
-              '/auth.refresh',
-              queryParameters: {
-                'input': jsonEncode({
-                  'json': {'refreshToken': current.refreshToken},
-                }),
-              },
+            final refreshResponse = await refreshDio.post(
+              '/trpc/auth.refresh',
+              data: jsonEncode({
+                'json': {'refreshToken': current.refreshToken},
+              }),
+              options: Options(headers: {'Content-Type': 'application/json'}),
             );
 
             final refreshData = refreshResponse.data;
