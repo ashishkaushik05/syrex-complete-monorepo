@@ -23,7 +23,7 @@ echo "▶ Pulling latest code..."
 cd $REPO
 git fetch origin master
 git reset --hard origin/master
-git clean -fd --exclude=backend/.env --exclude=backend/node_modules --exclude=web/node_modules
+git clean -fd --exclude=backend/.env --exclude=backend/node_modules --exclude=web/node_modules --exclude=logs
 
 # Restore preserved .env
 if [ -f "$ENV_BACKUP" ]; then
