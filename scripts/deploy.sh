@@ -39,9 +39,16 @@ cd /srv/syrex-api/backend
 $BUN install --frozen-lockfile
 
 echo ""
-echo "▶ Regenerating Prisma client..."
+echo "▶ Syncing DB schema + regenerating Prisma client..."
 cd /srv/syrex-api
 echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
+# Push schema changes (additive only — no force-reset, no data loss for nullable/defaulted columns)
+DATABASE_URL=$(grep DATABASE_URL $ENV_FILE | cut -d= -f2-) \
+  PRISMA_GENERATE_SKIP_AUTOINSTALL=1 \
+  backend/node_modules/.bin/prisma db push \
+  --schema schema.prisma \
+  --skip-generate \
+  --accept-data-loss 2>&1 | tail -5
 backend/node_modules/.bin/prisma generate --schema schema.prisma
 rm -f package.json
 
