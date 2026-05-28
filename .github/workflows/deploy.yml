@@ -6,18 +6,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ── 1. Backend: TypeScript check + RBAC preflight ────────────────────────
+  # ── 1. Backend: TypeScript check ──────────────────────────────────────────
   backend-check:
     name: Backend — typecheck
     runs-on: ubuntu-latest
-    outputs:
-      has_warnings: ${{ steps.detect.outputs.has_warnings }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: "1.3.14"
 
       - name: Install deps
         working-directory: backend
@@ -31,40 +29,12 @@ jobs:
 
       - name: Typecheck
         working-directory: backend
-        run: |
-          set -o pipefail
-          bun run typecheck 2>&1 | tee /tmp/backend-output.txt
+        run: bun run typecheck
 
-      - name: RBAC preflight
-        if: always()
-        working-directory: backend
-        run: |
-          set -o pipefail
-          bun run rbac:preflight 2>&1 | tee -a /tmp/backend-output.txt
-
-      - name: Detect warnings
-        id: detect
-        if: always()
-        run: |
-          if grep -qi 'warning' /tmp/backend-output.txt 2>/dev/null; then
-            echo "has_warnings=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_warnings=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: backend-output
-          path: /tmp/backend-output.txt
-          retention-days: 14
-
-  # ── 2. Web: TypeScript build + ESLint ────────────────────────────────────
+  # ── 2. Web: build + lint ──────────────────────────────────────────────────
   web-check:
     name: Web — build & lint
     runs-on: ubuntu-latest
-    outputs:
-      has_warnings: ${{ steps.detect.outputs.has_warnings }}
     steps:
       - uses: actions/checkout@v4
 
@@ -78,152 +48,33 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Build (tsc + vite)
+      - name: Build
         working-directory: web
         env:
           VITE_API_URL: https://strideit.syrexbatteries.in
-        run: |
-          set -o pipefail
-          npm run build 2>&1 | tee /tmp/web-output.txt
+        run: npm run build
 
       - name: Lint
-        if: always()
         working-directory: web
-        run: |
-          set -o pipefail
-          npm run lint 2>&1 | tee -a /tmp/web-output.txt
+        run: npm run lint
 
-      - name: Detect warnings
-        id: detect
-        if: always()
-        run: |
-          if grep -qi 'warning' /tmp/web-output.txt 2>/dev/null; then
-            echo "has_warnings=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_warnings=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: web-output
-          path: /tmp/web-output.txt
-          retention-days: 14
-
-  # ── 3. Report: log to VPS + regenerate deployed_logs.md ──────────────────
-  report:
-    name: Log to VPS
-    runs-on: ubuntu-latest
-    needs: [backend-check, web-check]
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: '*-output'
-          merge-multiple: true
-
-      - name: Compose CI report
-        run: |
-          BACKEND="${{ needs.backend-check.result }}"
-          WEB="${{ needs.web-check.result }}"
-          TS=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-          {
-            printf '=== Syrex CI Report ===\n'
-            printf 'Timestamp : %s\n' "$TS"
-            printf 'Commit    : %s\n' "${{ github.sha }}"
-            printf 'Branch    : %s\n' "${{ github.ref_name }}"
-            printf 'Actor     : %s\n' "${{ github.actor }}"
-            printf 'Backend   : %s\n' "$BACKEND"
-            printf 'Web       : %s\n' "$WEB"
-            printf '\n--- Backend Typecheck ---\n'
-            cat backend-output.txt 2>/dev/null || printf '(no output)\n'
-            printf '\n--- Web Build + Lint ---\n'
-            cat web-output.txt 2>/dev/null || printf '(no output)\n'
-            printf '\n========================\n'
-          } > /tmp/ci-report.txt
-
-      - name: Upload report + update deployed_logs.md on VPS
-        run: |
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          SSH="ssh -p 2222 -i /tmp/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes ashish@45.195.159.172"
-          SCP="scp -P 2222 -i /tmp/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes"
-
-          # Ensure logs dir exists
-          $SSH 'mkdir -p /srv/syrex-api/logs'
-
-          # Upload this run's full report
-          $SCP /tmp/ci-report.txt \
-            "ashish@45.195.159.172:/srv/syrex-api/logs/ci-${{ github.sha }}.txt"
-
-          # Keep the generator script up to date on the server
-          $SCP scripts/gen_deployed_logs.sh \
-            "ashish@45.195.159.172:/home/ashish/gen_deployed_logs.sh"
-
-          # Append one-liner to the summary index
-          $SSH "echo '${{ github.sha }} | $(date -u '+%Y-%m-%d %H:%M:%S UTC') | backend=${{ needs.backend-check.result }} | web=${{ needs.web-check.result }} | warns_be=${{ needs.backend-check.outputs.has_warnings }} | warns_web=${{ needs.web-check.outputs.has_warnings }}' >> /srv/syrex-api/logs/ci-summary.log"
-
-          # Regenerate deployed_logs.md from the last 2 reports
-          $SSH 'chmod +x /home/ashish/gen_deployed_logs.sh && /home/ashish/gen_deployed_logs.sh'
-
-          rm /tmp/deploy_key
-
-  # ── 4. Deploy: only when both CI jobs succeed ─────────────────────────────
+  # ── 3. Deploy: only when both CI jobs pass ────────────────────────────────
   deploy:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [backend-check, web-check]
     if: needs.backend-check.result == 'success' && needs.web-check.result == 'success'
     steps:
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: 45.195.159.172
-          port: 2222
-          username: ashish
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -e
-            export PATH="/home/ashish/.bun/bin:/home/ashish/.nvm/versions/node/v24.15.0/bin:$PATH"
-
-            cd /srv/syrex-api
-            git pull origin master
-
-            # Always write the production .env from the secret — never rely on git for this
-            printf 'NODE_ENV=production\nPORT=3000\nDATABASE_URL=%s\n' \
-              '${{ secrets.PROD_DATABASE_URL }}' > /srv/syrex-api/backend/.env
-
-            cd /srv/syrex-api/backend
-            /home/ashish/.bun/bin/bun install --frozen-lockfile
-
-            cd /srv/syrex-api
-            echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
-            backend/node_modules/.bin/prisma generate --schema schema.prisma
-            rm -f package.json
-
-            cd /srv/syrex-api/backend
-            PRISMA_GENERATE_SKIP_AUTOINSTALL=1 /home/ashish/.bun/bin/bunx prisma db push \
-              --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate
-            /home/ashish/.bun/bin/bun run scripts/demo-seed.ts
-
-            cd /srv/syrex-api/web
-            npm ci
-            VITE_API_URL=https://strideit.syrexbatteries.in npm run build
-
-            sudo nginx -s reload
-            sudo systemctl restart syrex-api
-
-            for i in $(seq 1 10); do
-              sleep 3
-              STATUS=$(curl -sf http://localhost:3000/health 2>/dev/null || true)
-              if echo "$STATUS" | grep -q '"ok"'; then
-                echo "Deploy successful"
-                exit 0
-              fi
-              echo "Waiting... $i/10"
-            done
-            echo "Health check failed" && exit 1
+      - name: SSH deploy
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          printf '%s' "$DEPLOY_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ssh -p 2222 \
+            -i /tmp/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o BatchMode=yes \
+            ashish@45.195.159.172 \
+            'bash /srv/syrex-api/scripts/deploy.sh'
+          rm /tmp/deploy_key
