@@ -1,19 +1,36 @@
 #!/usr/bin/env bash
 # Deploy script — run on the VPS as user ashish.
-# Called by GitHub Actions on every master push that passes CI.
-# Does NOT touch .env or reset the database.
+# Triggered by GitHub Webhook (push to master) via syrex-webhook.service.
+# Never resets the database. Preserves backend/.env across git operations.
 set -euo pipefail
 
 export PATH="/home/ashish/.bun/bin:$PATH"
 BUN=/home/ashish/.bun/bin/bun
+REPO=/srv/syrex-api
+ENV_FILE=$REPO/backend/.env
+ENV_BACKUP=/tmp/syrex-env-backup
 
 echo "=== Deploy started at $(date -u '+%Y-%m-%d %H:%M UTC') ==="
-echo "    commit: $(cd /srv/syrex-api && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+echo "    commit: $(cd $REPO && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+# Preserve backend/.env (tracked in git but managed separately on server)
+if [ -f "$ENV_FILE" ]; then
+  cp "$ENV_FILE" "$ENV_BACKUP"
+fi
 
 echo ""
 echo "▶ Pulling latest code..."
-cd /srv/syrex-api
-git pull origin master
+cd $REPO
+git fetch origin master
+git reset --hard origin/master
+git clean -fd --exclude=backend/.env --exclude=backend/node_modules --exclude=web/node_modules
+
+# Restore preserved .env
+if [ -f "$ENV_BACKUP" ]; then
+  cp "$ENV_BACKUP" "$ENV_FILE"
+  rm "$ENV_BACKUP"
+fi
+
 echo "    now at: $(git rev-parse --short HEAD)"
 
 echo ""
