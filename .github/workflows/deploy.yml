@@ -5,8 +5,60 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# NOTE: GitHub Actions is disabled at the account level for this private repo
+# (startup_failure on all runs). Actual deploys are triggered via GitHub Webhook
+# → https://strideit.syrexbatteries.in/webhook/github → scripts/deploy.sh
+# This file documents CI intent; re-enable Actions when billing is resolved.
+
 jobs:
-  hello:
+  # ── 1. Backend: TypeScript check ──────────────────────────────────────────
+  backend-check:
+    name: Backend — typecheck
     runs-on: self-hosted
     steps:
-      - run: echo "runner alive"
+      - uses: actions/checkout@v4
+
+      - name: Install backend deps
+        working-directory: backend
+        run: /home/ashish/.bun/bin/bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: |
+          echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
+          backend/node_modules/.bin/prisma generate --schema schema.prisma
+          rm package.json
+
+      - name: Typecheck
+        working-directory: backend
+        run: /home/ashish/.bun/bin/bun run typecheck
+
+  # ── 2. Web: build + lint ──────────────────────────────────────────────────
+  web-check:
+    name: Web — build & lint
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Build
+        working-directory: web
+        env:
+          VITE_API_URL: https://strideit.syrexbatteries.in
+        run: npm run build
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+  # ── 3. Deploy: only when both CI jobs pass ────────────────────────────────
+  deploy:
+    name: Deploy to Production
+    runs-on: self-hosted
+    needs: [backend-check, web-check]
+    if: needs.backend-check.result == 'success' && needs.web-check.result == 'success'
+    steps:
+      - name: Run deploy script
+        run: bash /srv/syrex-api/scripts/deploy.sh
