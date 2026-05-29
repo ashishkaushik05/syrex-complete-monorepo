@@ -1,6 +1,20 @@
+import type { PrismaClient } from "@prisma/client";
 import type { TrpcContext } from "../context";
 import { apiError } from "../error";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+
+export async function assertFieldEnabled(prisma: PrismaClient, userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { isFieldEnabled: true, userType: true }
+  });
+  if (!user?.isFieldEnabled) {
+    throw apiError("FORBIDDEN", "Field Sense not enabled for this user");
+  }
+  if (user.userType !== "internal") {
+    throw apiError("FORBIDDEN", "Field Sense is only available to internal users");
+  }
+}
 
 export const MAX_LOCATION_ACCURACY_METERS = 10_000;
 export const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
@@ -24,7 +38,7 @@ export function resolveReadOrgId(
   ctx: TrpcContext,
   requestedOrgId?: string | null
 ) {
-  if (canCrossOrg(ctx)) {
+  if (canViewOtherFieldUsers(ctx)) {
     return requestedOrgId ?? ctx.actor.orgId ?? undefined;
   }
 
@@ -87,3 +101,38 @@ export function validateLocationPoint(input: {
 
   return { ok: true, recordedAt, capturedAt };
 }
+
+// L-12: validate IANA timezone strings. `Intl.DateTimeFormat(undefined, …)`
+// does not reliably throw across runtimes — the format step does.
+export function isValidTimezone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// L-14: shared date-range filter for Prisma `where` clauses.
+// Returns `{ gte?, lte? }` or `undefined` when no filter is requested.
+// Single-date inputs select a 24h window starting at the given date (UTC).
+export function buildDateRangeFilter(
+  dateStr?: string,
+  from?: string,
+  to?: string
+): { gte?: Date; lte?: Date } | undefined {
+  if (dateStr) {
+    const start = new Date(dateStr);
+    const end = new Date(dateStr);
+    end.setDate(end.getDate() + 1);
+    return { gte: start, lte: end };
+  }
+  if (from || to) {
+    return {
+      ...(from ? { gte: new Date(from) } : {}),
+      ...(to ? { lte: new Date(to) } : {})
+    };
+  }
+  return undefined;
+}
+

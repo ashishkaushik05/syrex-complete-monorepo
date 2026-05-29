@@ -109,6 +109,8 @@ class LinkedDispatch {
     required this.transporterName,
     required this.vehicleNumber,
     this.lrNumber,
+    this.estimatedDelivery,
+    this.deliveredAt,
   });
 
   final String id;
@@ -117,6 +119,8 @@ class LinkedDispatch {
   final String transporterName;
   final String vehicleNumber;
   final String? lrNumber;
+  final String? estimatedDelivery;
+  final String? deliveredAt;
 
   factory LinkedDispatch.fromJson(Map<String, dynamic> j) => LinkedDispatch(
         id: j['id'] as String,
@@ -125,6 +129,8 @@ class LinkedDispatch {
         transporterName: j['transporterName'] as String,
         vehicleNumber: j['vehicleNumber'] as String,
         lrNumber: j['lrNumber'] as String?,
+        estimatedDelivery: j['estimatedDelivery'] as String?,
+        deliveredAt: j['deliveredAt'] as String?,
       );
 }
 
@@ -167,7 +173,7 @@ class OrderDetail extends OrderSummary {
     required super.createdAt,
     required super.lines,
     required this.deliveryAddress,
-    required this.notes,
+    this.notes,
     required this.linkedDispatches,
     required this.linkedInvoices,
   });
@@ -206,6 +212,7 @@ class InvoiceListItem {
     required this.invoiceNumber,
     required this.orderId,
     required this.invoiceDate,
+    this.dueDate,
     required this.total,
     required this.amountPaid,
     required this.amountDue,
@@ -216,6 +223,7 @@ class InvoiceListItem {
   final String invoiceNumber;
   final String orderId;
   final String invoiceDate;
+  final String? dueDate;
   final String total;
   final String amountPaid;
   final String amountDue;
@@ -226,6 +234,7 @@ class InvoiceListItem {
         invoiceNumber: j['invoiceNumber'] as String,
         orderId: j['orderId'] as String,
         invoiceDate: j['invoiceDate'] as String,
+        dueDate: j['dueDate'] as String?,
         total: j['total'] as String,
         amountPaid: j['amountPaid'] as String,
         amountDue: j['amountDue'] as String,
@@ -257,6 +266,36 @@ class InvoiceLineItem {
       );
 }
 
+class InvoiceCharge {
+  const InvoiceCharge({
+    required this.id,
+    this.taxChargeId,
+    required this.name,
+    required this.type,
+    required this.rate,
+    required this.amount,
+    required this.displayOrder,
+  });
+
+  final String id;
+  final String? taxChargeId;
+  final String name;
+  final String type; // "percentage" | "fixed"
+  final String rate;
+  final String amount;
+  final int displayOrder;
+
+  factory InvoiceCharge.fromJson(Map<String, dynamic> j) => InvoiceCharge(
+        id: j['id'] as String,
+        taxChargeId: j['taxChargeId'] as String?,
+        name: j['name'] as String,
+        type: j['type'] as String,
+        rate: j['rate'] as String,
+        amount: j['amount'] as String,
+        displayOrder: j['displayOrder'] as int,
+      );
+}
+
 class InvoiceDetail {
   const InvoiceDetail({
     required this.id,
@@ -264,12 +303,17 @@ class InvoiceDetail {
     required this.orderId,
     required this.orderNumber,
     required this.invoiceDate,
+    this.dueDate,
     required this.subtotal,
+    this.discountType,
+    required this.discountRate,
+    required this.discountAmount,
     required this.total,
     required this.amountPaid,
     required this.amountDue,
     required this.createdAt,
     required this.lines,
+    required this.charges,
   });
 
   final String id;
@@ -277,12 +321,17 @@ class InvoiceDetail {
   final String orderId;
   final String orderNumber;
   final String invoiceDate;
+  final String? dueDate;
   final String subtotal;
+  final String? discountType;
+  final String discountRate;
+  final String discountAmount;
   final String total;
   final String amountPaid;
   final String amountDue;
   final String createdAt;
   final List<InvoiceLineItem> lines;
+  final List<InvoiceCharge> charges;
 
   factory InvoiceDetail.fromJson(Map<String, dynamic> j) => InvoiceDetail(
         id: j['id'] as String,
@@ -290,13 +339,20 @@ class InvoiceDetail {
         orderId: j['orderId'] as String,
         orderNumber: j['orderNumber'] as String,
         invoiceDate: j['invoiceDate'] as String,
+        dueDate: j['dueDate'] as String?,
         subtotal: j['subtotal'] as String,
+        discountType: j['discountType'] as String?,
+        discountRate: j['discountRate'] as String,
+        discountAmount: j['discountAmount'] as String,
         total: j['total'] as String,
         amountPaid: j['amountPaid'] as String,
         amountDue: j['amountDue'] as String,
         createdAt: j['createdAt'] as String,
         lines: (j['lines'] as List<dynamic>)
             .map((e) => InvoiceLineItem.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        charges: (j['charges'] as List<dynamic>)
+            .map((e) => InvoiceCharge.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
 }
@@ -365,6 +421,78 @@ class DispatchDetail {
       );
 }
 
+class ArAgingRow {
+  const ArAgingRow({
+    required this.id,
+    required this.invoiceNumber,
+    required this.outletId,
+    required this.invoiceDate,
+    this.dueDate,
+    required this.amountDue,
+    required this.daysPastDue,
+    required this.agingBucket,
+  });
+
+  final String id;
+  final String invoiceNumber;
+  final String outletId;
+  final String invoiceDate;
+  final String? dueDate;
+  final String amountDue;
+  final int daysPastDue;
+  final String agingBucket;
+
+  factory ArAgingRow.fromJson(Map<String, dynamic> j) => ArAgingRow(
+        id: j['id'] as String,
+        invoiceNumber: j['invoiceNumber'] as String,
+        outletId: j['outletId'] as String,
+        invoiceDate: j['invoiceDate'] as String,
+        dueDate: j['dueDate'] as String?,
+        amountDue: j['amountDue'] as String,
+        daysPastDue: j['daysPastDue'] as int,
+        agingBucket: j['agingBucket'] as String,
+      );
+}
+
+class ArAgingSummary {
+  const ArAgingSummary({
+    required this.current,
+    required this.bucket1_30,
+    required this.bucket31_60,
+    required this.bucket61_90,
+    required this.bucket90Plus,
+    required this.totalOutstanding,
+  });
+
+  final String current;
+  final String bucket1_30;
+  final String bucket31_60;
+  final String bucket61_90;
+  final String bucket90Plus;
+  final String totalOutstanding;
+
+  factory ArAgingSummary.fromJson(Map<String, dynamic> j) => ArAgingSummary(
+        current: j['current'] as String,
+        bucket1_30: j['bucket1_30'] as String,
+        bucket31_60: j['bucket31_60'] as String,
+        bucket61_90: j['bucket61_90'] as String,
+        bucket90Plus: j['bucket90Plus'] as String,
+        totalOutstanding: j['totalOutstanding'] as String,
+      );
+}
+
+class ArAgingResult {
+  const ArAgingResult({
+    required this.items,
+    required this.nextCursor,
+    required this.summary,
+  });
+
+  final List<ArAgingRow> items;
+  final String? nextCursor;
+  final ArAgingSummary summary;
+}
+
 class PagedResult<T> {
   const PagedResult({required this.items, required this.nextCursor});
 
@@ -393,7 +521,6 @@ class OutletPortalClient {
     }
     return <String, dynamic>{};
   }
-
 
   Future<OutletSummary> summary(String outletId) async {
     final res = await _dio.get(
@@ -432,45 +559,13 @@ class OutletPortalClient {
     final res = await _dio.get(
       '/outletPortal.orderDetail',
       queryParameters: {
-        'input': '{"json":${jsonEncode({'outletId': outletId, 'orderId': orderId})}}',
+        'input': '{"json":${jsonEncode({
+              'outletId': outletId,
+              'orderId': orderId
+            })}}',
       },
     );
     return OrderDetail.fromJson(_extract(res.data));
-  }
-
-  Future<PagedResult<InvoiceListItem>> invoiceHistory(
-    String outletId, {
-    String? cursor,
-    int limit = 25,
-    String? q,
-  }) async {
-    final params = <String, dynamic>{'outletId': outletId, 'limit': limit};
-    if (cursor != null) params['cursor'] = cursor;
-    if (q != null) params['q'] = q;
-
-    final res = await _dio.get(
-      '/outletPortal.invoiceHistory',
-      queryParameters: {'input': '{"json":${jsonEncode(params)}}'},
-    );
-    final data = _extract(res.data);
-    return PagedResult(
-      items: (data['items'] as List<dynamic>)
-          .map((e) => InvoiceListItem.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      nextCursor: data['nextCursor'] as String?,
-    );
-  }
-
-  Future<InvoiceDetail> invoiceDetail(
-      String outletId, String invoiceId) async {
-    final res = await _dio.get(
-      '/outletPortal.invoiceDetail',
-      queryParameters: {
-        'input':
-            '{"json":${jsonEncode({'outletId': outletId, 'invoiceId': invoiceId})}}',
-      },
-    );
-    return InvoiceDetail.fromJson(_extract(res.data));
   }
 
   Future<PagedResult<LinkedDispatch>> dispatchHistory(
@@ -498,11 +593,93 @@ class OutletPortalClient {
     final res = await _dio.get(
       '/outletPortal.dispatchDetail',
       queryParameters: {
-        'input':
-            '{"json":${jsonEncode({'outletId': outletId, 'dispatchId': dispatchId})}}',
+        'input': '{"json":${jsonEncode({
+              'outletId': outletId,
+              'dispatchId': dispatchId
+            })}}',
       },
     );
     return DispatchDetail.fromJson(_extract(res.data));
+  }
+
+  Future<PagedResult<InvoiceListItem>> invoiceHistory(
+    String outletId, {
+    String? cursor,
+    int limit = 25,
+    String? q,
+  }) async {
+    final params = <String, dynamic>{'outletId': outletId, 'limit': limit};
+    if (cursor != null) params['cursor'] = cursor;
+    if (q != null) params['q'] = q;
+
+    final res = await _dio.get(
+      '/outletPortal.invoiceHistory',
+      queryParameters: {'input': '{"json":${jsonEncode(params)}}'},
+    );
+    final data = _extract(res.data);
+    return PagedResult(
+      items: (data['items'] as List<dynamic>)
+          .map((e) => InvoiceListItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      nextCursor: data['nextCursor'] as String?,
+    );
+  }
+
+  Future<InvoiceDetail> invoiceDetail(String outletId, String invoiceId) async {
+    final res = await _dio.get(
+      '/outletPortal.invoiceDetail',
+      queryParameters: {
+        'input': '{"json":${jsonEncode({
+              'outletId': outletId,
+              'invoiceId': invoiceId
+            })}}',
+      },
+    );
+    return InvoiceDetail.fromJson(_extract(res.data));
+  }
+
+  Future<void> markDispatchDelivered(
+    String dispatchId, {
+    String? note,
+    DateTime? deliveredAt,
+  }) async {
+    final payload = <String, dynamic>{
+      'id': dispatchId,
+      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      if (deliveredAt != null)
+        'deliveredAt': deliveredAt.toUtc().toIso8601String(),
+    };
+
+    await _dio.post(
+      '/dispatches.markDelivered',
+      data: jsonEncode({'json': payload}),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+  }
+
+  Future<ArAgingResult> arAging(
+    String outletId, {
+    String? cursor,
+    int limit = 100,
+  }) async {
+    final params = <String, dynamic>{
+      'outletId': outletId,
+      'limit': limit,
+    };
+    if (cursor != null) params['cursor'] = cursor;
+
+    final res = await _dio.get(
+      '/invoices.arAging',
+      queryParameters: {'input': '{"json":${jsonEncode(params)}}'},
+    );
+    final data = _extract(res.data);
+    return ArAgingResult(
+      items: (data['items'] as List<dynamic>)
+          .map((e) => ArAgingRow.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      nextCursor: data['nextCursor'] as String?,
+      summary: ArAgingSummary.fromJson(data['summary'] as Map<String, dynamic>),
+    );
   }
 }
 

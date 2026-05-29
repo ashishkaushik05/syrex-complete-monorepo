@@ -1,17 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
+import '../../app/theme/app_theme.dart';
+import '../../core/api/catalog_client.dart';
 import '../../core/api/sales_client.dart';
-import '../../core/errors/app_error.dart';
-import '../../core/outlet/outlet_context.dart';
-import '../../shared/widgets/premium_surfaces.dart';
-import '../../shared/widgets/error_view.dart';
+import '../../shared/widgets/rb_components.dart';
 import 'cart_provider.dart';
 
-final _outletsProvider = FutureProvider.autoDispose<List<SalesOutlet>>((ref) {
+// ─── Providers ─────────────────────────────────────────────────────────────────
+
+final _createOrderOutletsProvider =
+    FutureProvider.autoDispose<List<SalesOutlet>>((ref) {
   return ref.watch(salesClientProvider).outlets();
 });
+
+final _createOrderProductsProvider =
+    FutureProvider.autoDispose<PagedResult<Product>>((ref) {
+  return ref.watch(catalogClientProvider).products(limit: 100);
+});
+
+// ─── Page ──────────────────────────────────────────────────────────────────────
 
 class CreateOrderPage extends ConsumerStatefulWidget {
   const CreateOrderPage({super.key});
@@ -21,224 +31,230 @@ class CreateOrderPage extends ConsumerStatefulWidget {
 }
 
 class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
+  int _step = 0; // 0 = pick products, 1 = review
+  final _searchCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
+  String? _outletId;
   bool _submitting = false;
-  String? _submitError;
+  String? _error;
 
   @override
   void dispose() {
+    _searchCtrl.dispose();
     _addressCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _submit(String outletId) async {
-    if (!_formKey.currentState!.validate()) return;
-
+  Future<void> _submit() async {
     final cart = ref.read(cartProvider);
-    if (cart.items.isEmpty) return;
-
+    if (cart.items.isEmpty || _outletId == null) return;
     setState(() {
       _submitting = true;
-      _submitError = null;
+      _error = null;
     });
-
     try {
+      final lines = ref.read(cartProvider.notifier).toOrderLines();
       final order = await ref.read(salesClientProvider).createOrder(
-            outletId: outletId,
+            outletId: _outletId!,
             deliveryAddress: _addressCtrl.text.trim(),
-            lines: ref.read(cartProvider.notifier).toOrderLines(),
+            lines: lines,
             notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           );
+      ref.read(cartProvider.notifier).clear();
       if (mounted) {
-        ref.read(cartProvider.notifier).clear();
+        RbToast.show(context, 'Order ${order.orderNumber} placed!');
         context.go('/orders/${order.id}');
       }
     } catch (e) {
       setState(() {
+        _error = e.toString();
         _submitting = false;
-        _submitError = e is AppError ? e.message : e.toString();
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedOutletId = ref.watch(selectedOutletIdProvider);
-    final outletsAsync = ref.watch(_outletsProvider);
+    final c = rbColors(context);
     final cart = ref.watch(cartProvider);
+    final outletAsync = ref.watch(_createOrderOutletsProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('New Order'),
-        actions: [
-          TextButton(
-            onPressed: () => context.push('/catalog'),
-            child: const Text('+ Add Items'),
+      backgroundColor: c.bg,
+      body: Column(
+        children: [
+          RbTopBar(
+            title: _step == 0 ? 'New order' : 'Review order',
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back, size: 20, color: c.ink),
+              onPressed: () {
+                if (_step == 1) {
+                  setState(() => _step = 0);
+                } else {
+                  context.pop();
+                }
+              },
+            ),
+          ),
+          // Step indicator
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                _StepDot(active: _step == 0, done: _step > 0, label: '1'),
+                Expanded(child: Divider(color: c.line, thickness: 0.5)),
+                _StepDot(active: _step == 1, done: false, label: '2'),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _step == 0
+                ? _Step1(
+                    searchCtrl: _searchCtrl,
+                    onNext: cart.items.isNotEmpty
+                        ? () => setState(() => _step = 1)
+                        : null,
+                  )
+                : _Step2(
+                    cart: cart,
+                    outletAsync: outletAsync,
+                    selectedOutletId: _outletId,
+                    addressCtrl: _addressCtrl,
+                    notesCtrl: _notesCtrl,
+                    error: _error,
+                    submitting: _submitting,
+                    onOutletSelected: (id) => setState(() => _outletId = id),
+                    onSubmit: _outletId != null && !_submitting ? _submit : null,
+                  ),
           ),
         ],
-      ),
-      body: PremiumGradientBackground(
-        child: outletsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (_, __) => ErrorView(
-            message: 'Could not load outlets.',
-            onRetry: () => ref.refresh(_outletsProvider.future),
-          ),
-          data: (outlets) {
-            if (outlets.isEmpty) {
-              return const ErrorView(message: 'No active outlets available.');
-            }
-
-            final selected = outlets.any((o) => o.id == selectedOutletId)
-                ? selectedOutletId
-                : null;
-
-            return Form(
-              key: _formKey,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                DropdownButtonFormField<String>(
-                  value: selected,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Outlet *',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: outlets
-                      .map(
-                        (outlet) => DropdownMenuItem(
-                          value: outlet.id,
-                          child: Text('${outlet.name} (${outlet.outletCode})'),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => ref.read(selectedOutletIdProvider.notifier).state = value,
-                  validator: (value) => value == null ? 'Select an outlet' : null,
-                ),
-                const SizedBox(height: 16),
-                if (cart.items.isEmpty)
-                  const Card(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(child: Text('Cart is empty. Add items from catalog.')),
-                    ),
-                  )
-                else ...[
-                  Text('Cart', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  ...cart.items.map((item) => _CartItemTile(item: item)),
-                  const Divider(),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      'Total: ₹${cart.grandTotal}',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 24),
-                Text('Delivery Details', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _addressCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Delivery Address *',
-                    border: OutlineInputBorder(),
-                  ),
-                  maxLines: 2,
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _notesCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes (optional)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                if (_submitError != null) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    _submitError!,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ],
-                const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: (cart.items.isEmpty || _submitting || selected == null)
-                      ? null
-                      : () => _submit(selected),
-                  child: _submitting
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Text('Place Order'),
-                ),
-                ],
-              ),
-            );
-          },
-        ),
       ),
     );
   }
 }
 
-class _CartItemTile extends ConsumerWidget {
-  const _CartItemTile({required this.item});
+// ─── Step 1 — pick products ────────────────────────────────────────────────────
 
-  final CartItem item;
+class _Step1 extends ConsumerWidget {
+  const _Step1({required this.searchCtrl, required this.onNext});
+  final TextEditingController searchCtrl;
+  final VoidCallback? onNext;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final notifier = ref.read(cartProvider.notifier);
+    final q = searchCtrl.text.toLowerCase();
+    final productsAsync = ref.watch(_createOrderProductsProvider);
+    final cart = ref.watch(cartProvider);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: RbSearchInput(
+            controller: searchCtrl,
+            placeholder: 'Search products',
+            onChanged: (_) => (context as Element).markNeedsBuild(),
+          ),
+        ),
+        Expanded(
+          child: productsAsync.when(
+            loading: () => const Center(
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: RbColors.accent)),
+            error: (e, _) => RbEmpty(
+                icon: Icons.error_outline, title: 'Failed to load products'),
+            data: (result) {
+              final items = q.isEmpty
+                  ? result.items
+                  : result.items
+                      .where((p) =>
+                          p.name.toLowerCase().contains(q) ||
+                          p.sku.toLowerCase().contains(q))
+                      .toList();
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 80),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 6),
+                itemBuilder: (ctx, i) => _PickProductRow(product: items[i]),
+              );
+            },
+          ),
+        ),
+        if (cart.items.isNotEmpty)
+          _StickyBar(
+            label: 'Review order · ${cart.items.length} item${cart.items.length == 1 ? '' : 's'}',
+            onTap: onNext,
+            enabled: onNext != null,
+          ),
+      ],
+    );
+  }
+}
+
+class _PickProductRow extends ConsumerWidget {
+  const _PickProductRow({required this.product});
+  final Product product;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cart = ref.watch(cartProvider);
+    final cartItem =
+        cart.items.where((i) => i.product.id == product.id).firstOrNull;
+    final c = rbColors(context);
+
+    return RbCard(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
+            ProductTile(brandId: product.brandId ?? '', size: 40),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text(item.product.sku, style: Theme.of(context).textTheme.bodySmall),
-                  const SizedBox(height: 4),
-                  _UnitPriceField(item: item),
+                  Text(product.name,
+                      style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: c.ink)),
+                  Text(fmtMoney(product.basePriceNum),
+                      style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: c.muted)),
                 ],
               ),
             ),
-            const SizedBox(width: 12),
-            Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.remove_circle_outline),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () => notifier.updateQty(item.product.id, item.qty - 1),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text('${item.qty}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  onPressed: () => notifier.updateQty(item.product.id, item.qty + 1),
-                ),
-              ],
-            ),
-            const SizedBox(width: 8),
-            Text('₹${item.lineTotal}', style: const TextStyle(fontWeight: FontWeight.w500)),
+            cartItem != null
+                ? RbQtyStepper(
+                    qty: cartItem.qty,
+                    size: RbQtySize.sm,
+                    onDecrement: () {
+                      if (cartItem.qty <= 1) {
+                        ref
+                            .read(cartProvider.notifier)
+                            .removeProduct(product.id);
+                      } else {
+                        ref
+                            .read(cartProvider.notifier)
+                            .updateQty(product.id, cartItem.qty - 1);
+                      }
+                    },
+                    onIncrement: () => ref
+                        .read(cartProvider.notifier)
+                        .updateQty(product.id, cartItem.qty + 1),
+                  )
+                : RbBtn(
+                    label: 'Add',
+                    variant: RbBtnVariant.accent,
+                    size: RbBtnSize.sm,
+                    onPressed: () => ref
+                        .read(cartProvider.notifier)
+                        .addProduct(product, product.basePrice ?? '0'),
+                  ),
           ],
         ),
       ),
@@ -246,48 +262,298 @@ class _CartItemTile extends ConsumerWidget {
   }
 }
 
-class _UnitPriceField extends ConsumerStatefulWidget {
-  const _UnitPriceField({required this.item});
+// ─── Step 2 — review ──────────────────────────────────────────────────────────
 
-  final CartItem item;
-
-  @override
-  ConsumerState<_UnitPriceField> createState() => _UnitPriceFieldState();
-}
-
-class _UnitPriceFieldState extends ConsumerState<_UnitPriceField> {
-  late final TextEditingController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.item.unitPrice);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
+class _Step2 extends StatelessWidget {
+  const _Step2({
+    required this.cart,
+    required this.outletAsync,
+    required this.selectedOutletId,
+    required this.addressCtrl,
+    required this.notesCtrl,
+    required this.error,
+    required this.submitting,
+    required this.onOutletSelected,
+    required this.onSubmit,
+  });
+  final CartState cart;
+  final AsyncValue<List<SalesOutlet>> outletAsync;
+  final String? selectedOutletId;
+  final TextEditingController addressCtrl;
+  final TextEditingController notesCtrl;
+  final String? error;
+  final bool submitting;
+  final ValueChanged<String> onOutletSelected;
+  final VoidCallback? onSubmit;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 120,
-      child: TextFormField(
-        controller: _ctrl,
-        decoration: const InputDecoration(
-          labelText: 'Unit Price',
-          prefixText: '₹',
-          isDense: true,
-          border: OutlineInputBorder(),
+    final c = rbColors(context);
+    final subtotal = cart.items
+        .fold<double>(0, (s, i) => s + (double.tryParse(i.lineTotal) ?? 0));
+    final discount = subtotal * 0.05;
+    final tax = (subtotal - discount) * 0.18;
+    final total = subtotal - discount + tax;
+
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Line items
+              RbSection(label: 'Items'),
+              const SizedBox(height: 8),
+              RbCard(
+                child: Column(
+                  children: [
+                    for (int i = 0; i < cart.items.length; i++)
+                      _ReviewLine(item: cart.items[i], isFirst: i == 0),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Outlet
+              RbSection(label: 'Outlet'),
+              const SizedBox(height: 8),
+              outletAsync.when(
+                loading: () => const LinearProgressIndicator(minHeight: 2),
+                error: (_, __) => Text('Failed to load outlets',
+                    style: GoogleFonts.inter(color: c.muted)),
+                data: (outlets) => RbCard(
+                  child: Column(
+                    children: [
+                      for (int i = 0; i < outlets.length; i++)
+                        RbRow(
+                          isFirst: i == 0,
+                          onTap: () => onOutletSelected(outlets[i].id),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                  child: Text(outlets[i].name,
+                                      style: GoogleFonts.inter(
+                                          fontSize: 14, color: c.ink))),
+                              if (selectedOutletId == outlets[i].id)
+                                Icon(Icons.check,
+                                    size: 16, color: RbColors.accent),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Delivery address
+              RbSection(label: 'Delivery address'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: addressCtrl,
+                maxLines: 2,
+                style: GoogleFonts.inter(fontSize: 14, color: c.ink),
+                decoration: InputDecoration(
+                  hintText: 'Enter delivery address',
+                  hintStyle: GoogleFonts.inter(color: c.muted2),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Notes
+              RbSection(label: 'Notes (optional)'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: notesCtrl,
+                maxLines: 3,
+                style: GoogleFonts.inter(fontSize: 14, color: c.ink),
+                decoration: InputDecoration(
+                  hintText: 'Add any special instructions',
+                  hintStyle: GoogleFonts.inter(color: c.muted2),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Totals
+              RbSection(label: 'Order total'),
+              const SizedBox(height: 8),
+              RbCard(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    children: [
+                      RbKvRow(k: 'Subtotal', v: fmtMoney(subtotal)),
+                      RbKvRow(k: 'Discount (5%)', v: '−${fmtMoney(discount)}'),
+                      RbKvRow(k: 'GST (18%)', v: fmtMoney(tax)),
+                      const Divider(height: 16, thickness: 0.5),
+                      RbKvRow(
+                        k: 'Total',
+                        v: fmtMoney(total),
+                        bold: true,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              if (error != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: RbColors.dangerSoft,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(error!,
+                      style: GoogleFonts.inter(
+                          fontSize: 13, color: RbColors.danger)),
+                ),
+              ],
+            ],
+          ),
         ),
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        onChanged: (v) {
-          ref.read(cartProvider.notifier).updatePrice(widget.item.product.id, v);
-        },
-        validator: (v) => (v == null || double.tryParse(v) == null) ? 'Invalid' : null,
+        _StickyBar(
+          label: 'Submit order · ${fmtMoney(total)}',
+          onTap: onSubmit,
+          enabled: onSubmit != null,
+          loading: submitting,
+        ),
+      ],
+    );
+  }
+}
+
+class _ReviewLine extends ConsumerWidget {
+  const _ReviewLine({required this.item, required this.isFirst});
+  final CartItem item;
+  final bool isFirst;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = rbColors(context);
+    return RbRow(
+      isFirst: isFirst,
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.product.name,
+                    style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: c.ink)),
+                Text(fmtMoney(double.tryParse(item.unitPrice) ?? 0),
+                    style: GoogleFonts.inter(fontSize: 12, color: c.muted)),
+              ],
+            ),
+          ),
+          RbQtyStepper(
+            qty: item.qty,
+            size: RbQtySize.sm,
+            onDecrement: () {
+              if (item.qty <= 1) {
+                ref
+                    .read(cartProvider.notifier)
+                    .removeProduct(item.product.id);
+              } else {
+                ref
+                    .read(cartProvider.notifier)
+                    .updateQty(item.product.id, item.qty - 1);
+              }
+            },
+            onIncrement: () => ref
+                .read(cartProvider.notifier)
+                .updateQty(item.product.id, item.qty + 1),
+          ),
+          const SizedBox(width: 10),
+          Text(fmtMoney(double.tryParse(item.lineTotal) ?? 0),
+              style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: c.ink)),
+        ],
       ),
+    );
+  }
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+class _StickyBar extends StatelessWidget {
+  const _StickyBar(
+      {required this.label,
+      required this.onTap,
+      required this.enabled,
+      this.loading = false});
+  final String label;
+  final VoidCallback? onTap;
+  final bool enabled;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = rbColors(context);
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        decoration: BoxDecoration(
+          color: c.surface,
+          border:
+              Border(top: BorderSide(color: c.line, width: 0.5)),
+        ),
+        padding: EdgeInsets.fromLTRB(
+            16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
+        child: RbBtn(
+          label: label,
+          variant: RbBtnVariant.accent,
+          size: RbBtnSize.lg,
+          loading: loading,
+          onPressed: enabled ? onTap : null,
+        ),
+      ),
+    );
+  }
+}
+
+class _StepDot extends StatelessWidget {
+  const _StepDot(
+      {required this.active, required this.done, required this.label});
+  final bool active;
+  final bool done;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: active
+            ? RbColors.ink
+            : done
+                ? RbColors.accent
+                : rbColors(context).surface2,
+        border: Border.all(
+            color: active
+                ? RbColors.ink
+                : done
+                    ? RbColors.accent
+                    : rbColors(context).line,
+            width: 1),
+      ),
+      alignment: Alignment.center,
+      child: done
+          ? const Icon(Icons.check, size: 12, color: Colors.white)
+          : Text(label,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: active ? Colors.white : rbColors(context).muted,
+              )),
     );
   }
 }

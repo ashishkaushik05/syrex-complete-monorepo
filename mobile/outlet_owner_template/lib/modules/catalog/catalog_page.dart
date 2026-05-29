@@ -62,7 +62,7 @@ class _CatalogPageState extends ConsumerState<CatalogPage> {
             children: [
               IconButton(
                 icon: const Icon(Icons.shopping_cart_outlined),
-                onPressed: () => context.push('/orders/create'),
+                onPressed: () => context.push('/orders/new'),
               ),
               if (cart.items.isNotEmpty)
                 Positioned(
@@ -252,7 +252,7 @@ class _ProductCard extends ConsumerWidget {
             : product.sku),
         trailing: inCart
             ? FilledButton.icon(
-                onPressed: () => context.push('/orders/create'),
+                onPressed: () => context.push('/orders/new'),
                 icon: const Icon(Icons.shopping_cart, size: 16),
                 label: const Text('In Cart'),
               )

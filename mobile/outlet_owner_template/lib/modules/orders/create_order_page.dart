@@ -47,14 +47,12 @@ class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
             outletId: outletId,
             deliveryAddress: _addressCtrl.text.trim(),
             lines: ref.read(cartProvider.notifier).toOrderLines(),
-            notes: _notesCtrl.text.trim().isEmpty
-                ? null
-                : _notesCtrl.text.trim(),
+            notes:
+                _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           );
       ref.read(cartProvider.notifier).clear();
       if (mounted) {
-        context.go('/orders/${order.id}',
-            extra: {'outletId': outletId});
+        context.go('/orders/${order.id}');
       }
     } catch (e) {
       setState(() {
@@ -81,7 +79,7 @@ class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
         title: const Text('New Order'),
         actions: [
           TextButton(
-            onPressed: () => context.push('/catalog'),
+            onPressed: () => context.go('/catalog'),
             child: const Text('+ Add Items'),
           ),
         ],
@@ -95,7 +93,8 @@ class _CreateOrderPageState extends ConsumerState<CreateOrderPage> {
               const Card(
                 child: Padding(
                   padding: EdgeInsets.all(24),
-                  child: Center(child: Text('Cart is empty. Add items from catalog.')),
+                  child: Center(
+                      child: Text('Cart is empty. Add items from catalog.')),
                 ),
               )
             else ...[
@@ -267,8 +266,9 @@ class _UnitPriceFieldState extends ConsumerState<_UnitPriceField> {
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         onChanged: (v) {
           widget.item.unitPrice = v;
-          ref.read(cartProvider.notifier).updateQty(
-              widget.item.product.id, widget.item.qty);
+          ref
+              .read(cartProvider.notifier)
+              .updateQty(widget.item.product.id, widget.item.qty);
         },
         validator: (v) =>
             (v == null || double.tryParse(v) == null) ? 'Invalid' : null,

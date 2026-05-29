@@ -5,11 +5,25 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/outlet_portal_client.dart';
 import '../../core/auth/session_controller.dart';
 import '../../core/outlet/outlet_context.dart';
+import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_view.dart';
+import '../../shared/widgets/status_chip.dart';
 
-final _summaryProvider = FutureProvider.autoDispose
-    .family<OutletSummary, String>((ref, outletId) async {
+final _summaryProvider =
+    FutureProvider.autoDispose.family<OutletSummary, String>((ref, outletId) {
   return ref.watch(outletPortalClientProvider).summary(outletId);
+});
+
+final _recentOrdersProvider = FutureProvider.autoDispose
+    .family<PagedResult<OrderSummary>, String>((ref, outletId) {
+  return ref.watch(outletPortalClientProvider).orderHistory(outletId, limit: 3);
+});
+
+final _recentDispatchesProvider = FutureProvider.autoDispose
+    .family<PagedResult<LinkedDispatch>, String>((ref, outletId) {
+  return ref
+      .watch(outletPortalClientProvider)
+      .dispatchHistory(outletId, limit: 8);
 });
 
 class DashboardPage extends ConsumerWidget {
@@ -21,163 +35,398 @@ class DashboardPage extends ConsumerWidget {
     final session = ref.watch(sessionControllerProvider);
 
     if (outletId == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Dashboard')),
-        body: const ErrorView(message: 'No outlet linked to this account.'),
+      return const Scaffold(
+        body: EmptyState(
+          icon: Icons.store_outlined,
+          message:
+              'No outlet linked to this account.\nContact your administrator.',
+        ),
       );
     }
 
     final summary = ref.watch(_summaryProvider(outletId));
+    final recentOrders = ref.watch(_recentOrdersProvider(outletId));
+    final recentDispatches = ref.watch(_recentDispatchesProvider(outletId));
+    final username = session.user?.email.split('@').first ?? 'Outlet';
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Dashboard'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () =>
-                ref.read(sessionControllerProvider.notifier).logout(),
-          ),
-        ],
-      ),
       body: RefreshIndicator(
-        onRefresh: () => ref.refresh(_summaryProvider(outletId).future),
+        onRefresh: () async {
+          ref.invalidate(_summaryProvider(outletId));
+          ref.invalidate(_recentOrdersProvider(outletId));
+          ref.invalidate(_recentDispatchesProvider(outletId));
+          await Future.wait([
+            ref.read(_summaryProvider(outletId).future),
+            ref.read(_recentOrdersProvider(outletId).future),
+            ref.read(_recentDispatchesProvider(outletId).future),
+          ]);
+        },
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
           children: [
-            Text('Welcome, ${session.user?.email ?? ''}',
-                style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 16),
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    username.isEmpty ? 'O' : username[0].toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Welcome back',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.grey.shade600),
+                      ),
+                      Text(
+                        username,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => context.go('/account'),
+                  icon: const Icon(Icons.person_outline),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             summary.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => ErrorView(
+              loading: () => const _SkeletonBanner(),
+              error: (_, __) => ErrorView(
                 message: 'Could not load summary.',
                 onRetry: () => ref.refresh(_summaryProvider(outletId).future),
               ),
-              data: (s) => _SummaryCards(summary: s),
+              data: (s) => _SummaryHero(summary: s),
             ),
-            const SizedBox(height: 24),
-            _NavTile(
-              icon: Icons.receipt_long,
-              label: 'Order History',
-              onTap: () => context.push('/orders/history'),
+            const SizedBox(height: 16),
+            const _SectionTitle('Quick actions'),
+            const SizedBox(height: 8),
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 4,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 0.95,
+              children: [
+                _ActionCard(
+                  icon: Icons.add,
+                  label: 'New order',
+                  onTap: () => context.push('/orders/new'),
+                ),
+                _ActionCard(
+                  icon: Icons.grid_view_rounded,
+                  label: 'Catalog',
+                  onTap: () => context.go('/catalog'),
+                ),
+                _ActionCard(
+                  icon: Icons.local_shipping_outlined,
+                  label: 'Track',
+                  onTap: () => context.go('/track'),
+                ),
+                _ActionCard(
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: 'Pay',
+                  onTap: () => context.push('/accounts'),
+                ),
+              ],
             ),
-            _NavTile(
-              icon: Icons.description,
-              label: 'Invoices',
-              onTap: () => context.push('/invoices/history'),
-            ),
-            _NavTile(
-              icon: Icons.storefront,
-              label: 'Browse Catalog',
-              onTap: () => context.push('/catalog'),
-            ),
-            // Field Sense tile — only shown when user has isFieldEnabled
-            if (session.user?.isFieldEnabled == true)
-              _NavTile(
-                icon: Icons.location_on,
-                label: 'Field Sense',
-                onTap: () => context.push('/field'),
-              ),
+            const SizedBox(height: 14),
+            _StatsRow(summary: summary),
+            const SizedBox(height: 14),
+            _ArrivingSoonSection(dispatches: recentDispatches),
+            const SizedBox(height: 14),
+            _RecentOrdersSection(orders: recentOrders),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push('/orders/create'),
-        icon: const Icon(Icons.add_shopping_cart),
-        label: const Text('New Order'),
       ),
     );
   }
 }
 
-class _SummaryCards extends StatelessWidget {
-  const _SummaryCards({required this.summary});
+class _SummaryHero extends StatelessWidget {
+  const _SummaryHero({required this.summary});
 
   final OutletSummary summary;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _InfoCard(
-          title: 'Outstanding Balance',
-          value: '₹${summary.outstandingLive}',
-          subtitle: 'Snapshot: ₹${summary.outstandingSnapshot}',
-          color: Theme.of(context).colorScheme.errorContainer,
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _InfoCard(
-                title: 'Open Orders',
-                value: '${summary.ordersCount}',
-                color: Theme.of(context).colorScheme.primaryContainer,
-              ),
+    final outstanding = double.tryParse(summary.outstandingLive) ?? 0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF09090B),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Outstanding balance',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: Colors.white70),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '₹${_fmtMoney(summary.outstandingLive)}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 34,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.6,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _InfoCard(
-                title: 'Unpaid Invoices',
-                value: '${summary.openInvoicesCount}',
-                color: Theme.of(context).colorScheme.secondaryContainer,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 12,
+            runSpacing: 6,
+            children: [
+              _HeroMeta(
+                '${summary.openInvoicesCount}',
+                'open invoices',
+                Colors.white,
               ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({
-    required this.title,
-    required this.value,
-    this.subtitle,
-    required this.color,
-  });
-
-  final String title;
-  final String value;
-  final String? subtitle;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: color,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title,
-                style: Theme.of(context)
-                    .textTheme
-                    .labelMedium
-                    ?.copyWith(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Text(value,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    )),
-            if (subtitle != null) ...[
-              const SizedBox(height: 4),
-              Text(subtitle!,
-                  style: Theme.of(context).textTheme.bodySmall),
+              _HeroMeta(
+                outstanding > 0 ? 'Pending' : 'Clear',
+                'payment status',
+                outstanding > 0
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFF10B981),
+              ),
             ],
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => context.push('/accounts'),
+                  icon: const Icon(Icons.receipt_long_outlined, size: 16),
+                  label: const Text('Invoices'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => context.push('/accounts'),
+                  icon: const Icon(Icons.account_balance_wallet_outlined,
+                      size: 16),
+                  label: const Text('Pay now'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-class _NavTile extends StatelessWidget {
-  const _NavTile(
-      {required this.icon, required this.label, required this.onTap});
+class _StatsRow extends StatelessWidget {
+  const _StatsRow({required this.summary});
+
+  final AsyncValue<OutletSummary> summary;
+
+  @override
+  Widget build(BuildContext context) {
+    return summary.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (s) => Row(
+        children: [
+          Expanded(
+            child: _StatCard(
+              title: 'Total orders',
+              value: '${s.ordersCount}',
+              subtitle: 'Created so far',
+              onTap: () => context.go('/orders/list'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _StatCard(
+              title: 'Open invoices',
+              value: '${s.openInvoicesCount}',
+              subtitle: 'Needs payment',
+              onTap: () => context.push('/accounts'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ArrivingSoonSection extends StatelessWidget {
+  const _ArrivingSoonSection({required this.dispatches});
+
+  final AsyncValue<PagedResult<LinkedDispatch>> dispatches;
+
+  @override
+  Widget build(BuildContext context) {
+    return dispatches.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (result) {
+        final live = result.items
+            .where((d) =>
+                d.deliveryStatus == 'in_transit' ||
+                d.deliveryStatus == 'created')
+            .take(2)
+            .toList();
+        if (live.isEmpty) return const SizedBox.shrink();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionTitle(
+              'Arriving soon',
+              action: 'Track all',
+              onAction: () => context.go('/track'),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Column(
+                children: [
+                  for (var i = 0; i < live.length; i++) ...[
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 4),
+                      leading: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEEF2FF),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.local_shipping_outlined,
+                          color: Color(0xFF6366F1),
+                          size: 18,
+                        ),
+                      ),
+                      title: Text(
+                        live[i].id.substring(0, 8).toUpperCase(),
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        '${live[i].transporterName} · ETA ${_dateShort(live[i].estimatedDelivery)}',
+                        style: TextStyle(color: Colors.grey.shade600),
+                      ),
+                      trailing: StatusChip(status: live[i].deliveryStatus),
+                      onTap: () => context.push('/dispatches/${live[i].id}'),
+                    ),
+                    if (i != live.length - 1) const Divider(height: 1),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _RecentOrdersSection extends StatelessWidget {
+  const _RecentOrdersSection({required this.orders});
+
+  final AsyncValue<PagedResult<OrderSummary>> orders;
+
+  @override
+  Widget build(BuildContext context) {
+    return orders.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (result) {
+        if (result.items.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionTitle(
+              'Recent orders',
+              action: 'See all',
+              onAction: () => context.go('/orders/list'),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Column(
+                children: [
+                  for (var i = 0; i < result.items.length; i++) ...[
+                    ListTile(
+                      title: Text(
+                        result.items[i].orderNumber,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(_dateShort(result.items[i].orderDate)),
+                      trailing: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          StatusChip(status: result.items[i].status),
+                          const SizedBox(height: 4),
+                          Text(
+                            '₹${_fmtMoney(result.items[i].totalValue)}',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      onTap: () =>
+                          context.push('/orders/${result.items[i].id}'),
+                    ),
+                    if (i != result.items.length - 1) const Divider(height: 1),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ActionCard extends StatelessWidget {
+  const _ActionCard({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   final IconData icon;
   final String label;
@@ -185,14 +434,169 @@ class _NavTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
-        title: Text(label),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Ink(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade300),
+          color: Theme.of(context).cardColor,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 20),
+              const SizedBox(height: 5),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style:
+                    const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
+}
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final String title;
+  final String value;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Ink(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.grey.shade600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroMeta extends StatelessWidget {
+  const _HeroMeta(this.value, this.label, this.color);
+
+  final String value;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(color: Colors.white70, fontSize: 12),
+        children: [
+          TextSpan(
+            text: value,
+            style: TextStyle(color: color, fontWeight: FontWeight.w700),
+          ),
+          TextSpan(text: ' $label'),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.title, {this.action, this.onAction});
+
+  final String title;
+  final String? action;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+        const Spacer(),
+        if (action != null)
+          TextButton(
+            onPressed: onAction,
+            child: Text(action!),
+          ),
+      ],
+    );
+  }
+}
+
+class _SkeletonBanner extends StatelessWidget {
+  const _SkeletonBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 170,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade300,
+        borderRadius: BorderRadius.circular(16),
+      ),
+    );
+  }
+}
+
+String _fmtMoney(String value) {
+  final d = double.tryParse(value) ?? 0;
+  return d.toStringAsFixed(2).replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]},',
+      );
+}
+
+String _dateShort(String? iso) {
+  if (iso == null) return 'TBD';
+  final d = DateTime.tryParse(iso);
+  if (d == null) return iso;
+  return '${d.day}/${d.month}/${d.year}';
 }

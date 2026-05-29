@@ -1,6 +1,12 @@
 import { Prisma, PrismaClient, UserType } from "@prisma/client";
 import { validatePermissionKeys } from "../src/rbac/catalog";
-import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS, OUTLET_PERMISSIONS } from "./seed-permissions";
+import {
+  DEV_SALES_PERMISSIONS,
+  DEV_WAREHOUSE_PERMISSIONS,
+  OUTLET_PERMISSIONS,
+  SERVICE_ASI_PERMISSIONS,
+  SERVICE_SE_PERMISSIONS,
+} from "./seed-permissions";
 
 const prisma = new PrismaClient();
 
@@ -38,7 +44,7 @@ const IDS = {
 } as const;
 
 // ── Users — password = email-prefix + "123" ───────────────────────────────────
-type RoleName = "Admin" | "Sales" | "Warehouse Manager" | "Outlet";
+type RoleName = "Admin" | "Sales" | "Warehouse Manager" | "Outlet" | "ASI" | "Service Engineer";
 
 type UserSeed = {
   email: string;
@@ -100,6 +106,10 @@ async function ensureRoles() {
 
   const { invalid: badOutlet } = validatePermissionKeys([...OUTLET_PERMISSIONS]);
   if (badOutlet.length > 0) throw new Error(`[demo-seed] Invalid Outlet permission keys: ${badOutlet.join(", ")}`);
+  const { invalid: badAsi } = validatePermissionKeys([...SERVICE_ASI_PERMISSIONS]);
+  if (badAsi.length > 0) throw new Error(`[demo-seed] Invalid ASI permission keys: ${badAsi.join(", ")}`);
+  const { invalid: badSe } = validatePermissionKeys([...SERVICE_SE_PERMISSIONS]);
+  if (badSe.length > 0) throw new Error(`[demo-seed] Invalid Service Engineer permission keys: ${badSe.join(", ")}`);
 
   const adminRole = await prisma.role.upsert({
     where: { name: "Admin" },
@@ -121,6 +131,16 @@ async function ensureRoles() {
     update: { permissions: [...OUTLET_PERMISSIONS], isSystem: false },
     create: { name: "Outlet", permissions: [...OUTLET_PERMISSIONS], isSystem: false },
   });
+  const asiRole = await prisma.role.upsert({
+    where: { name: "ASI" },
+    update: { permissions: [...SERVICE_ASI_PERMISSIONS], isSystem: false },
+    create: { name: "ASI", permissions: [...SERVICE_ASI_PERMISSIONS], isSystem: false },
+  });
+  const seRole = await prisma.role.upsert({
+    where: { name: "Service Engineer" },
+    update: { permissions: [...SERVICE_SE_PERMISSIONS], isSystem: false },
+    create: { name: "Service Engineer", permissions: [...SERVICE_SE_PERMISSIONS], isSystem: false },
+  });
 
   return {
     byName: {
@@ -128,12 +148,14 @@ async function ensureRoles() {
       Sales: salesRole.id,
       "Warehouse Manager": warehouseRole.id,
       Outlet: outletRole.id,
+      ASI: asiRole.id,
+      "Service Engineer": seRole.id,
     } as Record<RoleName, string>,
   };
 }
 
 async function upsertUser(seed: UserSeed, roleId: string) {
-  const passwordHash = await Bun.password.hash(pw(seed.email));
+  const passwordHash = await Bun.password.hash(pw(seed.email), { algorithm: "bcrypt", cost: 12 });
   return prisma.user.upsert({
     where: { email: seed.email },
     update:  { name: seed.name, passwordHash, userType: seed.userType, roleId, isActive: true, isFieldEnabled: seed.isFieldEnabled ?? false },

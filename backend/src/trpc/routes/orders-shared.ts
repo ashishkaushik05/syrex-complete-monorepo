@@ -4,6 +4,7 @@ import type { TrpcContext } from "../context";
 import { apiError } from "../error";
 import { SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { actorHasInternalSalesOutletAccess } from "./outlet-access";
 
 export const orderLineSchema = z.object({
   id: z.string(),
@@ -245,8 +246,9 @@ export async function queryOrderList(
   const offset = decodeCursor(input.cursor) ?? 0;
   const effectiveOutletId = options?.forcedOutletId ?? input.outletId;
   const isAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+  const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
   // Outlet-scoped calls have already passed assertOutletAccess; skip warehouse filter.
-  const warehouseFilter = isAdmin || effectiveOutletId
+  const warehouseFilter = isAdmin || hasInternalSalesAccess || effectiveOutletId
     ? {}
     : ctx.managedWarehouseId
       ? { outlet: { warehouseId: ctx.managedWarehouseId } }

@@ -15,66 +15,51 @@ final _orderDetailProvider = FutureProvider.autoDispose
 });
 
 class OrderDetailPage extends ConsumerWidget {
-  const OrderDetailPage(
-      {super.key, required this.orderId, this.outletId});
+  const OrderDetailPage({super.key, required this.orderId});
 
   final String orderId;
-  final String? outletId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final resolvedOutletId =
-        (outletId?.isNotEmpty == true ? outletId : null) ??
-            ref.watch(outletIdProvider) ??
-            '';
-    final detail = ref.watch(
-        _orderDetailProvider((outletId: resolvedOutletId, orderId: orderId)));
+    final outletId = ref.watch(outletIdProvider) ?? '';
+    final args = (outletId: outletId, orderId: orderId);
+    final detail = ref.watch(_orderDetailProvider(args));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Order Detail')),
+      appBar: AppBar(title: const Text('Order')),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => ErrorView(
           message: 'Could not load order.',
-          onRetry: () => ref.refresh(
-              _orderDetailProvider(
-                      (outletId: resolvedOutletId, orderId: orderId))
-                  .future),
+          onRetry: () =>
+              ref.refresh(_orderDetailProvider(args).future),
         ),
         data: (order) => RefreshIndicator(
-          onRefresh: () => ref.refresh(
-              _orderDetailProvider(
-                      (outletId: resolvedOutletId, orderId: orderId))
-                  .future),
+          onRefresh: () =>
+              ref.refresh(_orderDetailProvider(args).future),
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
             children: [
-              _Header(order: order),
+              _HeaderCard(order: order),
               const SizedBox(height: 12),
               _OrderProgressBar(status: order.status),
               const SizedBox(height: 16),
               _Section(
-                title: 'Battery Fulfillment',
+                title: 'Items',
                 child: _FulfillmentTable(lines: order.lines),
               ),
               if (order.linkedDispatches.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 _Section(
                   title: 'Dispatches',
-                  child: _DispatchTimeline(
-                    dispatches: order.linkedDispatches,
-                    outletId: resolvedOutletId,
-                  ),
+                  child: _DispatchList(dispatches: order.linkedDispatches),
                 ),
               ],
               if (order.linkedInvoices.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 _Section(
                   title: 'Invoice',
-                  child: _InvoiceList(
-                    invoices: order.linkedInvoices,
-                    outletId: resolvedOutletId,
-                  ),
+                  child: _InvoiceList(invoices: order.linkedInvoices),
                 ),
               ],
             ],
@@ -85,9 +70,8 @@ class OrderDetailPage extends ConsumerWidget {
   }
 }
 
-class _Header extends StatelessWidget {
-  const _Header({required this.order});
-
+class _HeaderCard extends StatelessWidget {
+  const _HeaderCard({required this.order});
   final OrderDetail order;
 
   @override
@@ -114,9 +98,9 @@ class _Header extends StatelessWidget {
                 StatusChip(status: order.status),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             _Row('Date', dateStr),
-            _Row('Total', '₹${order.totalValue}'),
+            _Row('Total', '₹${_fmt(order.totalValue)}'),
             _Row('Priority', order.priority.toUpperCase()),
             _Row('Delivery', order.deliveryAddress),
             if (order.notes != null) _Row('Notes', order.notes!),
@@ -129,7 +113,6 @@ class _Header extends StatelessWidget {
 
 class _Row extends StatelessWidget {
   const _Row(this.label, this.value);
-
   final String label;
   final String value;
 
@@ -141,12 +124,12 @@ class _Row extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 80,
+            width: 76,
             child: Text(label,
                 style: Theme.of(context)
                     .textTheme
                     .bodySmall
-                    ?.copyWith(color: Colors.grey)),
+                    ?.copyWith(color: Colors.grey.shade600)),
           ),
           Expanded(child: Text(value)),
         ],
@@ -157,7 +140,6 @@ class _Row extends StatelessWidget {
 
 class _Section extends StatelessWidget {
   const _Section({required this.title, required this.child});
-
   final String title;
   final Widget child;
 
@@ -178,7 +160,7 @@ class _Section extends StatelessWidget {
   }
 }
 
-// ── Order Progress Bar ────────────────────────────────────────────────────────
+// ── Progress bar ──────────────────────────────────────────────────────────────
 
 class _OrderProgressBar extends StatelessWidget {
   const _OrderProgressBar({required this.status});
@@ -190,12 +172,11 @@ class _OrderProgressBar extends StatelessWidget {
     'partially_dispatched',
     'fully_dispatched',
   ];
-
   static const _labels = ['Pending', 'Approved', 'Dispatching', 'Delivered'];
 
   static const _terminalColors = {
     'rejected': Colors.red,
-    'cancelled': Colors.red,
+    'cancelled': Colors.grey,
     'on_hold': Colors.orange,
   };
 
@@ -230,8 +211,7 @@ class _OrderProgressBar extends StatelessWidget {
         child: Row(
           children: List.generate(_steps.length * 2 - 1, (i) {
             if (i.isOdd) {
-              final stepIdx = i ~/ 2;
-              final done = stepIdx < activeIdx;
+              final done = (i ~/ 2) < activeIdx;
               return Expanded(
                 child: Container(
                   height: 3,
@@ -244,6 +224,7 @@ class _OrderProgressBar extends StatelessWidget {
             final stepIdx = i ~/ 2;
             final done = stepIdx <= activeIdx;
             final active = stepIdx == activeIdx;
+            final cs = Theme.of(context).colorScheme;
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -252,9 +233,7 @@ class _OrderProgressBar extends StatelessWidget {
                   height: 22,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: done
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey.shade300,
+                    color: done ? cs.primary : Colors.grey.shade300,
                   ),
                   child: done
                       ? const Icon(Icons.check, size: 14, color: Colors.white)
@@ -267,9 +246,7 @@ class _OrderProgressBar extends StatelessWidget {
                     fontSize: 9,
                     fontWeight:
                         active ? FontWeight.bold : FontWeight.normal,
-                    color: done
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey,
+                    color: done ? cs.primary : Colors.grey,
                   ),
                 ),
               ],
@@ -281,7 +258,7 @@ class _OrderProgressBar extends StatelessWidget {
   }
 }
 
-// ── Battery Fulfillment ───────────────────────────────────────────────────────
+// ── Fulfillment table ─────────────────────────────────────────────────────────
 
 class _FulfillmentTable extends StatelessWidget {
   const _FulfillmentTable({required this.lines});
@@ -297,12 +274,13 @@ class _FulfillmentTable extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                    flex: 3,
-                    child: Text('Battery (SKU)',
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelSmall
-                            ?.copyWith(color: Colors.grey))),
+                  flex: 3,
+                  child: Text('SKU',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: Colors.grey)),
+                ),
                 SizedBox(
                     width: 56,
                     child: Text('Ordered',
@@ -362,8 +340,7 @@ class _FulfillmentTable extends StatelessWidget {
                           width: 56,
                           child: Text('${line.qtyOrdered}',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  color: Colors.black54))),
+                              style: const TextStyle(color: Colors.black54))),
                       SizedBox(
                         width: 64,
                         child: Center(
@@ -402,14 +379,11 @@ class _FulfillmentTable extends StatelessWidget {
   }
 }
 
-// ── Dispatch Timeline ─────────────────────────────────────────────────────────
+// ── Dispatch list ─────────────────────────────────────────────────────────────
 
-class _DispatchTimeline extends StatelessWidget {
-  const _DispatchTimeline(
-      {required this.dispatches, required this.outletId});
-
+class _DispatchList extends StatelessWidget {
+  const _DispatchList({required this.dispatches});
   final List<LinkedDispatch> dispatches;
-  final String outletId;
 
   @override
   Widget build(BuildContext context) {
@@ -427,10 +401,7 @@ class _DispatchTimeline extends StatelessWidget {
             subtitle: Text(
                 '$dateStr  •  ${d.deliveryStatus.replaceAll('_', ' ')}${d.lrNumber != null ? '  •  LR: ${d.lrNumber}' : ''}'),
             trailing: const Icon(Icons.chevron_right, size: 18),
-            onTap: () => context.push(
-              '/dispatches/${d.id}',
-              extra: {'outletId': outletId},
-            ),
+            onTap: () => context.push('/dispatches/${d.id}'),
           );
         }).toList(),
       ),
@@ -438,13 +409,11 @@ class _DispatchTimeline extends StatelessWidget {
   }
 }
 
-// ── Invoice List ──────────────────────────────────────────────────────────────
+// ── Invoice list ──────────────────────────────────────────────────────────────
 
 class _InvoiceList extends StatelessWidget {
-  const _InvoiceList({required this.invoices, required this.outletId});
-
+  const _InvoiceList({required this.invoices});
   final List<LinkedInvoice> invoices;
-  final String outletId;
 
   @override
   Widget build(BuildContext context) {
@@ -455,7 +424,7 @@ class _InvoiceList extends StatelessWidget {
           final dateStr = date != null
               ? '${date.day}/${date.month}/${date.year}'
               : inv.invoiceDate;
-          final isPaid = double.tryParse(inv.amountDue) == 0;
+          final isPaid = (double.tryParse(inv.amountDue) ?? 1) == 0;
           return ListTile(
             dense: true,
             leading: const Icon(Icons.receipt_outlined),
@@ -463,23 +432,28 @@ class _InvoiceList extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: Text(isPaid
                 ? '$dateStr  •  PAID'
-                : '$dateStr  •  Due: ₹${inv.amountDue}'),
+                : '$dateStr  •  Due ₹${_fmt(inv.amountDue)}'),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('₹${inv.total}',
+                Text('₹${_fmt(inv.total)}',
                     style: const TextStyle(fontWeight: FontWeight.w500)),
                 const SizedBox(width: 4),
                 const Icon(Icons.chevron_right, size: 18),
               ],
             ),
-            onTap: () => context.push(
-              '/invoices/${inv.id}',
-              extra: {'outletId': outletId},
-            ),
+            onTap: () => context.push('/invoices/${inv.id}'),
           );
         }).toList(),
       ),
     );
   }
+}
+
+String _fmt(String value) {
+  final d = double.tryParse(value) ?? 0;
+  return d.toStringAsFixed(2).replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]},',
+      );
 }

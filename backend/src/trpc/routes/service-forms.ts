@@ -1,14 +1,22 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { createTRPCRouter, perm } from "../trpc";
+import { createTRPCRouter, perm, permAny } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertOrgAccess, recordComplaintActivity, FINAL_STATUSES } from "./service-shared";
+import { recordComplaintActivity, FINAL_STATUSES } from "./service-shared";
 import type { ServiceFormTemplateField } from "@prisma/client";
+
+// Batch 04: refuse null actor orgId rather than silently widening filters.
+function requireOrgId(actorOrgId: string | null): string {
+  if (!actorOrgId) {
+    throw apiError("FORBIDDEN", "Org context required");
+  }
+  return actorOrgId;
+}
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-function validateFieldValue(
+export function validateFieldValue(
   field: Pick<ServiceFormTemplateField, "fieldType" | "isRequired" | "validationRules">,
   rawValue: string | undefined,
 ): { isValid: boolean; error?: string } {
@@ -32,9 +40,21 @@ function validateFieldValue(
         return { isValid: false, error: `Maximum length is ${rules.maxLength} characters` };
       }
       if (rules?.regex) {
-        if ((rules.regex as string).length > 500) return { isValid: false, error: "Validation configuration error" };
+        const regexSource = rules.regex as string;
+        // ReDoS mitigation per Batch 04 (M-10). Node has no per-regex execution timeout,
+        // so we bound regex source length, input length, and reject obvious
+        // catastrophic-backtracking shapes. Replace with RE2 if templates need richer regex.
+        if (typeof regexSource !== "string" || regexSource.length > 200) {
+          return { isValid: false, error: "Validation configuration error" };
+        }
+        if (val.length > 10_000) {
+          return { isValid: false, error: "Input is too long to validate" };
+        }
+        if (/(\(.*\+\)\+|\(.*\*\)\*|\(.*\?\)\?)/.test(regexSource)) {
+          return { isValid: false, error: "Validation configuration error" };
+        }
         try {
-          if (!new RegExp(rules.regex as string).test(val)) {
+          if (!new RegExp(regexSource).test(val)) {
             return { isValid: false, error: (rules.regexError as string | undefined) ?? "Invalid format" };
           }
         } catch {
@@ -200,7 +220,7 @@ function toTemplateField(f: {
 // ── Router ────────────────────────────────────────────────────────────────────
 
 export const serviceFormsRouter = createTRPCRouter({
-  // ── Template management (service:manage) ────────────────────────────────────
+  // ── Template management (service:templates) ─────────────────────────────────
 
   listTemplates: perm(P.service.read)
     .input(
@@ -211,9 +231,10 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(z.array(templateSchema))
     .query(async ({ ctx, input }) => {
+      const orgId = requireOrgId(ctx.actor.orgId);
       const rows = await ctx.prisma.serviceFormTemplate.findMany({
         where: {
-          orgId: ctx.actor.orgId ?? undefined,
+          orgId,
           ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
         },
         include: { fields: { orderBy: { displayOrder: "asc" } } },
@@ -236,12 +257,12 @@ export const serviceFormsRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(templateSchema)
     .query(async ({ ctx, input }) => {
-      const t = await ctx.prisma.serviceFormTemplate.findUnique({
-        where: { id: input.id },
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const t = await ctx.prisma.serviceFormTemplate.findFirst({
+        where: { id: input.id, orgId },
         include: { fields: { orderBy: { displayOrder: "asc" } } },
       });
       if (!t) throw apiError("NOT_FOUND", "Form template not found");
-      assertOrgAccess(ctx.actor.orgId, t.orgId, "Form template");
       return {
         id: t.id,
         name: t.name,
@@ -255,7 +276,7 @@ export const serviceFormsRouter = createTRPCRouter({
       };
     }),
 
-  createTemplate: perm(P.service.manage)
+  createTemplate: permAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         name: z.string().min(2).max(200),
@@ -293,9 +314,10 @@ export const serviceFormsRouter = createTRPCRouter({
         }
       }
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const t = await ctx.prisma.serviceFormTemplate.create({
         data: {
-          orgId: ctx.actor.orgId ?? null,
+          orgId,
           name: input.name,
           description: input.description ?? null,
           createdById: actorId,
@@ -328,7 +350,7 @@ export const serviceFormsRouter = createTRPCRouter({
       };
     }),
 
-  updateTemplate: perm(P.service.manage)
+  updateTemplate: permAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         id: z.string().uuid(),
@@ -338,9 +360,9 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(templateSchema)
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.id }, select: { id: true, orgId: true } });
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const existing = await ctx.prisma.serviceFormTemplate.findFirst({ where: { id: input.id, orgId }, select: { id: true, orgId: true } });
       if (!existing) throw apiError("NOT_FOUND", "Form template not found");
-      assertOrgAccess(ctx.actor.orgId, existing.orgId, "Form template");
 
       const t = await ctx.prisma.serviceFormTemplate.update({
         where: { id: input.id },
@@ -364,7 +386,7 @@ export const serviceFormsRouter = createTRPCRouter({
       };
     }),
 
-  addField: perm(P.service.manage)
+  addField: permAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         templateId: z.string().uuid(),
@@ -378,9 +400,9 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(templateFieldSchema)
     .mutation(async ({ ctx, input }) => {
-      const tmpl = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.templateId }, select: { id: true, orgId: true } });
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const tmpl = await ctx.prisma.serviceFormTemplate.findFirst({ where: { id: input.templateId, orgId }, select: { id: true, orgId: true } });
       if (!tmpl) throw apiError("NOT_FOUND", "Form template not found");
-      assertOrgAccess(ctx.actor.orgId, tmpl.orgId, "Form template");
 
       if (input.fieldType === "select" || input.fieldType === "multiselect") {
         const options = input.validationRules?.options;
@@ -417,7 +439,7 @@ export const serviceFormsRouter = createTRPCRouter({
       }
     }),
 
-  updateField: perm(P.service.manage)
+  updateField: permAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         fieldId: z.string().uuid(),
@@ -429,8 +451,9 @@ export const serviceFormsRouter = createTRPCRouter({
     )
     .output(templateFieldSchema)
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.prisma.serviceFormTemplateField.findUnique({
-        where: { id: input.fieldId },
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const existing = await ctx.prisma.serviceFormTemplateField.findFirst({
+        where: { id: input.fieldId, template: { orgId } },
         select: { id: true, templateId: true },
       });
       if (!existing) throw apiError("NOT_FOUND", "Form field not found");
@@ -458,12 +481,13 @@ export const serviceFormsRouter = createTRPCRouter({
       return toTemplateField(field);
     }),
 
-  disableField: perm(P.service.manage)
+  disableField: permAny(P.service.templates, P.service.manage)
     .input(z.object({ fieldId: z.string().uuid() }))
     .output(templateFieldSchema)
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.prisma.serviceFormTemplateField.findUnique({
-        where: { id: input.fieldId },
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const existing = await ctx.prisma.serviceFormTemplateField.findFirst({
+        where: { id: input.fieldId, template: { orgId } },
         select: { id: true, templateId: true },
       });
       if (!existing) throw apiError("NOT_FOUND", "Form field not found");
@@ -482,13 +506,13 @@ export const serviceFormsRouter = createTRPCRouter({
       return toTemplateField(field);
     }),
 
-  disableTemplate: perm(P.service.manage)
+  disableTemplate: permAny(P.service.templates, P.service.manage)
     .input(z.object({ id: z.string().uuid() }))
     .output(z.object({ id: z.string(), isActive: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const existing = await ctx.prisma.serviceFormTemplate.findUnique({ where: { id: input.id }, select: { id: true, orgId: true } });
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const existing = await ctx.prisma.serviceFormTemplate.findFirst({ where: { id: input.id, orgId }, select: { id: true, orgId: true } });
       if (!existing) throw apiError("NOT_FOUND", "Form template not found");
-      assertOrgAccess(ctx.actor.orgId, existing.orgId, "Form template");
 
       const t = await ctx.prisma.serviceFormTemplate.update({
         where: { id: input.id },
@@ -516,22 +540,21 @@ export const serviceFormsRouter = createTRPCRouter({
     .output(submissionSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id as string;
+      const orgId = requireOrgId(ctx.actor.orgId);
 
       const [complaint, template] = await Promise.all([
-        ctx.prisma.serviceComplaint.findUnique({
-          where: { id: input.complaintId },
+        ctx.prisma.serviceComplaint.findFirst({
+          where: { id: input.complaintId, orgId },
           select: { id: true, orgId: true, status: true },
         }),
-        ctx.prisma.serviceFormTemplate.findUnique({
-          where: { id: input.templateId },
+        ctx.prisma.serviceFormTemplate.findFirst({
+          where: { id: input.templateId, orgId },
           include: { fields: { where: { isActive: true }, orderBy: { displayOrder: "asc" } } },
         }),
       ]);
 
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-      assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
       if (!template) throw apiError("NOT_FOUND", "Form template not found");
-      assertOrgAccess(ctx.actor.orgId, template.orgId, "Form template");
       if (!template.isActive) throw apiError("BAD_REQUEST", "Cannot submit a disabled form template");
 
       if (FINAL_STATUSES.has(complaint.status)) {
@@ -633,12 +656,12 @@ export const serviceFormsRouter = createTRPCRouter({
     .input(z.object({ complaintId: z.string().uuid() }))
     .output(z.array(submissionSchema))
     .query(async ({ ctx, input }) => {
-      const complaint = await ctx.prisma.serviceComplaint.findUnique({
-        where: { id: input.complaintId },
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const complaint = await ctx.prisma.serviceComplaint.findFirst({
+        where: { id: input.complaintId, orgId },
         select: { id: true, orgId: true },
       });
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-      assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
       const subs = await ctx.prisma.serviceFormSubmission.findMany({
         where: { complaintId: input.complaintId },
@@ -670,7 +693,7 @@ export const serviceFormsRouter = createTRPCRouter({
       }));
     }),
 
-  disableSubmission: perm(P.service.manage)
+  disableSubmission: permAny(P.service.workflow, P.service.manage)
     .input(
       z.object({
         submissionId: z.string().uuid(),
@@ -680,19 +703,20 @@ export const serviceFormsRouter = createTRPCRouter({
     .output(z.object({ id: z.string(), isDisabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
 
-      const existing = await ctx.prisma.serviceFormSubmission.findUnique({
-        where: { id: input.submissionId },
+      const existing = await ctx.prisma.serviceFormSubmission.findFirst({
+        where: { id: input.submissionId, complaint: { orgId } },
         select: { id: true, complaintId: true, isDisabled: true },
       });
       if (!existing) throw apiError("NOT_FOUND", "Form submission not found");
       if (existing.isDisabled) throw apiError("CONFLICT", "Submission is already disabled");
 
-      const complaint = await ctx.prisma.serviceComplaint.findUnique({
-        where: { id: existing.complaintId },
+      const complaint = await ctx.prisma.serviceComplaint.findFirst({
+        where: { id: existing.complaintId, orgId },
         select: { orgId: true, status: true },
       });
-      assertOrgAccess(ctx.actor.orgId, complaint?.orgId ?? null, "Complaint");
+      if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
 
       await ctx.prisma.$transaction(async (tx) => {
         await tx.serviceFormSubmission.update({
@@ -704,8 +728,8 @@ export const serviceFormsRouter = createTRPCRouter({
           complaintId: existing.complaintId,
           actorId,
           action: "form_submission_disabled",
-          fromStatus: complaint?.status ?? null,
-          toStatus: complaint?.status ?? null,
+          fromStatus: complaint.status,
+          toStatus: complaint.status,
           meta: { submissionId: input.submissionId, reason: input.reason },
         });
       });

@@ -177,9 +177,25 @@ void _onStart(ServiceInstance service) async {
             .where((point) => !removable.contains(point['clientPointId']))
             .toList();
         await FieldSyncStore.writePendingPointsTo(storage, queue);
+        await _reportSyncStatus(
+          dio,
+          deviceId: deviceId,
+          clientShiftId: clientShiftId,
+          serverShiftId: serverShiftId,
+          pendingQueueDepth: queue.length,
+          lastCapturedAt: _newestCapturedAt(batch),
+        );
         consecutiveBadShift = 0;
       } on DioException catch (e) {
         if (e.response?.statusCode == 401) {
+          await _reportSyncStatus(
+            dio,
+            deviceId: deviceId,
+            clientShiftId: clientShiftId,
+            serverShiftId: serverShiftId,
+            pendingQueueDepth: pending.length,
+            lastSyncErrorCode: 'UNAUTHORIZED',
+          );
           await service.stopSelf();
           return;
         }
@@ -194,10 +210,27 @@ void _onStart(ServiceInstance service) async {
         final isNetworkError = e.response == null;
         final is5xx = (e.response?.statusCode ?? 0) >= 500;
         if (isNetworkError || is5xx) {
+          await _reportSyncStatus(
+            dio,
+            deviceId: deviceId,
+            clientShiftId: clientShiftId,
+            serverShiftId: serverShiftId,
+            pendingQueueDepth: pending.length,
+            lastSyncErrorCode:
+                isNetworkError ? 'NETWORK_ERROR' : 'SERVER_ERROR',
+          );
           await _handleServerUnreachable(storage, notifier);
         }
         break;
       } catch (_) {
+        await _reportSyncStatus(
+          dio,
+          deviceId: deviceId,
+          clientShiftId: clientShiftId,
+          serverShiftId: serverShiftId,
+          pendingQueueDepth: pending.length,
+          lastSyncErrorCode: 'SYNC_ERROR',
+        );
         await _handleServerUnreachable(storage, notifier);
         break;
       }
@@ -229,7 +262,8 @@ Future<void> _handleServerUnreachable(
 
   final since = DateTime.tryParse(raw);
   if (since == null) return;
-  if (DateTime.now().toUtc().difference(since) >= _kServerUnreachableThreshold) {
+  if (DateTime.now().toUtc().difference(since) >=
+      _kServerUnreachableThreshold) {
     await notifier.show(
       id: _kNotifIdServerUnreachable,
       title: 'Field Sense: Server Unreachable',
@@ -246,6 +280,49 @@ Future<void> _handleServerUnreachable(
 
 Future<void> _clearServerUnreachable(FlutterSecureStorage storage) async {
   await storage.delete(key: _kServerUnreachableSince);
+}
+
+Future<void> _reportSyncStatus(
+  Dio dio, {
+  required String deviceId,
+  required String clientShiftId,
+  required String serverShiftId,
+  required int pendingQueueDepth,
+  String? lastCapturedAt,
+  String? lastSyncErrorCode,
+}) async {
+  try {
+    await dio.post(
+      '/fieldSyncStatus.upsert',
+      data: jsonEncode({
+        'json': {
+          'deviceId': deviceId,
+          'clientShiftId': clientShiftId,
+          'shiftId': serverShiftId,
+          'platform': Platform.isIOS ? 'ios' : 'android',
+          if (lastCapturedAt != null) 'lastCapturedAt': lastCapturedAt,
+          'lastSyncAttemptAt': DateTime.now().toUtc().toIso8601String(),
+          'lastSyncErrorCode': lastSyncErrorCode,
+          'pendingQueueDepth': pendingQueueDepth,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+  } catch (_) {
+    // Health reporting must not block location delivery.
+  }
+}
+
+String? _newestCapturedAt(List<Map<String, dynamic>> points) {
+  DateTime? newest;
+  for (final point in points) {
+    final raw = point['capturedAt'] ?? point['recordedAt'];
+    final parsed = raw is String ? DateTime.tryParse(raw) : null;
+    if (parsed != null && (newest == null || parsed.isAfter(newest))) {
+      newest = parsed;
+    }
+  }
+  return newest?.toUtc().toIso8601String();
 }
 
 // ─── 50 km visit-reminder tracking ───────────────────────────────────────────

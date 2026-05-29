@@ -25,6 +25,11 @@ type Stop = {
 
 type User = { id: string; name: string; email: string }
 
+type UsersListResponse = {
+  items: User[]
+  nextCursor: string | null
+}
+
 type StatusFilter = 'all' | 'open' | 'closed'
 
 function todayISO() {
@@ -59,7 +64,10 @@ export function FieldSenseStopsPage() {
 
   const usersQuery = useQuery({
     queryKey: ['users-list-for-stops'],
-    queryFn: () => trpcQuery<User[]>('users.list', { limit: 200 }),
+    queryFn: async () => {
+      const page = await trpcQuery<UsersListResponse>('users.list', { limit: 100 })
+      return page.items ?? []
+    },
   })
 
   const agentMap = new Map<string, string>(

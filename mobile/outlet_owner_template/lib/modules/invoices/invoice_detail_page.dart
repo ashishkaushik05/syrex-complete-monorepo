@@ -14,17 +14,14 @@ final _invoiceDetailProvider = FutureProvider.autoDispose
 });
 
 class InvoiceDetailPage extends ConsumerWidget {
-  const InvoiceDetailPage({super.key, required this.invoiceId, this.outletId});
+  const InvoiceDetailPage({super.key, required this.invoiceId});
 
   final String invoiceId;
-  final String? outletId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final resolved = (outletId?.isNotEmpty == true ? outletId : null) ??
-        ref.watch(outletIdProvider) ??
-        '';
-    final args = (outletId: resolved, invoiceId: invoiceId);
+    final outletId = ref.watch(outletIdProvider) ?? '';
+    final args = (outletId: outletId, invoiceId: invoiceId);
     final async = ref.watch(_invoiceDetailProvider(args));
 
     return Scaffold(
@@ -33,20 +30,22 @@ class InvoiceDetailPage extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => ErrorView(
           message: 'Could not load invoice.',
-          onRetry: () =>
-              ref.refresh(_invoiceDetailProvider(args).future),
+          onRetry: () => ref.refresh(_invoiceDetailProvider(args).future),
         ),
         data: (inv) => RefreshIndicator(
-          onRefresh: () =>
-              ref.refresh(_invoiceDetailProvider(args).future),
+          onRefresh: () => ref.refresh(_invoiceDetailProvider(args).future),
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _Header(inv: inv),
-              const SizedBox(height: 16),
-              _AmountCard(inv: inv),
-              const SizedBox(height: 16),
+              _HeaderCard(inv: inv),
+              const SizedBox(height: 12),
               _LinesCard(lines: inv.lines),
+              if (inv.charges.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _ChargesCard(inv: inv),
+              ],
+              const SizedBox(height: 12),
+              _TotalsCard(inv: inv),
             ],
           ),
         ),
@@ -55,8 +54,8 @@ class InvoiceDetailPage extends ConsumerWidget {
   }
 }
 
-class _Header extends StatelessWidget {
-  const _Header({required this.inv});
+class _HeaderCard extends StatelessWidget {
+  const _HeaderCard({required this.inv});
   final InvoiceDetail inv;
 
   @override
@@ -64,7 +63,9 @@ class _Header extends StatelessWidget {
     final date = DateTime.tryParse(inv.invoiceDate);
     final dateStr =
         date != null ? '${date.day}/${date.month}/${date.year}' : inv.invoiceDate;
-    final isPaid = double.tryParse(inv.amountDue) == 0;
+    final due = inv.dueDate != null ? DateTime.tryParse(inv.dueDate!) : null;
+    final dueStr = due != null ? '${due.day}/${due.month}/${due.year}' : null;
+    final isPaid = (double.tryParse(inv.amountDue) ?? 1) == 0;
 
     return Card(
       child: Padding(
@@ -75,75 +76,21 @@ class _Header extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  inv.invoiceNumber,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isPaid
-                        ? Colors.green.shade100
-                        : Colors.orange.shade100,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    isPaid ? 'PAID' : 'DUE',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: isPaid
-                          ? Colors.green.shade800
-                          : Colors.orange.shade800,
-                    ),
-                  ),
+                Text(inv.invoiceNumber,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                _Badge(
+                  label: isPaid ? 'PAID' : 'DUE',
+                  color: isPaid ? Colors.green : Colors.orange,
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             _Row('Date', dateStr),
             _Row('Order', inv.orderNumber),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AmountCard extends StatelessWidget {
-  const _AmountCard({required this.inv});
-  final InvoiceDetail inv;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Amounts',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleSmall
-                    ?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            _Row('Subtotal', '₹${inv.subtotal}'),
-            _Row('Total', '₹${inv.total}'),
-            _Row('Paid', '₹${inv.amountPaid}'),
-            const Divider(),
-            _Row('Due',
-                '₹${inv.amountDue}',
-                valueStyle: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: double.tryParse(inv.amountDue) == 0
-                      ? Colors.green
-                      : Colors.red.shade700,
-                )),
+            if (dueStr != null) _Row('Due Date', dueStr),
           ],
         ),
       ),
@@ -157,61 +104,196 @@ class _LinesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Line Items',
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: lines.map((l) {
-              return ListTile(
-                dense: true,
-                title: Text(l.sku,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text('${l.qty} units  ×  ₹${l.unitPrice}'),
-                trailing: Text('₹${l.lineTotal}',
-                    style: const TextStyle(fontWeight: FontWeight.w500)),
-              );
-            }).toList(),
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+            child: Text('Line Items',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
           ),
+          const Divider(),
+          ...lines.map((l) => _LineRow(line: l)),
+        ],
+      ),
+    );
+  }
+}
+
+class _LineRow extends StatelessWidget {
+  const _LineRow({required this.line});
+  final InvoiceLineItem line;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(line.sku,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text('${line.qty} × ₹${_fmt(line.unitPrice)}',
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+          Text('₹${_fmt(line.lineTotal)}',
+              style: const TextStyle(fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChargesCard extends StatelessWidget {
+  const _ChargesCard({required this.inv});
+  final InvoiceDetail inv;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+            child: Text('Taxes & Charges',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+          ),
+          const Divider(),
+          ...inv.charges.map((c) => Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        c.type == 'percentage'
+                            ? '${c.name} (${_fmt(c.rate)}%)'
+                            : c.name,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                    Text('₹${_fmt(c.amount)}',
+                        style: const TextStyle(fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+}
+
+class _TotalsCard extends StatelessWidget {
+  const _TotalsCard({required this.inv});
+  final InvoiceDetail inv;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasDiscount =
+        (double.tryParse(inv.discountAmount) ?? 0) > 0;
+    final isDue = (double.tryParse(inv.amountDue) ?? 0) > 0;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            _Row('Subtotal', '₹${_fmt(inv.subtotal)}'),
+            if (hasDiscount)
+              _Row(
+                'Discount',
+                '−₹${_fmt(inv.discountAmount)}',
+                valueColor: Colors.green.shade700,
+              ),
+            _Row('Total', '₹${_fmt(inv.total)}',
+                bold: true),
+            const Divider(height: 16),
+            _Row('Paid', '₹${_fmt(inv.amountPaid)}',
+                valueColor: Colors.green.shade700),
+            _Row(
+              'Balance Due',
+              '₹${_fmt(inv.amountDue)}',
+              bold: true,
+              valueColor: isDue ? Colors.red.shade700 : Colors.green.shade700,
+            ),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 12, fontWeight: FontWeight.bold, color: color)),
     );
   }
 }
 
 class _Row extends StatelessWidget {
-  const _Row(this.label, this.value, {this.valueStyle});
+  const _Row(this.label, this.value, {this.bold = false, this.valueColor});
   final String label;
   final String value;
-  final TextStyle? valueStyle;
+  final bool bold;
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 72,
+          Expanded(
             child: Text(label,
                 style: Theme.of(context)
                     .textTheme
-                    .bodySmall
-                    ?.copyWith(color: Colors.grey)),
+                    .bodyMedium
+                    ?.copyWith(color: Colors.grey.shade600)),
           ),
-          Expanded(
-              child: Text(value,
-                  style: valueStyle ??
-                      const TextStyle(fontWeight: FontWeight.w500))),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.bold : FontWeight.w500,
+              color: valueColor,
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+String _fmt(String value) {
+  final d = double.tryParse(value) ?? 0;
+  return d.toStringAsFixed(2).replaceAllMapped(
+        RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]},',
+      );
 }

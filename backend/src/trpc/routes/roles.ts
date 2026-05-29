@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { apiError } from "../error";
-import { P, validatePermissionKeys } from "../../rbac/catalog";
+import { P, SUPER_ADMIN_PERMISSION, validatePermissionKeys } from "../../rbac/catalog";
 
 const roleSchema = z.object({
   id: z.string(),
@@ -65,6 +65,18 @@ export const rolesRouter = createTRPCRouter({
     if (!existing) {
       throw apiError("NOT_FOUND", "Role not found");
     }
+
+    if (
+      input.permissions?.includes(SUPER_ADMIN_PERMISSION) &&
+      !ctx.permissions.includes(SUPER_ADMIN_PERMISSION)
+    ) {
+      throw apiError("FORBIDDEN", "Only super-admins can assign wildcard permission");
+    }
+
+    if (input.isSystem !== undefined && !ctx.permissions.includes(SUPER_ADMIN_PERMISSION)) {
+      throw apiError("FORBIDDEN", "Only super-admins can modify system role flag");
+    }
+
     const permissions = input.permissions ? normalizeAndValidateRolePermissions(input.permissions) : undefined;
     const role = await ctx.prisma.role.update({
       where: { id: input.id },
@@ -75,5 +87,30 @@ export const rolesRouter = createTRPCRouter({
       }
     });
     return toRole(role);
-  })
+  }),
+
+  delete: perm(P.roles.delete)
+    .input(z.object({ id: z.string().uuid() }))
+    .output(z.object({ success: z.literal(true) }))
+    .mutation(async ({ ctx, input }) => {
+      const role = await ctx.prisma.role.findUnique({ where: { id: input.id } });
+      if (!role) {
+        throw apiError("NOT_FOUND", "Role not found");
+      }
+
+      if (role.isSystem) {
+        throw apiError("FORBIDDEN", "System roles cannot be deleted");
+      }
+
+      const userCount = await ctx.prisma.user.count({ where: { roleId: input.id } });
+      if (userCount > 0) {
+        throw apiError(
+          "CONFLICT",
+          `Cannot delete role: ${userCount} user(s) (active or inactive) are still assigned`
+        );
+      }
+
+      await ctx.prisma.role.delete({ where: { id: input.id } });
+      return { success: true as const };
+    })
 });

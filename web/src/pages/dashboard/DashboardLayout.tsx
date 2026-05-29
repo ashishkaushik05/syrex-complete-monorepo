@@ -53,7 +53,7 @@ type NavItem = {
   to: string;
   icon: typeof Bell;
   exact: boolean;
-  requiredPermission?: string;
+  requiredPermission?: string | string[];
 };
 
 type NotificationListResponse = {
@@ -241,7 +241,7 @@ const navItems: NavItem[] = [
     to: "/dashboard/service/forms",
     icon: ClipboardList,
     exact: false,
-    requiredPermission: "service:manage",
+    requiredPermission: ["service:templates", "service:manage"],
   },
   {
     section: "Field Sense",
@@ -594,6 +594,9 @@ export function DashboardLayout() {
     return navItems.filter((item) => {
       if (!item.requiredPermission) return true;
       if (isAdmin) return true;
+      if (Array.isArray(item.requiredPermission)) {
+        return item.requiredPermission.some((permission) => can(permission));
+      }
       return can(item.requiredPermission);
     });
   }, [can, isAdmin]);

@@ -4,6 +4,542 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 
 ---
 
+## DEC-20260526-009
+- Decision ID: `DEC-20260526-009`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Field Sense web visibility — draw all active agent trails on Live Map and surface sync health`
+- Decision: `Extend the Live Map to fetch every active agent's trail on page load (simplifyTolerance 10, maxPoints 600), throttle per-agent trail refresh at 8 s on SSE updates, render all trails as dimmed polylines with the selected agent's trail highlighted, surface sync-health indicators (queue depth, error code, platform) in agent panels, extend field:admin to wildcard SSE subscription, include orgId in SSE broadcast payloads, and add an onConnect callback to openFieldSenseStream so "Live" status fires on stream open rather than on first event.`
+- Rationale: `The Live Map currently only draws a trail for the explicitly selected agent. The requirement is that all active agents and their trails are visible at once, with live updates as mobile agents ingest points via ingestV2. The remaining gaps were: bulk trail fetch on load, per-agent throttled refresh, health visibility, and field:admin wildcard support so org-level admins without a stored x-org-id can still subscribe.`
+- Alternatives Considered:
+  - `Re-fetch trails on every SSE event per agent` rejected because ingest can fire multiple times per second; 8 s throttle prevents a DB fan-out stampede.
+  - `Separate AgentMap component` rejected as premature abstraction — the map logic is only used in one place and extraction adds no immediate value.
+- Scope:
+  - `backend/src/app.ts`
+  - `backend/src/trpc/routes/field-helpers.ts`
+  - `backend/src/trpc/routes/field-location.ts`
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/FieldSenseLiveMapPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Impact/Risk:
+  - `Medium: extends field:admin to cross-org reads (resolveReadOrgId) and wildcard SSE — internal-tool risk only.`
+  - `Low: bulk trail fetch on load can produce N parallel DB reads for N agents; capped at 200 agents by activeAgents limit.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Owner Timestamp: `claude-sonnet-4-6 @ 2026-05-26`
+
+---
+
+## DEC-20260526-008
+- Decision ID: `DEC-20260526-008`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Make sales mobile Field Sense compatible with V2 implementation path`
+- Decision: `Wire the sales mobile Field Sense shift lifecycle to the backend V2 sync routes, start and stop the background location service from that lifecycle, guard Field routes by Field Sense enablement/permissions, and report basic sync health.`
+- Rationale: `The report identified that the backend V2 contracts exist but the sales app still used legacy online shift start/end and only hid Field navigation. Compatibility requires the mobile runtime to use the V2 shift ids that the background ingest service expects and to block unauthorized direct Field routes.`
+- Alternatives Considered:
+  - `Implement a full SQLite offline queue immediately` rejected for this change because it is a larger persistence migration and the immediate compatibility blocker is the app not using the V2 lifecycle at all.
+  - `Keep legacy start/end and only start the background service` rejected because the background service depends on V2 client/server shift ids and would keep two production shift paths active.`
+- Scope:
+  - `mobile/sales_mobile_app/lib/app/router/app_router.dart`
+  - `mobile/sales_mobile_app/lib/app/router/app_shell.dart`
+  - `mobile/sales_mobile_app/lib/core/location/background_location_service.dart`
+  - `mobile/sales_mobile_app/lib/core/permissions/permission_service.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/providers/field_providers.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/repository/field_repository.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/screens/field_home_page.dart`
+  - `backend/src/trpc/routes/field-location.ts`
+  - `backend/src/trpc/routes/field-sync-status.ts`
+  - `backend/src/trpc/routes/field-visits.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Defined scope from the Field Sense sales mobile implementation report and current runtime code.`
+  - Done: `Changed sales mobile Field Sense access checks so the Field tab and direct /field routes require isFieldEnabled plus field:read and field:write.`
+  - Done: `Changed FieldHome shift start to request Field permissions, generate a clientShiftId, call fieldShifts.syncStart, persist active client/server shift ids, report sync health, and start BackgroundLocationService.`
+  - Done: `Changed FieldHome shift end to stop background capture, best-effort flush pending V2 points, call fieldShifts.syncEnd when a clientShiftId exists, clear active shift ids, and report queue health.`
+  - Done: `Added mobile fieldSyncStatus.upsert health reporting from the foreground Field repository and background location service without blocking location delivery or shift lifecycle.`
+  - Done: `Reduced the mobile admin attendance list limit from 250 to 200 to match the backend fieldAttendance.list cap.`
+  - Done: `Verification passed: dart format on changed sales mobile files, git diff --check on scoped files, and flutter analyze --no-fatal-infos lib.`
+  - Done: `Follow-up fix: removed the sales mobile legacy fieldShifts.start/end client methods and changed end-shift handling to reconcile active shifts without clientShiftId through fieldShifts.syncStart before calling fieldShifts.syncEnd.`
+  - Done: `Follow-up verification passed: no sales mobile references remain to fieldShifts.start/end, git diff --check passed for scoped files, and flutter analyze --no-fatal-infos lib passed.`
+  - Done: `Follow-up fix: changed backend fieldSyncStatus.upsert to infer orgId from the actor's shiftId/clientShiftId when the mobile app does not send APP_ORG_ID.`
+  - Done: `Follow-up fix: changed fieldVisits.list/forShift and fieldLocation.trail to infer orgId from the requested shift for authorized own-agent or field-admin reads when x-org-id is absent.`
+  - Done: `Follow-up verification passed: backend typecheck, flutter analyze --no-fatal-infos lib, and git diff --check on scoped files.`
+  - Done: `Follow-up fix: changed fieldVisits.log to infer org from the actor's active shift when x-org-id is absent.`
+  - Done: `Follow-up verification passed: backend typecheck and git diff --check on scoped files.`
+  - Not Done: `Full durable SQLite/Drift offline queue was not implemented in this compatibility pass; pending points still use the existing FieldSyncStore secure-storage queue.`
+- Impact/Risk:
+  - `Medium: changes Field Sense shift start/end behavior in the sales mobile app.`
+  - `Low-to-medium: route guarding affects direct links to Field screens for users without Field Sense permissions.`
+- Cleanup Required:
+  - `Follow up with durable SQLite/Drift local queue migration for full offline-first production readiness.`
+  - `Consider adding idempotent offline sync for visits/stops as a separate backend/mobile contract change.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `mobile field owner for durable local queue follow-up`
+- Owner Timestamp: `codex @ 2026-05-26T21:10:00+05:30`
+- Follow-up Notes:
+  - `2026-05-26T21:25:00+05:30: Runtime ngrok logs showed POST /trpc/fieldShifts.end returning 400. Reopening this decision to remove the legacy end fallback for active shifts without clientShiftId by reconciling them through fieldShifts.syncStart before fieldShifts.syncEnd.`
+  - `2026-05-26T21:30:00+05:30: Runtime ngrok logs now show fieldLocation.ingestV2 succeeding while fieldSyncStatus.upsert and fieldVisits.forShift return 400. Reopening to make backend Field Sense follow-up routes infer org from shift/clientShiftId when mobile runs without APP_ORG_ID.`
+  - `2026-05-26T21:33:00+05:30: Runtime ngrok logs show fieldVisits.log returning 400 while fieldShifts.active succeeds. Reopening to make fieldVisits.log infer org from the active shift when x-org-id is absent.`
+
+---
+
+## DEC-20260526-007
+- Decision ID: `DEC-20260526-007`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Report Field Sense production implementation path for sales mobile application`
+- Decision: `Create a focused Field Sense implementation report for the sales mobile app, anchored to the existing backend V2 sync contracts and current mobile/web/backend gaps.`
+- Rationale: `Field Sense crosses mobile background location capture, backend idempotent sync, web supervisor visibility, role permissions, and platform permissions. A durable report is needed before changing runtime behavior so the app has one production path instead of mixed legacy online and partial V2 flows.`
+- Alternatives Considered:
+  - `Chat-only answer` rejected because the repository governance workflow and the user's request for a report call for a durable artifact.
+  - `Patch mobile immediately` rejected because the current request asks how Field Sense should be implemented, and the audit found broader lifecycle/storage/permission concerns that should be captured before implementation.`
+- Scope:
+  - `plan/FIELD_SENSE_SALES_MOBILE_IMPLEMENTATION_REPORT.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Inspected current sales mobile Field Sense routes, mobile permission handling, background location service, backend V2 sync routes, Field Sense schema, web read surfaces, and existing Field Sense planning docs.`
+  - Done: `Created a durable Field Sense sales mobile implementation report covering the target V2 production path, current mobile/backend/web/RBAC/platform gaps, implementation phases, permissions matrix, and acceptance criteria.`
+  - Not Done: `No runtime code changes were made because the user requested an implementation report.`
+- Impact/Risk:
+  - `Low: documentation-only audit with no runtime behavior changes.`
+- Cleanup Required:
+  - `Use the report's Phase 0/P1 sequence when starting implementation so the app moves to one V2 local-first Field Sense path.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-26T20:58:00+05:30`
+
+---
+
+## DEC-20260526-006
+- Decision ID: `DEC-20260526-006`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Fix sales mobile API route compatibility for catalog, outlets, orders, and Field Sense`
+- Decision: `Keep sales mobile on the existing tRPC routes, but align the backend outlet/catalog contracts and Sales role permission seed so internal sales executives can load active products/outlets and use the sales/field routes without granting admin-only controls.`
+- Rationale: `The sales app already calls the primary API routes directly; product loading is failing from contract drift around product brand/spec fields, and outlet/order flows are blocked by backend scope checks that only support super-admin, warehouse, or single-outlet users.`
+- Alternatives Considered:
+  - `Create a separate sales-mobile facade router` rejected because it would duplicate active products/outlets/orders/field routes and create a second implementation path for the same behavior.
+  - `Grant Sales super-admin permissions` rejected because it would over-permit sales executives and bypass route-level scope logic instead of fixing the intended sales scope.`
+- Scope:
+  - `backend/src/trpc/routes/outlet-access.ts`
+  - `backend/src/trpc/routes/outlets.ts`
+  - `backend/src/trpc/routes/products.ts`
+  - `backend/src/trpc/routes/orders-shared.ts`
+  - `backend/src/trpc/routes/invoices.ts`
+  - `backend/src/trpc/routes/dispatches.ts`
+  - `backend/scripts/seed-permissions.ts`
+  - `mobile/sales_mobile_app/lib/core/api/catalog_client.dart`
+  - `mobile/sales_mobile_app/lib/core/api/sales_client.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/repository/field_repository.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/screens/create_visit_page.dart`
+  - `mobile/sales_mobile_app/lib/modules/field/screens/attendance_page.dart`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Identified the active sales mobile route calls and backend permission/scope gates before implementation.`
+  - Done: `Added an internal-sales outlet access path based on internal userType plus orders.write/outlets.read permissions, and applied it to outlets.list/getById, order listing, order creation outlet access, invoices, and dispatch reads.`
+  - Done: `Updated products.list/getById to support brandId filtering and return brandId through the product category relation for sales mobile catalog filtering.`
+  - Done: `Changed the sales mobile catalog client to request active catalog data, follow pagination for brands/categories/products, and parse product specs stored as JSON objects.`
+  - Done: `Changed the sales mobile outlet client to follow all outlets.list pages instead of stopping at the first 100 active outlets.`
+  - Done: `Fixed Field Sense mobile list extraction for users.list-style { items, nextCursor } envelopes and stopped non-field-admin sales users from calling users.list from AttendancePage.`
+  - Done: `Expanded the visit outlet picker to render all loaded outlets instead of only the first five.`
+  - Done: `Reduced DEV_SALES_PERMISSIONS to the sales-mobile route surface: orders read/write, catalog read, outlets read, dispatches read, invoices/payments read, and Field Sense read/write.`
+  - Done: `Verification passed: backend typecheck, direct RBAC catalog validation for seed permission arrays, flutter analyze --no-fatal-infos lib, and bun test src/trpc/routes/dispatches.test.ts src/trpc/routes/invoices.test.ts.`
+  - Not Done: `bun run rbac:preflight could not run because backend/scripts/rbac-preflight.ts is currently deleted in the worktree. A broader focused test command including outlets.test.ts and field-ingestion.test.ts still fails in the auth test harness with Actor not found before route assertions.`
+- Impact/Risk:
+  - `Medium: changes sales outlet visibility and order-create access for internal sales users based on explicit sales permissions.`
+  - `Low-to-medium: product list output will include brandId for mobile filtering while preserving existing product fields.`
+- Cleanup Required:
+  - `Restore or replace backend/scripts/rbac-preflight.ts if rbac:preflight is still expected by backend/package.json.`
+  - `Refresh the outlet/field ingestion test harness actor mocks so they match the current auth middleware before using those suites as release gates.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-26T21:20:00+05:30`
+
+---
+
+## DEC-20260526-005
+- Decision ID: `DEC-20260526-005`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Fix ASI assignment request rejected when note is empty`
+- Decision: `Allow nullable assignment notes in serviceAssignments.assign/reassign because the web service assignment form posts null for empty optional notes.`
+- Rationale: `The 400 response on serviceAssignments.assign was caused by input validation rejecting note:null before role/complaint assignment logic ran. Empty notes are valid optional metadata and should not block ASI appointment.`
+- Alternatives Considered:
+  - `Patch only the web adapter to omit null notes` rejected because other callers may already use null for optional API fields and the backend contract should explicitly allow it.
+  - `Require a note for assignment` rejected because assignment notes are optional in the UI and data model.`
+- Scope:
+  - `backend/src/trpc/routes/service-assignments.ts`
+  - `backend/src/trpc/routes/service-assignments.test.ts`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Reproduced local validation error: note:null causes BAD_REQUEST Zod invalid_type before assignment.`
+  - Done: `Updated serviceAssignments.assign and serviceAssignments.reassign input schemas to accept nullable optional notes.`
+  - Done: `Updated service assignment regression test to cover initial ASI assignment with note:null.`
+  - Done: `Verification passed: bun test src/trpc/routes/service-assignments.test.ts src/trpc/routes/service-tests.test.ts and backend typecheck.`
+  - Done: `Live local verification passed for complaint dd8fde06-74c4-4479-a7a9-31eab39065e5 assigning ASI 21ce6639-aad9-46bb-8ca8-dac460260bc5 with note:null.`
+  - Not Done: `No web code changes were required.`
+- Impact/Risk:
+  - `Low: loosens optional note validation without changing assignment authorization.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-26T21:00:00+05:30`
+
+---
+
+## DEC-20260526-004
+- Decision ID: `DEC-20260526-004`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Link complaint battery SKU selection to catalog products`
+- Decision: `Replace free-text complaint battery SKU entry with product-backed SKU selection and enforce productId validation server-side, deriving batterySku from the catalog Product.sku.`
+- Rationale: `Complaint intake should not accept arbitrary SKU text. The selected battery SKU must be a real active catalog product so downstream warranty, fulfillment, and serial intelligence have productId linkage.`
+- Alternatives Considered:
+  - `Keep text input and validate by SKU string only` rejected because productId would remain optional and fulfillment would still be blocked by missing product linkage.
+  - `Frontend-only dropdown` rejected because direct API callers could still send fake SKU values.`
+- Scope:
+  - `backend/src/trpc/routes/service-complaints.ts`
+  - `backend/src/trpc/routes/service-tests.test.ts`
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/ServiceComplaintsPage.tsx`
+  - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Identified /catalog/skus as the current web adapter backed by products.list and Product.sku as the backend SKU source.`
+  - Done: `Changed serviceComplaints.create so every complaint line must include an active catalog productId and batterySku is derived from Product.sku server-side.`
+  - Done: `Changed serviceComplaints.updateLine so line SKU edits use productId and reject invalid or inactive catalog products.`
+  - Done: `Updated web API adapter to send productId for complaint line creation and updates instead of free-text batterySku.`
+  - Done: `Replaced the complaint creation battery SKU text input with a /catalog/skus dropdown.`
+  - Done: `Replaced the complaint detail battery line SKU editor with the same catalog-backed SKU dropdown.`
+  - Done: `Verification passed: backend typecheck, web production build, and bun test src/trpc/routes/service-tests.test.ts src/trpc/routes/service-assignments.test.ts.`
+  - Not Done: `No automatic backfill was added for existing complaint lines that have batterySku but no productId; they can be corrected from the complaint detail SKU dropdown.`
+- Impact/Risk:
+  - `Medium: complaint line creation/edit now depends on active catalog products. Existing lines without productId may need manual selection before fulfillment.`
+- Cleanup Required:
+  - `Optional follow-up: add a one-time backfill for old service_complaint_lines.productId from batterySku where exact Product.sku matches.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `service module owner for optional historical backfill`
+- Owner Timestamp: `codex @ 2026-05-26T20:38:00+05:30`
+
+---
+
+## DEC-20260526-003
+- Decision ID: `DEC-20260526-003`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Capture customer contact and battery SKU on complaints with optional creation serials`
+- Decision: `Add customerName/customerPhone to service complaints, batterySku to complaint lines, allow serialNumber to be optional at creation, add a line metadata update path for later serial capture, and block test submission until every complaint line has a serial number.`
+- Rationale: `Service complaints must capture the actual customer contact and battery SKU at intake, while serial IDs may not be available immediately. The test report is the point where serial traceability becomes mandatory.`
+- Alternatives Considered:
+  - `Keep serial required at creation` rejected because intake may happen before serial capture.
+  - `Only add frontend fields` rejected because test-report serial enforcement and persistence must be backend-owned.
+- Scope:
+  - `schema.prisma`
+  - `backend/src/trpc/routes/service-complaints.ts`
+  - `backend/src/trpc/routes/service-tests.ts`
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/ServiceComplaintsPage.tsx`
+  - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added nullable customerName/customerPhone fields on ServiceComplaint and nullable batterySku/serialNumber/normalizedSerial support on ServiceComplaintLine.`
+  - Done: `Changed serviceComplaints.create so customer name, customer phone, and battery SKU are required at intake while serialNumber is optional and indexed only when present.`
+  - Done: `Added serviceComplaints.updateLine so service staff can fill or correct battery SKU, serial ID, and notes after creation before the test report gate.`
+  - Done: `Changed serviceTests.submit to reject test report submission until every complaint line has a serial number.`
+  - Done: `Updated the web complaint creation dialog to ask for customer name, customer phone, battery SKU, optional serial ID, and line notes.`
+  - Done: `Updated complaint detail UI to display customer contact, edit battery lines, show serial-pending state, and disable test submission until serials are complete.`
+  - Done: `Added backend regression coverage for missing-serial test submission rejection.`
+  - Done: `Verification passed: Prisma client generation, backend typecheck, web production build, and bun test src/trpc/routes/service-tests.test.ts src/trpc/routes/service-assignments.test.ts.`
+  - Not Done: `No database migration file was added because this repo currently keeps only root schema.prisma without migrations; deploy path must apply the schema delta through the repo's existing DB sync process.`
+- Impact/Risk:
+  - `Medium: schema and API contract change for service complaint creation and test submission.`
+- Cleanup Required:
+  - `Apply the schema delta in target environments before deploying the updated complaint intake/test flow.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `deployment owner for schema application`
+- Owner Timestamp: `codex @ 2026-05-26T01:52:00+05:30`
+- Follow-up Notes:
+  - `2026-05-26T20:23:00+05:30: Runtime complaint creation failed because the generated Prisma client was updated but the local dev database was missing customerName/customerPhone/batterySku and still had required serial columns. Applied a scoped SQL delta to local Postgres for service_complaints and service_complaint_lines, regenerated Prisma client, and verified the columns exist with nullable serial fields.`
+
+---
+
+## DEC-20260526-002
+- Decision ID: `DEC-20260526-002`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Create ASI/Service Engineer assignment system for complaints`
+- Decision: `Make service assignment role boundaries server-enforced and web-visible: create service-specific assignment candidate APIs, require ASI for initial complaint ownership, allow only Service Engineer users for SE assignment, and move the complaint detail UI away from broad user selection.`
+- Rationale: `The service workflow must not allow arbitrary internal users to be assigned to complaints. ASIs and Service Engineers are dedicated service roles, and every complaint should first be owned by an ASI before downstream engineer assignment.`
+- Alternatives Considered:
+  - `Keep client-side role filtering only` rejected because any caller could still post arbitrary user IDs to assignment endpoints.
+  - `Use generic users.list everywhere` rejected because the service app needs a service-specific staff surface with backend-enforced role eligibility.
+- Scope:
+  - `backend/src/trpc/routes/service-complaints.ts`
+  - `backend/src/trpc/routes/service-assignments.ts`
+  - `web/src/lib/api.ts`
+  - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added serviceAssignments.candidates so the web service workspace gets only active internal ASI users and Service Engineer users from a backend-filtered service-specific endpoint.`
+  - Done: `Changed serviceAssignments.assign into initial ASI appointment: requires an ASI user, refuses final complaints, refuses already-appointed complaints, and moves raised complaints to assigned.`
+  - Done: `Changed serviceAssignments.reassign so service engineers can only be assigned after an ASI owns the complaint; ASI actors can assign engineers only for complaints assigned to themselves and cannot transfer ASI ownership.`
+  - Done: `Blocked serviceComplaints.transition("assign") so complaints cannot be moved to assigned without an ASI appointment record.`
+  - Done: `Updated the complaint detail web UI to use the service candidate endpoint, appoint ASI first, then assign Service Engineer after ASI ownership exists.`
+  - Done: `Removed the old direct claim compatibility path by returning an explicit error instructing users to appoint an ASI first.`
+  - Done: `Added backend regression tests for ASI-only initial assignment, pre-ASI engineer rejection, and ASI ownership enforcement.`
+  - Done: `Verification passed: backend typecheck, web production build, and bun test src/trpc/routes/service-assignments.test.ts.`
+  - Not Done: `No schema hierarchy was added for persistent ASI-to-engineer territory/team membership; current enforcement is role-based plus complaint ownership-based.`
+- Impact/Risk:
+  - `Medium: tightens service assignment behavior; workflows that relied on assigning non-ASI/non-SE users will now be rejected.`
+- Cleanup Required:
+  - `If ASI teams/territories need to be managed independently of complaint ownership, add a dedicated ASI-service-engineer membership model in a follow-up decision.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `service module owner for optional ASI team membership model`
+- Owner Timestamp: `codex @ 2026-05-26T01:28:00+05:30`
+
+---
+
+## DEC-20260526-001
+- Decision ID: `DEC-20260526-001`
+- Model: `codex`
+- Branch/Commit: `master @ 3a545a2`
+- Task: `Audit current complaints-module implementation before service/frontend changes`
+- Decision: `Create a read-only implementation report for the current complaints module across backend, web, mobile, schema, RBAC, tests, and known production gaps.`
+- Rationale: `Upcoming service-module/frontend changes need a concrete baseline so new work does not duplicate old paths or preserve broken behavior by accident.`
+- Alternatives Considered:
+  - `Chat-only summary` rejected because this repository uses durable audit/plan artifacts for service-module readiness work.
+  - `Start implementation immediately` rejected because the user explicitly requested complete current context and a report first.
+- Scope:
+  - `plan/service-audit/COMPLAINTS_MODULE_IMPLEMENTATION_REPORT.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created plan/service-audit/COMPLAINTS_MODULE_IMPLEMENTATION_REPORT.md covering backend complaint lifecycle, web UI, mobile surfaces, schema/RBAC, tests, verification results, and production gaps.`
+  - Done: `Verified backend typecheck and web production build pass; captured focused service test failures and service mobile analyzer issues in the report.`
+  - Not Done: `No implementation fixes were made; this was an audit/report task only.`
+- Impact/Risk:
+  - `Documentation-only change; no runtime behavior changes intended.`
+- Cleanup Required:
+  - `Use the report findings to scope the next service/frontend implementation decision before code edits.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `service/frontend implementation owner`
+- Owner Timestamp: `codex @ 2026-05-26T00:58:00+05:30`
+
+---
+
+## DEC-20260525-016
+- Decision ID: `DEC-20260525-016`
+- Model: `claude-sonnet-4-6`
+- Branch/Commit: `master @ 42ef8dc`
+- Task: `Outlet mobile app complete rewrite — bottom nav shell, all missing modules, backend gaps`
+- Decision: `Full rewrite of outlet Flutter app with StatefulShellRoute bottom nav (Home/Orders/Accounts/More), new modules (Payments, Service Complaints, Profile), fix InvoiceDetail DTO (missing charges/dueDate/discount), add backend dispatchHistory endpoint, add service.read+write to OUTLET_PERMISSIONS, eliminate dead code (invoice_history_page.dart, old route/extra patterns).`
+- Rationale: `Existing app had broken dispatchHistory API call (endpoint missing), incomplete InvoiceDetail DTO, no payments/complaints UI, and a flat list-tile dashboard with no bottom nav. All of these made the app non-functional for its core use case.`
+- Alternatives Considered:
+  - `Incremental patch of existing screens` rejected because the flat-nav structure would remain, requiring another rewrite later.
+  - `Keep InvoiceHistoryPage as standalone route` rejected because the Accounts tab consolidates related financial views, eliminating dead-end navigation.
+- Scope:
+  - `backend/src/trpc/routes/outlet-portal.ts` (add dispatchHistory)
+  - `backend/scripts/seed-permissions.ts` (add service.read + service.write to OUTLET_PERMISSIONS)
+  - `mobile/outlet_owner_template/lib/app/router/app_router.dart` (StatefulShellRoute rewrite)
+  - `mobile/outlet_owner_template/lib/app/theme/app_theme.dart`
+  - `mobile/outlet_owner_template/lib/core/api/outlet_portal_client.dart` (fix DTOs + dispatchHistory)
+  - `mobile/outlet_owner_template/lib/core/api/payments_client.dart` (new)
+  - `mobile/outlet_owner_template/lib/core/api/service_complaints_client.dart` (new)
+  - `mobile/outlet_owner_template/lib/modules/dashboard/dashboard_page.dart` (rewrite)
+  - `mobile/outlet_owner_template/lib/modules/accounts/accounts_shell_page.dart` (new)
+  - `mobile/outlet_owner_template/lib/modules/invoices/invoice_detail_page.dart` (fix charges)
+  - `mobile/outlet_owner_template/lib/modules/orders/dispatch_history_page.dart` (fix)
+  - `mobile/outlet_owner_template/lib/modules/orders/order_detail_page.dart` (remove extra pattern)
+  - `mobile/outlet_owner_template/lib/modules/orders/dispatch_detail_page.dart` (remove extra pattern)
+  - `mobile/outlet_owner_template/lib/modules/service/complaint_list_page.dart` (new)
+  - `mobile/outlet_owner_template/lib/modules/service/raise_complaint_page.dart` (new)
+  - `mobile/outlet_owner_template/lib/modules/profile/profile_page.dart` (new)
+  - `mobile/outlet_owner_template/lib/modules/more/more_page.dart` (new)
+  - `mobile/outlet_owner_template/lib/shared/widgets/empty_state.dart` (new)
+  - `mobile/outlet_owner_template/lib/shared/widgets/status_chip.dart` (extend)
+  - `mobile/outlet_owner_template/lib/modules/invoices/invoice_history_page.dart` (DELETED — replaced by Accounts tab)
+- Status: `completed`
+- Completion Notes: `All 0 Flutter analysis errors. Backend typecheck clean. dispatchHistory endpoint live. OUTLET_PERMISSIONS now includes service.read+write. All outletId-via-extra patterns eliminated in favour of outletIdProvider.`
+- Impact/Risk: `OUTLET_PERMISSIONS change requires re-seeding dev DB (bun run db:seed) to take effect. Mobile routes changed: /orders/create → /orders/new, /invoices/history removed (use /accounts tab). Any deep links into old routes will 404.`
+- Cleanup Actions: `None — migration is intentional and complete.`
+
+---
+
+## DEC-20260525-015
+- Decision ID: `DEC-20260525-015`
+- Model: `copilot-cli`
+- Branch/Commit: `master @ 42ef8dc`
+- Task: `Split service workflow vs template permissions + add ASI/SE default roles`
+- Decision: `Introduce service:workflow and service:templates permissions, gate workflow/template routes accordingly, seed default ASI/SE roles, and enforce ASI/SE role assignment while keeping service:manage as a temporary legacy alias.`
+- Rationale: `ASI/SE require test/transition access without inheriting template-admin power; the current service:manage gate couples those operations and blocks least-privilege roles.`
+- Alternatives Considered:
+  - `Keep service:manage for all workflows and templates` rejected because it prevents least-privilege ASI/SE roles.
+  - `Remove service:manage immediately` rejected because it would break existing roles that only hold service:manage in active environments.
+- Scope:
+  - `backend/src/rbac/modules/service.ts`
+  - `backend/src/trpc/trpc.ts` (permAny helper)
+  - `backend/src/trpc/routes/service-complaints.ts`
+  - `backend/src/trpc/routes/service-tests.ts`
+  - `backend/src/trpc/routes/service-forms.ts`
+  - `backend/src/trpc/routes/service-assignments.ts`
+  - `backend/scripts/seed-permissions.ts`
+  - `backend/scripts/demo-seed.ts`
+  - `backend/scripts/dev-seed.ts`
+  - `web/src/pages/dashboard/ServiceComplaintDetailPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added service:workflow and service:templates permissions; introduced permAny helper for legacy service:manage aliasing; updated service routes to use workflow/templates gates; enforced ASI/SE role checks in assignments; seeded ASI/SE roles in demo/dev seeds; filtered assignment dropdowns to ASI/SE in the web UI; updated service template UI and nav permission handling.`
+  - Not Done: `None.`
+- Impact/Risk:
+  - `Medium: permission gates change for service workflows/templates; misconfigured roles could lose access without legacy alias.`
+  - `Medium: assignment enforcement may block users until ASI/SE roles are seeded and assigned.`
+- Cleanup Required:
+  - `Remove legacy service:manage alias once role migrations are completed and deployments confirm new permissions are assigned.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `Temporary dual-acceptance of service:manage with service:workflow/templates until cleanup.`
+- Next Cleanup Owner: `copilot-cli + repo owner — remove legacy alias after permissions migration`
+- Owner Timestamp: `copilot-cli @ 2026-05-25T11:21:26Z`
+
+---
+
+## DEC-20260525-014
+- Decision ID: `DEC-20260525-014`
+- Model: `codex`
+- Branch/Commit: `master @ 42ef8dc`
+- Task: `Make web UI fully compatible with backend JWT auth implementation`
+- Decision: `Replace legacy web actor-header auth (`x-actor-id`) with JWT session handling: persist access/refresh tokens from auth.login, send Bearer tokens on all tRPC/SSE calls, auto-refresh access tokens via auth.refresh on 401, and migrate direct UI fetches that bypass the JWT-aware adapter.`
+- Rationale: `Backend now resolves actor/session only from verified Bearer JWT and strips inbound actor headers before tRPC context creation. Current web UI still depends on actor-id localStorage headers, causing protected calls and SSE to fail.`
+- Alternatives Considered:
+  - `Re-enable x-actor-id trust in backend` rejected because it weakens auth hardening and conflicts with the new JWT session model.
+  - `Store only access token with forced re-login on expiry` rejected because backend already provides refresh-token rotation and the UI should maintain stable sessions.
+- Scope:
+  - `web/src/lib/api.ts` (JWT token storage, Bearer header injection, refresh flow, SSE auth headers, logout/session clear behavior)
+  - `web/src/pages/dashboard/UsersPage.tsx` (replace direct actor-header fetch with adapter-backed tRPC mutation)
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Identified incompatibility surface between backend JWT middleware and web actor-header adapter.`
+  - Not Done: `Web token lifecycle migration and direct-call cleanup are pending.`
+- Impact/Risk:
+  - `Medium: touches central web API/auth adapter; regressions could affect login persistence and any protected page load.`
+- Cleanup Required:
+  - `Update this same decision entry to final status with completed/not-completed details after implementation and verification.`
+- Owner Timestamp: `codex @ 2026-05-25T12:45:00+05:30`
+
+---
+
+## DEC-20260525-013
+- Decision ID: `DEC-20260525-013`
+- Model: `claude-code`
+- Branch/Commit: `master @ 42ef8dc`
+- Task: `Batch 05 — Field Sense security fixes (C-11, C-12, C-18, H-11, M-04, M-05, M-06, L-13)`
+- Decision: `Apply surgical security fixes to field-location.ts, field-visits.ts, field-stops.ts, and the SSE wildcard guard in app.ts. Defer SSE memory leak (Batch 09), RDP fix (Batch 06), and end-of-shift rate-limit reset wiring (Batch 06).`
+- Rationale: `Audit Batch 05 spec mandates these fixes to prevent cross-org broadcast leak, IDOR-style impersonation on stops/visits, deactivated-user exposure on activeAgents, and resource exhaustion via unbounded location ingest.`
+- Alternatives Considered:
+  - `Wait for Batch 08 before C-18` rejected — pre-Batch-08 the bogus orgId filters on Outlet/User are silently no-ops, so removing them is strictly safer; org scope is still enforced indirectly via outlet.userId/customer link plus shift.orgId stamping on the visit row.
+  - `Move rate limiting into a global Hono middleware` rejected — field ingest needs per-(agent,shift) keying and a reset hook from end-of-shift; a route-local limiter with an exported reset helper is the clean fit.
+- Scope:
+  - `backend/src/app.ts` — SSE wildcard guard only (Batch 01 owns Bearer resolution; that change already landed in this file)
+  - `backend/src/trpc/routes/field-location.ts` — C-11 remove secondary broadcast; M-04 rate limiter + export resetIngestBucket; M-06 agent.isActive filter; L-13 pagination + shape change
+  - `backend/src/trpc/routes/field-visits.ts` — C-18 remove invalid orgId filters on outlet/user lookups; H-11 explicit agentId ownership check; M-05 HTTPS-only audioUrl
+  - `backend/src/trpc/routes/field-stops.ts` — H-11 explicit agentId ownership check on start
+  - `backend/src/trpc/error.ts` — add TOO_MANY_REQUESTS to ApiErrorCode (additive)
+  - `backend/src/infra/sse.ts` — add test-only broadcasts log + resetBroadcasts (no production behavior change)
+  - `backend/src/trpc/routes/field-ingestion.test.ts` — 10 regression tests
+  - `plan/audit/ISSUES.md` — mark fixed rows done
+- Status: `completed`
+- Completion Notes:
+  - Done: `C-11 — deleted secondary cross-org broadcast in field-location.ingest. ingestV2 already broadcast only to shift-derived orgId; verified by inspection.`
+  - Done: `C-12 — dropped orgs:read from SSE wildcard guard in app.ts; only SUPER_ADMIN_PERMISSION may wildcard-subscribe.`
+  - Done: `C-18 — removed bogus orgId filter from outlet.findFirst and user.findFirst in field-visits.log. Pre-Batch-08 scope guarantee documented inline; regression test asserts the filter never reappears.`
+  - Done: `H-11 — added optional agentId schema field + early FORBIDDEN check (before shift lookup) in field-visits.log and field-stops.start.`
+  - Done: `M-04 — per-(agent,shift) sliding-window limiter (2000 pts/min) wired into ingest and ingestV2. resetIngestBucket exported for Batch 06 to call on shift end. 5-min sweep with NODE_ENV/BUN_TEST guard.`
+  - Done: `M-05 — audioUrl restricted to https:// via Zod refine; file:// and http:// rejected at input validation.`
+  - Done: `M-06 — activeAgents filters by agent.isActive: true.`
+  - Done: `L-13 — activeAgents takes limit (default 100, max 200) and returns { agents, hasMore }.`
+  - Done: `Added TOO_MANY_REQUESTS to src/trpc/error.ts (additive).`
+  - Done: `Added 10 regression tests in field-ingestion.test.ts covering C-11, C-18 (x2), H-11 (x2), M-04, M-05, M-06, L-13. All 10 pass. bun run typecheck passes.`
+  - Done: `Batch 01 fallback note: app.ts already lands Bearer-resolved actor (current head, not waiting). Batch 05 only touched the SSE wildcard guard inside app.ts as scoped — no further Bearer fallback needed.`
+  - Not Done: `Wiring resetIngestBucket from field-shifts end/syncEnd handlers — Batch 06 owns. Web caller (FieldSenseLiveMapPage.tsx:215) will need to read .agents/.hasMore for the activeAgents shape change — flagged for separate follow-up, out of Batch 05 scope.`
+- Impact/Risk:
+  - `Medium-low: activeAgents response shape changes from Array<ActiveAgent> to { agents, hasMore }. Single known caller: web/src/pages/dashboard/FieldSenseLiveMapPage.tsx:215.`
+  - `Rate limiter is per-process (D-09 single-instance assumption).`
+  - `Pre-Batch-08 C-18 fix: org isolation between outlet/customer is enforced transitively (visit row stamped with shift.orgId; customer must own outlet). Batch 08 should add Outlet.orgId and re-introduce a direct compare.`
+  - `Three pre-existing tests in field-ingestion.test.ts (unrelated to Batch 05) remain failing because the original mock does not implement prisma.$transaction added later in field-shifts.syncStart. Not in scope.`
+- Cleanup Required:
+  - `Batch 06 must wire resetIngestBucket(agentId, shiftId) into field-shifts end/syncEnd handlers.`
+  - `Batch 08 should replace indirect outlet org guard in field-visits.log with a direct Outlet.orgId === shift.orgId compare.`
+  - `Update web caller FieldSenseLiveMapPage.tsx to read activeAgents response as { agents, hasMore }.`
+  - `Repair pre-existing field-ingestion.test.ts mocks to support prisma.$transaction (orthogonal cleanup).`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `Batch 06 also edits field-location.ts (RDP depth limit, cron lock). Coordination: Batch 05 left rdp() and the trail/agentTrail handlers untouched.`
+- Next Cleanup Owner: `Batch 06 agent (claude-code) — same audit cycle`
+- Owner Timestamp: `claude-code @ 2026-05-25T07:00:00Z`
+
+---
+
+## DEC-20260525-009
+- Decision ID: `DEC-20260525-009`
+- Model: `claude-code`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Batch 04 — Service module IDOR & null-orgId fixes (C-07, C-08, H-12, M-09, M-10)`
+- Decision: `Replace the load-then-check IDOR pattern across the six service routes with scoped findFirst({ id, orgId }) returning NOT_FOUND when missing or cross-org, add a null-orgId FORBIDDEN guard on every list/create procedure, add creation-time expiresAt validation on service machine clients, and tighten regex validation in service-forms against ReDoS.`
+- Rationale: `Audit identified IDOR (load-then-check) and null-orgId filter erasure across all service-* routes, plus a missing creation-time guard on service client expiresAt and an unbounded user-supplied regex in form validation. Pattern fixes per batch spec 04-service-module-idor.md.`
+- Alternatives Considered:
+  - `Modify assertOrgAccess in service-shared.ts to enforce null guard` rejected because batch spec explicitly marks service-shared.ts as read-only and contracts (NOT_FOUND vs FORBIDDEN) should be encoded at the procedure call site for clarity.
+  - `Use a sentinel "____no_match____" instead of FORBIDDEN throw` rejected per 00-README convention against sentinels.
+  - `Adopt RE2 immediately for regex validation` rejected as out-of-scope; mitigation heuristic per batch spec is sufficient interim measure.
+- Scope:
+  - `backend/src/trpc/routes/service-complaints.ts`
+  - `backend/src/trpc/routes/service-warranty.ts`
+  - `backend/src/trpc/routes/service-tests.ts`
+  - `backend/src/trpc/routes/service-assignments.ts`
+  - `backend/src/trpc/routes/service-forms.ts`
+  - `backend/src/trpc/routes/service-integrations.ts`
+  - `backend/src/trpc/routes/service-forms-validation.test.ts` (new — M-10 regression)
+  - `backend/src/trpc/routes/service-idor.test.ts` (new — IDOR + null-orgId regression for all six routes + M-09 creation guard)
+  - `plan/audit/ISSUES.md`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added local requireOrgId() helper in each of the six service route files (service-shared.ts untouched per batch rules). Replaced ?? undefined / ?? null orgId patterns with the guarded orgId everywhere. Converted load-then-check findUnique into scoped findFirst({ id, orgId }) returning NOT_FOUND on cross-org. Added creation-time expiresAt > now guard in service-integrations.createClient. Hardened validateFieldValue regex check in service-forms.ts (length bound 200 source / 10k input, catastrophic-pattern heuristic). Exported validateFieldValue for testability.`
+  - Done: `Added regression tests: service-forms-validation.test.ts (7 cases) and service-idor.test.ts (15 cases covering cross-org NOT_FOUND + null-orgId FORBIDDEN for at least one procedure in each of the six files, plus the new createClient past-expiresAt BAD_REQUEST guard). All 31 tests across the 3 service test files pass under bun test.`
+  - Done: `bun run typecheck passes.`
+  - Not Done: `Web/Mobile call sites that special-case FORBIDDEN on service routes have not been updated — captured as cross-team coordination work below.`
+- Impact/Risk:
+  - `Contract change: cross-org access now returns NOT_FOUND (was FORBIDDEN). Front-end error handling that special-cases FORBIDDEN on service routes must be updated.`
+  - `Null-orgId actors (machine-only or misconfigured users) will now receive FORBIDDEN on every list/create — previously they leaked data.`
+  - `Hardening regex heuristic is mitigation, not a complete ReDoS fix; complex template regexes will be rejected as 'Validation configuration error'.`
+- Cleanup Required:
+  - `Coordinate FORBIDDEN→NOT_FOUND contract change with Web (web/src/lib/api.ts error handlers) and Mobile (mobile/outlet_owner_template service modules).`
+  - `Long-term: replace heuristic ReDoS guard with RE2 / safe regex engine if templates require complex regexes.`
+  - `Delete dead assertOrgAccess() from service-shared.ts on a follow-up batch — all six route files migrated to scoped findFirst.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `assertOrgAccess in service-shared.ts is now unreferenced by the six migrated route files; left in place per batch rules (service-shared.ts read-only in Batch 04). Future batch should delete.`
+- Next Cleanup Owner: `claude-code/next service audit pass — delete unused assertOrgAccess from service-shared.ts.`
+- Owner Timestamp: `claude-code @ 2026-05-25T00:00:00Z`
+
+---
+
 ## DEC-20260525-008
 - Decision ID: `DEC-20260525-008`
 - Model: `codex`
@@ -5293,3 +5829,677 @@ Use `DECISION_TEMPLATE.md` for every new entry.
 - Conflicting Implementations: `none`
 - Next Cleanup Owner: `codex during this execution`
 - Owner Timestamp: `codex @ 2026-05-24T21:40:00Z`
+
+---
+
+## DEC-20260525-009
+- Decision ID: `DEC-20260525-009`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 01 (JWT auth migration + auth hardening)`
+- Decision: `Implement Batch 01 as specified in plan/audit/agent-batches/01-jwt-auth-migration.md, with regression tests and issue-status updates.`
+- Rationale: `Critical auth bypass and token-lifecycle issues (C-01/C-02/C-03) are currently open and exploitable.`
+- Alternatives Considered:
+  - `Patch only x-actor-id bypass and defer JWT migration` rejected because token revocation and expiry mismatch would remain unresolved.
+  - `Use opaque DB access tokens with shorter TTL` rejected because the plan requires JWT access token + rotated opaque refresh secret.
+- Scope:
+  - `backend/src/app.ts`
+  - `backend/src/trpc/context.ts`
+  - `backend/src/trpc/routes/auth.ts`
+  - `backend/src/trpc/routes/service-integrations.ts`
+  - `backend/src/trpc/trpc.ts`
+  - `backend/scripts/dev-seed.ts`
+  - `backend/scripts/demo-seed.ts`
+  - `schema.prisma` (AuthSession model only)
+  - `backend/.env.example`
+  - `backend/src/trpc/routes/auth.test.ts` (new)
+  - `plan/audit/ISSUES.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `Implementation and verification pending.`
+- Impact/Risk:
+  - `All existing sessions will be invalidated after AuthSession/JWT migration.`
+  - `Auth path refactor can regress login/refresh/logout if not tested.`
+- Cleanup Required:
+  - `Finalize this entry with completed/partial/blocked and exact verification evidence.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T12:20:00Z`
+
+---
+
+## DEC-20260525-010
+- Decision ID: `DEC-20260525-010`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 02 (roles & permissions hardening)`
+- Decision: `Implement Batch 02 role escalation guards, roles.delete guardrails, seed-permission updates, regression tests, and issue-status updates.`
+- Rationale: `Privilege-escalation paths in roles.update and missing delete guardrails are open (C-04/H-02/L-06).`
+- Alternatives Considered:
+  - `Rely on UI-only restrictions` rejected because server-side mutation paths remain exploitable.
+  - `Delay roles.delete until schema migration` rejected because safe runtime checks can ship now without schema changes.
+- Scope:
+  - `backend/src/trpc/routes/roles.ts`
+  - `backend/scripts/seed-permissions.ts`
+  - `backend/scripts/dev-seed.ts`
+  - `backend/scripts/demo-seed.ts`
+  - `backend/src/trpc/routes/roles.test.ts` (new)
+  - `plan/audit/ISSUES.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `Implementation and verification pending.`
+- Impact/Risk:
+  - `Permission changes may affect sales workflows after re-seed.`
+- Cleanup Required:
+  - `Finalize this entry with completed/partial/blocked and exact verification evidence.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T12:20:00Z`
+
+---
+
+## DEC-20260525-011
+- Decision ID: `DEC-20260525-011`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 03 (outlet/invoice isolation hardening)`
+- Decision: `Implement Batch 03 outlet/invoice scoping and probing protections using current schema-safe guards, with regression tests and issue-status updates.`
+- Rationale: `Outlets and invoices currently allow over-broad listing and IDOR-style reads (C-05/C-06/C-09/L-08).`
+- Alternatives Considered:
+  - `Wait for Batch 08 org schema before any scoping` rejected because outlet/warehouse scoping protections can reduce exposure immediately.
+  - `Implement sentinel-based no-match fallback` rejected in favor of explicit guards where possible.
+- Scope:
+  - `backend/src/trpc/routes/outlets.ts`
+  - `backend/src/trpc/routes/outlet-access.ts` (only if helper widening is required)
+  - `backend/src/trpc/routes/outlet-portal.ts`
+  - `backend/src/trpc/routes/invoices.ts`
+  - `backend/src/trpc/routes/outlets.test.ts` (new)
+  - `backend/src/trpc/routes/invoices.test.ts` (new)
+  - `plan/audit/ISSUES.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `Implementation and verification pending.`
+- Impact/Risk:
+  - `Without org columns in current schema, strict org-level isolation may be partial; batch notes will document exact guard shape landed.`
+- Cleanup Required:
+  - `Finalize this entry with completed/partial/blocked and exact verification evidence.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T12:20:00Z`
+
+### DEC-20260525-011 Final Update
+- Decision ID: `DEC-20260525-011`
+- Model: `claude-code`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 03 (outlet/invoice isolation hardening)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `outlets.list now resolves linkedOutletId + managedWarehouseId + super-admin and throws FORBIDDEN when no safe scope can be derived; outlet-linked users are restricted to their own outlet; warehouse managers are restricted to their warehouse (backend/src/trpc/routes/outlets.ts:124-180).`
+  - Done: `outlets.getById applies the same scoping (NOT_FOUND for wrong-outlet linked-user, FORBIDDEN when no scope, scoped findFirst with warehouseId fallback) — backend/src/trpc/routes/outlets.ts:181-215.`
+  - Done: `invoices.list builds AND clauses for outletId/orderId + linkedOutletId or warehouseId fallback, returns FORBIDDEN with no derivable scope, and pre-checks cross-field outletId+orderId via saleOrder.findFirst returning NOT_FOUND (backend/src/trpc/routes/invoices.ts:231-296). Covers C-09 and L-08.`
+  - Done: `invoices.getById pushes scope directly into findFirst (AND of id + linkedOutletId or warehouseId), returning NOT_FOUND on miss instead of leaking existence (backend/src/trpc/routes/invoices.ts:298-325).`
+  - Done: `outlet-portal.summary now enforces, after assertOutletAccess, an explicit super-admin / linked-outlet / warehouse-fallback check that throws FORBIDDEN when no scope path matches (backend/src/trpc/routes/outlet-portal.ts:36-65).`
+  - Done: `Used warehouse-chain fallback (outlet.warehouseId == ctx.managedWarehouseId) per batch §Dependency note since Outlet.orgId has not landed; left explicit TODO(batch-08) comments at the three fallback sites (outlets.ts:149, outlets.ts:201, outlet-portal.ts:64, invoices.ts:282).`
+  - Done: `Regression tests: backend/src/trpc/routes/outlets.test.ts (4 cases: linked user list scope, warehouse manager list scope, FORBIDDEN with no scope, getById NOT_FOUND for cross-outlet) and backend/src/trpc/routes/invoices.test.ts (5 cases: warehouse manager list scope, linked user list scope, FORBIDDEN with no scope, list NOT_FOUND for outletId/orderId mismatch, getById NOT_FOUND for linked user). All 9 tests pass.`
+  - Done: `Validation: bun run typecheck (pass), bun test src/trpc/routes/outlets.test.ts src/trpc/routes/invoices.test.ts (9 pass, 0 fail).`
+  - Done: `ISSUES.md updated: C-05, C-06, C-09, H-01, L-08 -> done.`
+- Impact/Risk:
+  - `Outlet-role users can no longer enumerate other outlets via outlets.list/getById.`
+  - `Warehouse managers see only invoices/outlets tied to their warehouse; internal users without an orgId or managed warehouse now receive FORBIDDEN instead of silently scoped/empty results.`
+  - `Cross-outlet order-existence probing via invoices.list?outletId=A&orderId=<B> now returns NOT_FOUND.`
+  - `Batch 08 must revisit the four TODO(batch-08) sites to replace the warehouse-chain fallback with outlet.orgId / warehouse.orgId checks once the column exists.`
+- Cleanup Required:
+  - `Replace warehouse-chain fallback with Outlet.orgId scoping in outlets.ts, outlet-portal.ts, invoices.ts once Batch 08 lands the column. Search marker: TODO(batch-08).`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none — outlet-portal.summary still calls assertOutletAccess first and then layers the org/warehouse check on top; assertOutletAccess unchanged.`
+- Next Cleanup Owner: `Batch 08 owner`
+- Owner Timestamp: `claude-code @ 2026-05-25T13:05:00Z`
+
+---
+
+## DEC-20260525-012
+- Decision ID: `DEC-20260525-012`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement Batch 02 roles/permissions hardening with strict file ownership`
+- Decision: `Apply Batch 02 protections only in roles route + seed-permissions + dedicated roles regression tests, while keeping dev/demo seed files read-only for inline permission verification.`
+- Rationale: `The user requested a narrow ownership implementation. Security-critical guards for wildcard escalation, system-role mutation, and role deletion can be landed entirely in the owned backend role route, with seed permission cleanup in seed-permissions.ts.`
+- Alternatives Considered:
+  - `Edit dev-seed.ts or demo-seed.ts directly` rejected because both already consume seed-permissions constants and the user requested read-only verification unless absolutely required.
+  - `Use literal "*" checks in route guards` rejected because repo convention requires SUPER_ADMIN_PERMISSION constant.
+- Scope:
+  - `backend/src/trpc/routes/roles.ts`
+  - `backend/scripts/seed-permissions.ts`
+  - `backend/src/trpc/routes/roles.test.ts` (new)
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Decision entry created before code edits.`
+  - Not Done: `Route hardening, seed permission cleanup, regression tests, and validation commands pending.`
+- Impact/Risk:
+  - `Role mutation/delete behavior will become stricter; non-super-admin role editors lose ability to set wildcard or modify isSystem.`
+  - `Sales seeded role will no longer include service:approve after re-seed.`
+- Cleanup Required:
+  - `Finalize this same decision entry after implementation with completed/partial/blocked and verification evidence.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T06:42:23Z`
+
+### DEC-20260525-012 Final Update
+- Decision ID: `DEC-20260525-012`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement Batch 02 roles/permissions hardening with strict file ownership`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added roles.update guards so wildcard permission assignment and isSystem mutation require SUPER_ADMIN_PERMISSION.`
+  - Done: `Implemented roles.delete with system-role protection and assigned-user conflict guard that includes user count.`
+  - Done: `Confirmed roles router reachability in backend/src/trpc/router.ts (roles: rolesRouter already mounted).`
+  - Done: `Removed service:approve from DEV_SALES_PERMISSIONS in backend/scripts/seed-permissions.ts.`
+  - Done: `Added Batch 03 scoping safety comment above OUTLET_PERMISSIONS.`
+  - Done: `Verified backend/scripts/dev-seed.ts and backend/scripts/demo-seed.ts are read-only consumers of seed-permissions constants and contain no inline sales service:approve permission.`
+  - Done: `Added regression tests in backend/src/trpc/routes/roles.test.ts for update wildcard guard, update isSystem guard, delete system-role guard, delete assigned-user conflict guard, and delete success path.`
+  - Done: `Validation: bun run typecheck (pass), bun test src/trpc/routes/roles.test.ts (5 pass, 0 fail).`
+- Impact/Risk:
+  - `Role updates are now stricter for non-super-admin actors; attempted wildcard/isSystem escalation returns FORBIDDEN.`
+  - `Role deletion now fails early with explicit conflict details when any users are still assigned.`
+- Cleanup Required: `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T06:45:30Z`
+
+### DEC-20260525-009 Final Update
+- Decision ID: `DEC-20260525-009`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 01 (JWT auth migration + auth hardening)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Removed trust of inbound x-actor-id on /trpc/* and /field/live-stream; both now resolve actor only from Bearer JWT via shared resolveActorFromBearer helper in backend/src/app.ts.`
+  - Done: `Migrated auth to JWT access token (HS256, 900s) + rotated opaque refresh token (<sessionId>.<secret>) with refreshTokenHash storage in AuthSession.`
+  - Done: `AuthSession schema updated: removed accessToken/refreshToken columns, added refreshTokenHash.`
+  - Done: `auth.refresh now rejects revoked sessions and does not revive revokedAt; auth.logout revokes current session id from middleware-injected context.`
+  - Done: `Removed plaintext password fallback in verifyPassword.`
+  - Done: `Added login and refresh sliding-window rate limiting (10/email/15m, 20/ip/15m) with stale-entry sweeper.`
+  - Done: `Set machine-client audit log actorId to null in backend/src/trpc/trpc.ts.`
+  - Done: `Normalized service client secret hashing to bcrypt cost 12 in createClient.`
+  - Done: `Updated seed scripts to bcrypt cost 12 password hashing (backend/scripts/dev-seed.ts, backend/scripts/demo-seed.ts).`
+  - Done: `Added backend/.env.example JWT_SECRET.`
+  - Done: `Added regression tests in backend/src/trpc/routes/auth.test.ts for C-01/C-03/C-03-bis/H-05/H-07 behaviors.`
+  - Done: `Validation passed: prisma generate, backend typecheck, and auth/roles/outlets/invoices regression tests (20 pass, 0 fail).`
+  - Done: `ISSUES.md updated: C-01, C-02, C-03, C-17, H-05, H-07, M-08 set to done.`
+- Impact/Risk:
+  - `All existing sessions are invalidated by AuthSession token-shape migration; re-login required.`
+  - `JWT_SECRET is now mandatory at runtime.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T06:57:00Z`
+
+### DEC-20260525-010 Final Update
+- Decision ID: `DEC-20260525-010`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 02 (roles & permissions hardening)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added roles.update guards so non-super-admin callers cannot assign wildcard permission or mutate isSystem.`
+  - Done: `Implemented roles.delete with guards for system-role deletion and assigned-user conflict count.`
+  - Done: `Removed service:approve from DEV_SALES_PERMISSIONS.`
+  - Done: `Added outlet permission scoping note above OUTLET_PERMISSIONS per Batch 03 coupling.`
+  - Done: `Added regression tests in backend/src/trpc/routes/roles.test.ts for guard paths and success path.`
+  - Done: `Validation passed: backend typecheck and roles regression tests.`
+  - Done: `ISSUES.md updated: C-04, H-02, L-06 set to done.`
+- Impact/Risk:
+  - `Non-super-admin role editors lose wildcard/isSystem escalation vectors.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T06:57:00Z`
+
+### DEC-20260525-014
+- Decision ID: `DEC-20260525-014`
+- Model: `claude-code`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 06 (Field Sense reliability & cron locking)`
+- Decision: `Add CronLock model + acquireLock/sweepStaleLocks helper; remove in-memory isRunning flag from both crons; add RDP guard against stack overflow; filter isEnabled in auto-close; validate timezone in shift-schedule writes; extract buildDateRangeFilter helper; wire resetIngestBucket from shift end/syncEnd; sweep stale locks daily.`
+- Rationale: `In-memory isRunning is not safe across multi-instance deploys (C-16). DB unique lock is the simplest fix without an external scheduler (D-10). The other items track the Batch 06 spec.`
+- Alternatives Considered: `External scheduler (rejected — out of scope D-10); partial unique on Shift (rejected — M-02 wont-fix, would break legitimate multi-shift days).`
+- Scope:
+  - `schema.prisma` (add CronLock model)
+  - `backend/src/cron/cron-lock.ts` (new helper)
+  - `backend/src/cron/field-auto-start.ts`
+  - `backend/src/cron/field-auto-close.ts`
+  - `backend/src/trpc/routes/field-shifts.ts`
+  - `backend/src/trpc/routes/field-location.ts` (RDP guard only)
+  - `backend/src/trpc/routes/field-helpers.ts` (buildDateRangeFilter + isValidTimezone)
+  - `backend/src/trpc/routes/field-batch06.test.ts` (regression tests)
+  - `plan/audit/ISSUES.md` (status updates)
+- Status: `in_progress`
+- Owner Timestamp: `claude-code @ 2026-05-25T08:30:00Z`
+
+### DEC-20260525-014 Final Update
+- Decision ID: `DEC-20260525-014`
+- Model: `claude-code`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Execute audit Batch 06 (Field Sense reliability & cron)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Added CronLock model + index in schema.prisma; regenerated Prisma client via the documented workaround. Batch 08 will no-op this addition.`
+  - Done: `Created backend/src/cron/cron-lock.ts with acquireLock + sweepStaleLocks (7-day cutoff).`
+  - Done: `Removed in-memory isRunning flag from both field-auto-start.ts and field-auto-close.ts; both now acquireLock with runKey "YYYY-MM-DDTHH:MM" (per-minute) and "YYYY-MM-DD" (daily) respectively (C-16).`
+  - Done: `field-auto-close.ts: ShiftSchedule.findMany now filters isEnabled=true so disabled schedules fall through to the unconditional-close branch (M-03). Also calls sweepStaleLocks() once per run (daily cadence) per spec.`
+  - Done: `field-location.ts: surgical RDP guard added — downsamples to ~10k when input exceeds 50k (M-01). Algorithm body unchanged.`
+  - Done: `field-helpers.ts: added isValidTimezone() (uses the .format() step, which actually throws on bad IANA strings) and buildDateRangeFilter() (L-12, L-14 helper).`
+  - Done: `field-schedule.ts: schedule upsert Zod refine now uses isValidTimezone (L-12). DEVIATION from spec: spec listed field-shifts.ts for the timezone fix, but ShiftSchedule upserts actually live in field-schedule.ts. Patching the right file rather than the spec-listed one.`
+  - Done: `field-shifts.ts: end + syncEnd now call resetIngestBucket(agentId, shiftId) (Batch 05 export wired). list now uses buildDateRangeFilter (L-14, partial adoption).`
+  - Done: `Added regression tests in backend/src/trpc/routes/field-batch06.test.ts — 9 tests, all pass (covers isValidTimezone, buildDateRangeFilter, RDP large-input guard, acquireLock dedup behavior, M-03 schedule filter logic).`
+- Completion Notes (continued):
+  - Done: `bun run typecheck passes.`
+  - Done: `ISSUES.md updated: C-16, M-01, M-03, L-12 to done; L-14 to partial (3 remaining files belong to other batches).`
+- Impact/Risk:
+  - `Cron locks are inserted on every run — table grows ~1440 rows/day (auto-start) + 1 row/day (auto-close). 7-day sweep keeps it bounded (~10k rows steady state).`
+  - `If two instances start the same minute, only one runs auto-start; the other logs a skip — desired behavior.`
+  - `resetIngestBucket is best-effort single-instance (D-09). Acceptable per Batch 05 design.`
+  - `Disabled schedules now fall through to unconditional close at 13:30 UTC — verify ops expectations.`
+- Pre-existing failures NOT addressed (flagged):
+  - `field-ingestion.test.ts: requires JWT_SECRET env at module import time (Batch 01 introduced this assertion in auth.ts). Independent of this batch — fix in test infra batch.`
+  - `roles.test.ts: 5 tests fail with "Cannot access 'appRouter' before initialization" — appears to be a circular-import issue in the test harness, pre-existing.`
+- Cleanup Required:
+  - `Remaining adopters of buildDateRangeFilter: field-stops.ts (L-14 line 164), field-visits.ts (L-14 line 139), field-location.ts (L-14 line 596) — to be migrated by route-by-route audit batches.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `Batch 08 spec also adds CronLock — whichever runs first wins; the other should no-op the schema edit. This batch ran first.`
+- Next Cleanup Owner: `Route-by-route audit batches for the 3 remaining L-14 adoptions.`
+- Owner Timestamp: `claude-code @ 2026-05-25T08:55:00Z`
+
+### DEC-20260525-017
+- Decision ID: `DEC-20260525-017`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement web JWT auth migration and permission/role route hardening`
+- Decision: `Replace legacy web actor-header auth with JWT session handling (Bearer + refresh), centralize route permission guards, and remove remaining actor-id fallback paths in the web client.`
+- Rationale: `Backend now strips inbound actor headers and resolves actor/session only from verified Bearer JWT; web must align to keep protected flows functional and to make permission handling consistent.`
+- Alternatives Considered:
+  - `Keep actor-id compatibility in backend` rejected because it weakens auth hardening.
+  - `UI-only nav hiding without route guard` rejected because deep-link route access would remain inconsistent.
+- Scope:
+  - `web/src/lib/api.ts`
+  - `web/src/hooks/useAuth.ts`
+  - `web/src/context/PermissionContext.tsx`
+  - `web/src/components/AdminRoute.tsx`
+  - `web/src/App.tsx`
+  - `web/src/pages/dashboard/UsersPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Repo analysis completed; identified actor-header/JWT mismatch and permission-route guard gaps.`
+  - Not Done: `Implementation and verification pending.`
+- Impact/Risk:
+  - `Medium: touches shared web auth/API layer and route guarding behavior.`
+- Cleanup Required:
+  - `Update this same decision entry to final status after implementation and verification.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T11:33:40Z`
+
+### DEC-20260525-017 Final Update
+- Decision ID: `DEC-20260525-017`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement web JWT auth migration and permission/role route hardening`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Replaced web actor-header auth plumbing with JWT session handling in web/src/lib/api.ts: access token in memory, refresh token in localStorage, Bearer injection on tRPC/SSE/fallback axios calls, single-flight auth.refresh retry on 401, and logout/session-clear behavior.`
+  - Done: `Updated auth login/logout adapter behavior to persist/clear JWT session tokens from backend auth.login/auth.logout contract.`
+  - Done: `Removed remaining web actor-id usage by migrating UsersPage Field Sense toggle to shared trpcMutation (JWT-aware path).`
+  - Done: `Added route-level permission guard in web/src/App.tsx and enforced required permissions for dashboard routes to block unauthorized deep links (not only sidebar hiding).`
+  - Done: `Hardened AdminRoute to forbid zero-permission internal users.`
+  - Done: `Updated useAuth 401 handling to correctly treat non-Axios unauthorized responses as logged-out state.`
+  - Done: `Validation passed: web production build (tsc -b && vite build).`
+  - Not Done: `No backend contract changes were made; this is web-only alignment to existing JWT backend behavior.`
+- Impact/Risk:
+  - `Medium: central web API/auth plumbing changed; any untested legacy consumers of fallbackApi auth behavior could surface at runtime.`
+  - `Route-level permission gates may now redirect users who previously reached pages via direct URL despite missing read permissions.`
+- Cleanup Required:
+  - `Evaluate splitting large web bundle chunks (pre-existing Vite warning) separately from this auth migration.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T11:47:17Z`
+- Follow-up Notes:
+  - `2026-05-25T12:09:14Z: Hardened dev-session stability after live browser reports: persisted access token in localStorage as fallback across reload/HMR, switched SSE dev URL to same-origin proxy path (/field/live-stream) to avoid CORS/preflight failures, and set explicit Vite HMR websocket host/protocol/clientPort for Firefox compatibility. Revalidated with web build.`
+
+### DEC-20260525-018
+- Decision ID: `DEC-20260525-018`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Fix missing Field Sense data in web after auth/JWT migration`
+- Decision: `Align web Field pages to current backend Field contracts (activeAgents response envelope + attendance limit cap) so data renders correctly for admin users.`
+- Rationale: `Backend fieldLocation.activeAgents now returns { agents, hasMore }, while the map page still expects an array. Field attendance list max limit is 200, but UI requests 500. Both mismatches can suppress visible field data.`
+- Alternatives Considered:
+  - `Backend compatibility shim for old response shapes` rejected because web has explicit ownership and should match current contracts.
+  - `Suppress errors in UI without contract fix` rejected because it masks data/permission issues.
+- Scope:
+  - `web/src/pages/dashboard/FieldSenseLiveMapPage.tsx`
+  - `web/src/pages/dashboard/FieldSenseAttendancePage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Identified concrete contract mismatches causing missing field data rendering.`
+  - Not Done: `Code patch + verification pending.`
+- Impact/Risk:
+  - `Low: scoped to Field Sense data reads and UI contracts.`
+- Cleanup Required:
+  - `Update this same entry to final status after build verification.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T15:28:37Z`
+
+### DEC-20260525-018 Final Update
+- Decision ID: `DEC-20260525-018`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Fix missing Field Sense data in web after auth/JWT migration`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated FieldSenseLiveMapPage to consume fieldLocation.activeAgents response envelope ({ agents, hasMore }) instead of treating response as a raw array.`
+  - Done: `Updated FieldSenseAttendancePage fieldAttendance.list query limit from 500 to 200 to match backend contract max.`
+  - Done: `Validation passed: web production build (tsc -b && vite build).`
+  - Not Done: `No backend data migration was performed; this fix is web contract alignment only.`
+- Impact/Risk:
+  - `Low: changes are limited to Field Sense read/query mappings in the web client.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T15:31:02Z`
+
+### DEC-20260525-019
+- Decision ID: `DEC-20260525-019`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Fix users.list 400s on Field pages`
+- Decision: `Align Field page users.list calls to backend pagination contract: limit <= 100 and response shape { items, nextCursor }.`
+- Rationale: `Field pages currently call users.list with limit 200 and parse response as User[], which violates backend schema and triggers HTTP 400.`
+- Alternatives Considered:
+  - `Increase backend users.list limit cap` rejected because frontend contract alignment is the safer scoped fix.
+  - `Silent fallback on query errors` rejected because it hides true data-contract failures.
+- Scope:
+  - `web/src/pages/dashboard/FieldSenseSchedulePage.tsx`
+  - `web/src/pages/dashboard/FieldSenseShiftsPage.tsx`
+  - `web/src/pages/dashboard/FieldSenseAttendancePage.tsx`
+  - `web/src/pages/dashboard/FieldSenseVisitsPage.tsx`
+  - `web/src/pages/dashboard/FieldSenseStopsPage.tsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Identified backend users.list input/output contract and all incompatible Field-page call sites.`
+  - Not Done: `Code patch and verification pending.`
+- Impact/Risk:
+  - `Low: read-only query contract fixes in Field web pages.`
+- Cleanup Required:
+  - `Update this same entry after validation.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `codex during this execution`
+- Owner Timestamp: `codex @ 2026-05-25T15:33:20Z`
+
+### DEC-20260525-019 Final Update
+- Decision ID: `DEC-20260525-019`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Fix users.list 400s on Field pages`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Updated FieldSenseSchedulePage, FieldSenseShiftsPage, FieldSenseAttendancePage, FieldSenseVisitsPage, and FieldSenseStopsPage to call users.list with limit 100 (backend max) and parse paginated response shape { items, nextCursor }.`
+  - Done: `Removed old direct User[] users.list assumptions in those Field pages.`
+  - Done: `Validation passed: web production build (tsc -b && vite build).`
+  - Not Done: `No backend route/schema changes were required.`
+- Impact/Risk:
+  - `Low: query-contract alignment on Field page user lookups only.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T15:35:04Z`
+
+### DEC-20260525-020
+- Decision ID: `DEC-20260525-020`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Fix outlet scoping/security gaps for dispatch reads, payments, and invoice AR aging before outlet UI redesign`
+- Decision: `Enforce safe outlet/warehouse/admin scope in dispatches read endpoints, payments endpoints, and invoices.arAging; add regression tests for outlet data isolation.`
+- Rationale: `Current route-level permission checks still allow over-broad data reads for outlet users in specific endpoints, which blocks safe rollout of the outlet-focused product scope.`
+- Alternatives Considered:
+  - `Frontend-only filtering` rejected because backend must enforce tenant isolation.
+  - `Delay until full outlet UI rewrite` rejected because scope leaks must be fixed first.
+- Scope:
+  - `backend/src/trpc/routes/dispatches.ts`
+  - `backend/src/trpc/routes/payments.ts`
+  - `backend/src/trpc/routes/invoices.ts`
+  - `backend/src/trpc/routes/invoices.test.ts`
+  - `backend/src/trpc/routes/payments.test.ts` (new)
+  - `backend/src/trpc/routes/dispatches.test.ts` (new)
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Scoped gap analysis completed for dispatches/payments/invoices.arAging and implementation plan finalized.`
+  - Not Done: `Code patches and test verification pending.`
+- Impact/Risk:
+  - `Medium: behavior changes in shared financial/dispatch reads may tighten access for internal users without explicit safe scope.`
+- Cleanup Required:
+  - `Update this same decision entry to final status after implementation and verification.`
+- Owner Timestamp: `codex @ 2026-05-25T23:44:44+05:30`
+
+### DEC-20260525-020 Final Update
+- Decision ID: `DEC-20260525-020`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Fix outlet scoping/security gaps for dispatch reads, payments, and invoice AR aging before outlet UI redesign`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Hardened dispatch read scope in backend/src/trpc/routes/dispatches.ts for list/getById/timeline: only super-admin, linked-outlet user (own outlet dispatches), or managed-warehouse actor can read dispatch data.`
+  - Done: `Hardened payments scope in backend/src/trpc/routes/payments.ts for list/getById/create: enforced safe scope resolution (super-admin, linked outlet, or managed warehouse) and blocked cross-outlet reads.`
+  - Done: `Scoped invoices.arAging in backend/src/trpc/routes/invoices.ts to the same safe-scope model used by invoice list/getById.`
+  - Done: `Added/updated regression tests: backend/src/trpc/routes/dispatches.test.ts (new), backend/src/trpc/routes/payments.test.ts (new), backend/src/trpc/routes/invoices.test.ts (added arAging scoped test).`
+  - Done: `Verification passed: bun test src/trpc/routes/invoices.test.ts src/trpc/routes/payments.test.ts src/trpc/routes/dispatches.test.ts (12 pass, 0 fail) and bun run typecheck.`
+  - Not Done: `No frontend/UI work in this change-set.`
+- Impact/Risk:
+  - `Medium-low: dispatch/payment/invoice-aging reads are now stricter; internal actors without super-admin, linked outlet, or managed warehouse scope will receive FORBIDDEN instead of broad data access.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T23:52:10+05:30`
+
+### DEC-20260525-021
+- Decision ID: `DEC-20260525-021`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement design handoff page counter.html from Anthropic design bundle`
+- Decision: `Bring over counter.html and its direct imported prototype dependencies into a self-contained static folder under web/public/counter-design/ so the outlet design can be opened directly.`
+- Rationale: `User explicitly requested implementation of counter.html from the provided design handoff URL; the file depends on shared CSS/JSX files that must be present for accurate rendering.`
+- Alternatives Considered:
+  - `Implement only counter.html without dependencies` rejected because the page would not render the intended design.
+  - `Rewrite into existing React app routes immediately` rejected for this step because user asked specifically for counter.html implementation.
+- Scope:
+  - `web/public/counter-design/counter.html`
+  - `web/public/counter-design/styles.css`
+  - `web/public/counter-design/ios-frame.jsx`
+  - `web/public/counter-design/tweaks-panel.jsx`
+  - `web/public/counter-design/data.jsx`
+  - `web/public/counter-design/ui.jsx`
+  - `web/public/counter-design/screens-catalog.jsx`
+  - `web/public/counter-design/screens-orders.jsx`
+  - `web/public/counter-design/screens-invoices.jsx`
+  - `web/public/counter-design/outlet-data.jsx`
+  - `web/public/counter-design/outlet-screens-auth-dash.jsx`
+  - `web/public/counter-design/outlet-screens-dispatch.jsx`
+  - `web/public/counter-design/outlet-app.jsx`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Fetched and decoded design handoff bundle; read README, chat transcript, and counter.html with dependency list.`
+  - Not Done: `File implementation and verification pending.`
+- Impact/Risk:
+  - `Low: additive static design assets under web/public.`
+- Cleanup Required:
+  - `Update this entry to final status after files are added and verified.`
+- Owner Timestamp: `codex @ 2026-05-25T23:56:40+05:30`
+
+### DEC-20260525-021 Final Update
+- Decision ID: `DEC-20260525-021`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement design handoff page counter.html from Anthropic design bundle`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Imported counter.html into web/public/counter-design/ with all files it directly imports (styles.css + 11 JSX dependencies).`
+  - Done: `Preserved design structure and asset references so the page renders as intended in a static context.`
+  - Done: `Validated dependency presence and import references from counter.html.`
+  - Not Done: `No conversion into the existing compiled React route architecture in this step (user requested counter.html implementation).`
+- Impact/Risk:
+  - `Low: additive static assets under web/public/counter-design.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-25T23:58:10+05:30`
+
+### DEC-20260525-022
+- Decision ID: `DEC-20260525-022`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement Counter outlet design into mobile/outlet_owner_template (UI + API hooks)`
+- Decision: `Apply Counter design language and flows directly in the outlet Flutter app by updating login, dashboard, dispatch tracking/detail with mark-delivered action, and accounts financials surfaces; add missing API client methods needed by those flows.`
+- Rationale: `User explicitly asked to implement this design in the outlet application after backend auth/scoping cleanup; the app needs both visual refresh and functional parity for dispatch delivery confirmation and financial aging data.`
+- Alternatives Considered:
+  - `Keep current UI and only tweak colors` rejected because it does not satisfy requested redesign scope.
+  - `Implement design as standalone static screen only` rejected because user requested implementation in the outlet application.
+- Scope:
+  - `mobile/outlet_owner_template/lib/app/theme/app_theme.dart`
+  - `mobile/outlet_owner_template/lib/core/design/app_colors.dart`
+  - `mobile/outlet_owner_template/lib/core/api/outlet_portal_client.dart`
+  - `mobile/outlet_owner_template/lib/modules/auth/login_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/dashboard/dashboard_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/orders/dispatch_history_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/orders/dispatch_detail_page.dart`
+  - `mobile/outlet_owner_template/lib/modules/accounts/accounts_shell_page.dart`
+  - `mobile/outlet_owner_template/lib/app/router/app_router.dart`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Design source and current outlet app gap analysis completed.`
+  - Not Done: `Implementation and verification pending.`
+- Impact/Risk:
+  - `Medium: route/tab changes and new dispatch mutation call can alter user flow and requires analyzer verification.`
+- Cleanup Required:
+  - `Update this same decision entry with final status and any incomplete paths after implementation.`
+- Owner Timestamp: `codex @ 2026-05-26T00:24:30+05:30`
+
+### DEC-20260525-022 Final Update
+- Decision ID: `DEC-20260525-022`
+- Model: `codex`
+- Branch/Commit: `master@42ef8dc`
+- Task: `Implement Counter outlet design into mobile/outlet_owner_template (UI + API hooks)`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Rewired the active outlet router in mobile/outlet_owner_template/lib/app/router/app_router.dart to a focused 5-tab outlet flow: Home, Catalog, Orders, Track, Account; kept accounts/financials and entity-detail screens as full-screen routes.`
+  - Done: `Implemented Counter-style auth/dashboard/account experiences in active page-based surfaces: login_page.dart, dashboard_page.dart, more_page.dart.`
+  - Done: `Implemented dispatch tracking redesign with filter chips and richer cards in dispatch_history_page.dart.`
+  - Done: `Implemented dispatch detail mark-delivered UX with confirmation sheet and wired mutation call to backend dispatches.markDelivered in dispatch_detail_page.dart.`
+  - Done: `Added missing API methods/data contracts in outlet_portal_client.dart: dispatch mark-delivered mutation and invoices.arAging query parsing.`
+  - Done: `Implemented financials hero with AR aging bucket visualization in accounts_shell_page.dart and kept invoices/payments lists integrated.`
+  - Done: `Updated route references in create_order_page.dart and orders_history_page.dart to new nav model.`
+  - Done: `Updated visual token direction to Counter indigo accent in app_theme.dart and app_colors.dart.`
+  - Done: `Validation passed for changed files: flutter analyze on 12 modified files reports no errors (info-level lints only).`
+  - Not Done: `Legacy *_screen.dart implementation files were not deleted in this step; they remain in repository but are no longer the active routed path.`
+- Impact/Risk:
+  - `Medium-low: primary outlet navigation and user flow changed significantly; users now land on redesigned tab IA and financial/dispatch actions.`
+  - `Low: backend contract alignment for mark-delivered and AR-aging uses existing hardened endpoints.`
+- Cleanup Required:
+  - `Optional follow-up: remove or migrate legacy *_screen.dart surfaces to avoid duplicate inactive UI implementations and reduce analyzer noise.`
+- Dead Paths Introduced: `none; legacy dead paths pre-existed and remain outside this scope`
+- Conflicting Implementations: `Legacy *_screen.dart UI surfaces still exist in repo while active runtime path now uses *_page.dart routes`
+- Next Cleanup Owner: `codex or frontend owner in next cleanup pass`
+- Owner Timestamp: `codex @ 2026-05-26T00:38:10+05:30`
+
+### DEC-20260529-001
+- Decision ID: `DEC-20260529-001`
+- Model: `codex`
+- Branch/Commit: `master@21bb80d`
+- Task: `Create Field Sense stabilization and production rollout documentation package`
+- Decision: `Create a dedicated documentation set under plan/field-module that captures the verified Field Sense rollout plan, requirements, phased execution, architecture, backend contracts, mobile runtime, supervisor operations, QA, observability, security, and implementation backlog.`
+- Rationale: `The user asked to turn the verified Field Sense stabilization plan into complete in-repo documentation before implementation. Keeping the package in plan/field-module makes the rollout auditable and prevents mobile, backend, and web agents from drifting into parallel implementations.`
+- Alternatives Considered:
+  - `Keep the plan only in chat` rejected because this repo requires durable decision-backed planning artifacts for broad implementation work.
+  - `Edit older root-level Field Sense docs` rejected because the current worktree shows those files as deleted or stale, and the user explicitly requested plan/field-module.
+  - `Create one large document only` rejected because implementation needs separate files for requirements, phases, contracts, QA, and ownership boundaries.
+- Scope:
+  - `plan/field-module/README.md`
+  - `plan/field-module/REQUIREMENTS.md`
+  - `plan/field-module/PHASED_ROLLOUT_PLAN.md`
+  - `plan/field-module/ARCHITECTURE.md`
+  - `plan/field-module/MOBILE_CANONICAL_RUNTIME.md`
+  - `plan/field-module/BACKEND_CONTRACTS.md`
+  - `plan/field-module/SUPERVISOR_OPERATIONS.md`
+  - `plan/field-module/OFFLINE_SYNC_SPEC.md`
+  - `plan/field-module/QA_DEVICE_ROLLOUT.md`
+  - `plan/field-module/OBSERVABILITY_SECURITY.md`
+  - `plan/field-module/IMPLEMENTATION_BACKLOG.md`
+  - `plan/ai-governance/decision-log/DECISION_LOG.md`
+- Status: `in_progress`
+- Completion Notes:
+  - Done: `Verified current Field Sense repo status against mobile, backend, and web code paths; documentation structure finalized.`
+  - Not Done: `Documentation files and final decision update pending.`
+- Impact/Risk:
+  - `Low: documentation-only change, but the plan will steer future cross-layer implementation sequencing.`
+  - `Medium if ignored: stale root-level Field Sense docs and parallel mobile/web paths could continue to confuse implementation ownership.`
+- Cleanup Required:
+  - `Update this same decision entry after documentation is created and reviewed.`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a unless documentation remains partial`
+- Owner Timestamp: `codex @ 2026-05-29T21:57:33+05:30`
+
+### DEC-20260529-001 Final Update
+- Decision ID: `DEC-20260529-001`
+- Model: `codex`
+- Branch/Commit: `master@21bb80d`
+- Task: `Create Field Sense stabilization and production rollout documentation package`
+- Status: `completed`
+- Completion Notes:
+  - Done: `Created 11 documentation files under plan/field-module covering README/index, requirements, phased rollout, architecture, mobile canonical runtime, backend contracts, supervisor operations, offline sync, QA/device rollout, observability/security, and implementation backlog.`
+  - Done: `Documented current verified corrections: sales mobile already has Field route/tab gating and syncStart/syncEnd usage, but still lacks SQLite local-first runtime ownership; outlet_owner_template Field files are out of sales-mobile cleanup scope.`
+  - Done: `Verified documentation file presence, README links, ASCII-only content for plan/field-module, and line counts.`
+  - Not Done: `No runtime implementation changes, tests, or device validation were performed because this scope is documentation-only.`
+- Impact/Risk:
+  - `Low: documentation-only additions under plan/field-module.`
+  - `Positive: future implementation slices now have explicit ownership, scope, acceptance gates, and no-parallel-runtime rules.`
+- Cleanup Required:
+  - `none`
+- Dead Paths Introduced: `none`
+- Conflicting Implementations: `none`
+- Next Cleanup Owner: `n/a`
+- Owner Timestamp: `codex @ 2026-05-29T22:02:30+05:30`

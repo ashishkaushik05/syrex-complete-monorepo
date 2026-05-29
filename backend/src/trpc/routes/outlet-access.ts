@@ -1,6 +1,21 @@
 import type { TrpcContext } from "../context";
 import { apiError } from "../error";
-import { SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+
+export async function actorHasInternalSalesOutletAccess(ctx: TrpcContext): Promise<boolean> {
+  const actorId = ctx.actor.id;
+  if (!actorId) return false;
+  if (!ctx.permissions.includes(P.outlets.read) || !ctx.permissions.includes(P.orders.write)) {
+    return false;
+  }
+
+  const actor = await ctx.prisma.user.findUnique({
+    where: { id: actorId },
+    select: { userType: true },
+  });
+
+  return actor?.userType === "internal";
+}
 
 export function assertWarehouseScope(ctx: TrpcContext, resourceWarehouseId: string | null): void {
   if (ctx.permissions.includes(SUPER_ADMIN_PERMISSION)) return;
@@ -56,6 +71,10 @@ export async function assertOutletAccess(
   });
 
   if (scoped) {
+    return;
+  }
+
+  if (await actorHasInternalSalesOutletAccess(ctx)) {
     return;
   }
 

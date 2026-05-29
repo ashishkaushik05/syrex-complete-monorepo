@@ -35,7 +35,7 @@ const authMiddleware = t.middleware(async ({ ctx, next }) => {
       managedWarehouse: { select: { id: true } }
     }
   });
-  if (!user) {
+  if (!user || !user.isActive) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Actor not found"
@@ -59,6 +59,21 @@ export const perm = (permission: CatalogPermission) =>
       throw new TRPCError({
         code: "FORBIDDEN",
         message: `Requires: ${permission}`
+      });
+    }
+    return next({ ctx });
+  });
+
+export const permAny = (...permissions: CatalogPermission[]) =>
+  protectedProcedure.use(async ({ ctx, next }) => {
+    const perms = ctx.permissions;
+    const allowed =
+      perms.includes(SUPER_ADMIN_PERMISSION) ||
+      permissions.some((permission) => perms.includes(permission));
+    if (!allowed) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Requires one of: ${permissions.join(", ")}`
       });
     }
     return next({ ctx });
@@ -126,7 +141,8 @@ const serviceCredentialMiddleware = t.middleware(async ({ ctx, next }) => {
       auditLogs: {
         create: {
           action: "authenticated",
-          actorId: ctx.actor.id,
+          // Machine-client auth has no user actor; serviceClientId is the attribution source.
+          actorId: null,
           meta: {
             requestId: ctx.requestId,
           },

@@ -1,6 +1,13 @@
 const connections = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>();
 const encoder = new TextEncoder();
 
+// Test-only observable log of broadcasts. Production code never reads this;
+// tests assert cross-org broadcast leakage (C-11) by inspecting it.
+export const broadcasts: Array<{ orgId: string; payload: unknown }> = [];
+export function resetBroadcasts() {
+  broadcasts.length = 0;
+}
+
 export function addSseConnection(
   key: string,
   ctrl: ReadableStreamDefaultController<Uint8Array>
@@ -21,6 +28,7 @@ export function removeSseConnection(
 }
 
 export function broadcastLocationUpdate(orgId: string, payload: unknown) {
+  broadcasts.push({ orgId, payload });
   const data = encoder.encode(
     `event: location-update\ndata: ${JSON.stringify(payload)}\n\n`
   );

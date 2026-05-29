@@ -30,6 +30,11 @@ type User = {
   email: string
 }
 
+type UsersListResponse = {
+  items: User[]
+  nextCursor: string | null
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
@@ -68,7 +73,10 @@ export function FieldSenseShiftsPage() {
 
   const usersQuery = useQuery({
     queryKey: ['users-list-for-shifts'],
-    queryFn: () => trpcQuery<User[]>('users.list', { limit: 200 }),
+    queryFn: async () => {
+      const page = await trpcQuery<UsersListResponse>('users.list', { limit: 100 })
+      return page.items ?? []
+    },
   })
 
   const agentMap = new Map<string, string>(

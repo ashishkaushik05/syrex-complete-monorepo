@@ -1,10 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
-import { P } from "../../rbac/catalog";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
-import { assertOutletWarehouseScope } from "./outlet-access";
+import { assertOutletWarehouseScope, findActorLinkedOutletId } from "./outlet-access";
+import type { TrpcContext } from "../context";
 
 const allocationSchema = z.object({
   id: z.string(),
@@ -68,6 +69,16 @@ function toPaymentItem(payment: {
   };
 }
 
+async function resolvePaymentScope(ctx: TrpcContext) {
+  const linkedOutletId = await findActorLinkedOutletId(ctx);
+  const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+  const isWarehouseScoped = !isSuperAdmin && !linkedOutletId && !!ctx.managedWarehouseId;
+  if (!isSuperAdmin && !linkedOutletId && !isWarehouseScoped) {
+    throw apiError("FORBIDDEN", "No safe payment scope available");
+  }
+  return { linkedOutletId, isSuperAdmin, isWarehouseScoped };
+}
+
 export const paymentsRouter = createTRPCRouter({
   list: perm(P.payments.read)
     .input(
@@ -78,10 +89,17 @@ export const paymentsRouter = createTRPCRouter({
     )
     .output(z.object({ items: z.array(paymentSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
+      const { linkedOutletId, isSuperAdmin, isWarehouseScoped } = await resolvePaymentScope(ctx);
       const offset = decodeCursor(input.cursor) ?? 0;
       const rows = await ctx.prisma.outletPayment.findMany({
         where: {
-          outletId: input.outletId,
+          AND: [
+            ...(input.outletId ? [{ outletId: input.outletId }] : []),
+            ...(linkedOutletId ? [{ outletId: linkedOutletId }] : []),
+            ...(!isSuperAdmin && !linkedOutletId && isWarehouseScoped
+              ? [{ outlet: { warehouseId: ctx.managedWarehouseId } }]
+              : []),
+          ],
           OR: input.q
             ? [
                 { reference: { contains: input.q, mode: "insensitive" } },
@@ -107,14 +125,22 @@ export const paymentsRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(paymentSchema)
     .query(async ({ ctx, input }) => {
-      const payment = await ctx.prisma.outletPayment.findUnique({
-        where: { id: input.id },
+      const { linkedOutletId, isSuperAdmin, isWarehouseScoped } = await resolvePaymentScope(ctx);
+      const payment = await ctx.prisma.outletPayment.findFirst({
+        where: {
+          AND: [
+            { id: input.id },
+            ...(linkedOutletId ? [{ outletId: linkedOutletId }] : []),
+            ...(!isSuperAdmin && !linkedOutletId && isWarehouseScoped
+              ? [{ outlet: { warehouseId: ctx.managedWarehouseId } }]
+              : []),
+          ],
+        },
         include: { allocations: true }
       });
       if (!payment) {
         throw apiError("NOT_FOUND", "Payment not found");
       }
-      await assertOutletWarehouseScope(ctx, payment.outletId);
       return toPaymentItem(payment);
     }),
 
@@ -122,12 +148,28 @@ export const paymentsRouter = createTRPCRouter({
     .input(createPaymentSchema)
     .output(paymentSchema)
     .mutation(async ({ ctx, input }) => {
+      const { linkedOutletId, isSuperAdmin } = await resolvePaymentScope(ctx);
+      if (linkedOutletId && linkedOutletId !== input.outletId) {
+        throw apiError("FORBIDDEN", "Access denied to this outlet");
+      }
+      if (!isSuperAdmin && !linkedOutletId && ctx.managedWarehouseId) {
+        await assertOutletWarehouseScope(ctx, input.outletId);
+      }
+
       if (input.idempotencyKey) {
         const existing = await ctx.prisma.outletPayment.findUnique({
           where: { idempotencyKey: input.idempotencyKey },
           include: { allocations: true }
         });
-        if (existing) return toPaymentItem(existing);
+        if (existing) {
+          if (linkedOutletId && existing.outletId !== linkedOutletId) {
+            throw apiError("FORBIDDEN", "Access denied to this outlet");
+          }
+          if (!isSuperAdmin && !linkedOutletId && ctx.managedWarehouseId) {
+            await assertOutletWarehouseScope(ctx, existing.outletId);
+          }
+          return toPaymentItem(existing);
+        }
       }
 
       let amount: Prisma.Decimal;

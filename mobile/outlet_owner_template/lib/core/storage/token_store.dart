@@ -36,6 +36,14 @@ class TokenStore {
     await _storage.delete(key: _accessTokenKey);
     await _storage.delete(key: _refreshTokenKey);
   }
+
+  Future<String?> readRaw(String key) async {
+    return await _storage.read(key: key);
+  }
+
+  Future<void> writeRaw(String key, String value) async {
+    await _storage.write(key: key, value: value);
+  }
 }
 
 final secureStorageProvider = Provider<FlutterSecureStorage>((ref) {

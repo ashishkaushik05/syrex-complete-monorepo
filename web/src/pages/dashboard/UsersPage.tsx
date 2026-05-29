@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { usePermission } from '@/context/PermissionContext'
-import { api } from '@/lib/api'
+import { api, trpcMutation } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/http'
 
 type UserRecord = {
@@ -126,14 +126,7 @@ export function UsersPage() {
   const toggleFieldSenseMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
       if (!selectedUser) throw new Error('No user selected')
-      const actorId = window.localStorage.getItem('syrex_phase1_actor_id') ?? ''
-      const res = await fetch(`/trpc/users.toggleFieldSense`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(actorId ? { 'x-actor-id': actorId } : {}) },
-        body: JSON.stringify({ json: { id: selectedUser.id, enabled } }),
-      })
-      const payload = await res.json() as { result?: { data?: { json?: unknown } }; error?: unknown }
-      if ((payload as { error?: unknown }).error) throw new Error('Toggle failed')
+      await trpcMutation('users.toggleFieldSense', { id: selectedUser.id, enabled })
       return enabled
     },
     onSuccess: async (enabled) => {

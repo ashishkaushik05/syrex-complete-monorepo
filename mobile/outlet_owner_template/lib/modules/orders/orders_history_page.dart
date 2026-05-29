@@ -26,9 +26,9 @@ class _FilterState {
 final _filterProvider =
     StateProvider.autoDispose<_FilterState>((_) => const _FilterState());
 
-final _ordersProvider = FutureProvider.autoDispose
-    .family<PagedResult<OrderSummary>, ({String outletId, _FilterState filter})>(
-        (ref, args) async {
+final _ordersProvider = FutureProvider.autoDispose.family<
+    PagedResult<OrderSummary>,
+    ({String outletId, _FilterState filter})>((ref, args) async {
   return ref.watch(outletPortalClientProvider).orderHistory(
         args.outletId,
         status: args.filter.status,
@@ -63,10 +63,20 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
     }
 
     final filter = ref.watch(_filterProvider);
-    final orders = ref.watch(_ordersProvider((outletId: outletId, filter: filter)));
+    final orders =
+        ref.watch(_ordersProvider((outletId: outletId, filter: filter)));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Order History')),
+      appBar: AppBar(
+        title: const Text('Orders'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.local_shipping_outlined),
+            tooltip: 'Dispatches',
+            onPressed: () => context.go('/track'),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
@@ -77,8 +87,8 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                 hintText: 'Search orders…',
                 prefixIcon: const Icon(Icons.search),
                 isDense: true,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                 suffixIcon: _searchCtrl.text.isNotEmpty
                     ? IconButton(
                         icon: const Icon(Icons.clear),
@@ -110,9 +120,8 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                 ..._statuses.map((s) => _FilterChip(
                       label: _label(s),
                       selected: filter.status == s,
-                      onTap: () =>
-                          ref.read(_filterProvider.notifier).state =
-                              _FilterState(status: s, q: filter.q),
+                      onTap: () => ref.read(_filterProvider.notifier).state =
+                          _FilterState(status: s, q: filter.q),
                     )),
               ],
             ),
@@ -120,12 +129,12 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
           const SizedBox(height: 8),
           Expanded(
             child: orders.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => ErrorView(
                 message: 'Could not load orders.',
                 onRetry: () => ref.refresh(
-                    _ordersProvider((outletId: outletId, filter: filter)).future),
+                    _ordersProvider((outletId: outletId, filter: filter))
+                        .future),
               ),
               data: (result) => result.items.isEmpty
                   ? const Center(child: Text('No orders found.'))
@@ -133,15 +142,15 @@ class _OrdersHistoryPageState extends ConsumerState<OrdersHistoryPage> {
                       padding: const EdgeInsets.fromLTRB(12, 0, 12, 80),
                       itemCount: result.items.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
-                      itemBuilder: (_, i) =>
-                          _OrderCard(order: result.items[i], outletId: outletId),
+                      itemBuilder: (_, i) => _OrderCard(
+                          order: result.items[i], outletId: outletId),
                     ),
             ),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.push('/orders/create'),
+        onPressed: () => context.push('/orders/new'),
         icon: const Icon(Icons.add),
         label: const Text('New Order'),
       ),
@@ -204,8 +213,7 @@ class _OrderCard extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w500)),
           ],
         ),
-        onTap: () => context.push('/orders/${order.id}',
-            extra: {'outletId': outletId}),
+        onTap: () => context.push('/orders/${order.id}'),
       ),
     );
   }

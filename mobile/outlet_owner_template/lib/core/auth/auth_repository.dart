@@ -12,6 +12,7 @@ class AuthRepository {
 
   final Dio dio;
   final TokenStore tokenStore;
+  static const _userCacheKey = 'cached_user_json';
 
   Future<LoginResult> login(LoginInput input) async {
     final response = await dio.post(
@@ -34,10 +35,12 @@ class AuthRepository {
           .toList(),
       managedWarehouseId: result['user']?['managedWarehouseId']?.toString(),
       outletId: result['user']?['outletId']?.toString(),
+      orgId: result['user']?['orgId']?.toString(),
     );
 
     await tokenStore
         .write(TokenPair(accessToken: accessToken, refreshToken: refreshToken));
+    await _cacheUser(user);
 
     return LoginResult(
         accessToken: accessToken, refreshToken: refreshToken, user: user);
@@ -47,7 +50,7 @@ class AuthRepository {
     final response = await dio.get('/auth.me');
     final result = _extractResult(response.data);
 
-    return AuthUser(
+    final user = AuthUser(
       id: (result['id'] ?? '') as String,
       email: (result['email'] ?? '') as String,
       role: (result['role']?['name'] ?? 'Unknown') as String,
@@ -57,8 +60,12 @@ class AuthRepository {
               .toList(),
       managedWarehouseId: result['managedWarehouseId']?.toString(),
       outletId: result['outletId']?.toString(),
+      orgId: result['orgId']?.toString(),
       isFieldEnabled: (result['isFieldEnabled'] as bool?) ?? false,
     );
+
+    await _cacheUser(user);
+    return user;
   }
 
   Future<void> refreshTokens() async {
@@ -95,6 +102,20 @@ class AuthRepository {
 
   Future<void> forceLogoutLocal() async {
     await tokenStore.clear();
+  }
+
+  Future<AuthUser?> getCachedUser() async {
+    final json = await tokenStore.readRaw(_userCacheKey);
+    if (json == null) return null;
+    try {
+      return AuthUser.fromJson(jsonDecode(json) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _cacheUser(AuthUser user) async {
+    await tokenStore.writeRaw(_userCacheKey, jsonEncode(user.toJson()));
   }
 
   Map<String, dynamic> _extractResult(dynamic raw) {

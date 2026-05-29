@@ -42,6 +42,9 @@ class FieldRepository {
   List<dynamic> _extractList(dynamic raw) {
     final inner = _extractRaw(raw);
     if (inner is List) return inner;
+    if (inner is Map<String, dynamic> && inner['items'] is List) {
+      return inner['items'] as List<dynamic>;
+    }
     return const [];
   }
 
@@ -52,15 +55,6 @@ class FieldRepository {
     final inner = _extractRaw(res.data);
     if (inner == null) return null;
     return ShiftModel.fromJson(inner as Map<String, dynamic>);
-  }
-
-  Future<ShiftModel> startShift() async {
-    final res = await _dio.post(
-      '/fieldShifts.start',
-      data: jsonEncode({'json': {}}),
-      options: Options(headers: {'Content-Type': 'application/json'}),
-    );
-    return ShiftModel.fromJson(_extract(res.data));
   }
 
   Future<ShiftSyncResult> syncStartShift({
@@ -80,21 +74,13 @@ class FieldRepository {
           'deviceId': deviceId,
           if (orgId != null && orgId.isNotEmpty) 'orgId': orgId,
           if (platform != null && platform.isNotEmpty) 'platform': platform,
-          if (appVersion != null && appVersion.isNotEmpty) 'appVersion': appVersion,
+          if (appVersion != null && appVersion.isNotEmpty)
+            'appVersion': appVersion,
         }
       }),
       options: Options(headers: {'Content-Type': 'application/json'}),
     );
     return ShiftSyncResult.fromJson(_extract(res.data));
-  }
-
-  Future<ShiftModel> endShift() async {
-    final res = await _dio.post(
-      '/fieldShifts.end',
-      data: jsonEncode({'json': {}}),
-      options: Options(headers: {'Content-Type': 'application/json'}),
-    );
-    return ShiftModel.fromJson(_extract(res.data));
   }
 
   Future<ShiftSyncResult> syncEndShift({
@@ -127,7 +113,8 @@ class FieldRepository {
     return ShiftModel.fromJson(_extract(res.data));
   }
 
-  Future<List<ShiftModel>> shiftsForDate({String? agentId, String? date}) async {
+  Future<List<ShiftModel>> shiftsForDate(
+      {String? agentId, String? date}) async {
     final res = await _dio.get('/fieldShifts.list', queryParameters: {
       'input': jsonEncode({
         'json': {
@@ -162,7 +149,8 @@ class FieldRepository {
             'customerId': customerId,
           if (notes != null && notes.isNotEmpty) 'description': notes,
           if (audioUrl != null && audioUrl.isNotEmpty) 'audioUrl': audioUrl,
-          if (recordedAt != null) 'recordedAt': recordedAt.toUtc().toIso8601String(),
+          if (recordedAt != null)
+            'recordedAt': recordedAt.toUtc().toIso8601String(),
         }
       }),
       options: Options(headers: {'Content-Type': 'application/json'}),
@@ -172,7 +160,9 @@ class FieldRepository {
 
   Future<List<FieldVisitModel>> visitsForShift(String shiftId) async {
     final res = await _dio.get('/fieldVisits.forShift', queryParameters: {
-      'input': jsonEncode({'json': {'shiftId': shiftId}}),
+      'input': jsonEncode({
+        'json': {'shiftId': shiftId}
+      }),
     });
     return _extractList(res.data)
         .map((e) => FieldVisitModel.fromJson(e as Map<String, dynamic>))
@@ -220,7 +210,8 @@ class FieldRepository {
     return FieldStopModel.fromJson(_extract(res.data));
   }
 
-  Future<FieldStopModel> endStop({required String stopId, String? notes}) async {
+  Future<FieldStopModel> endStop(
+      {required String stopId, String? notes}) async {
     final res = await _dio.post(
       '/fieldStops.end',
       data: jsonEncode({
@@ -374,6 +365,45 @@ class FieldRepository {
     return LocationSyncAck.fromJson(_extract(res.data));
   }
 
+  Future<void> reportSyncStatus({
+    required String deviceId,
+    String? clientShiftId,
+    String? serverShiftId,
+    String? platform,
+    String? lastCapturedAt,
+    String? lastSyncAttemptAt,
+    String? lastSyncErrorCode,
+    int? pendingQueueDepth,
+    Map<String, dynamic>? permissionsSummary,
+  }) async {
+    try {
+      await _dio.post(
+        '/fieldSyncStatus.upsert',
+        data: jsonEncode({
+          'json': {
+            'deviceId': deviceId,
+            if (serverShiftId != null && serverShiftId.isNotEmpty)
+              'shiftId': serverShiftId,
+            if (clientShiftId != null && clientShiftId.isNotEmpty)
+              'clientShiftId': clientShiftId,
+            if (platform != null && platform.isNotEmpty) 'platform': platform,
+            if (lastCapturedAt != null) 'lastCapturedAt': lastCapturedAt,
+            if (lastSyncAttemptAt != null)
+              'lastSyncAttemptAt': lastSyncAttemptAt,
+            if (lastSyncErrorCode != null)
+              'lastSyncErrorCode': lastSyncErrorCode,
+            if (pendingQueueDepth != null)
+              'pendingQueueDepth': pendingQueueDepth,
+            if (permissionsSummary != null)
+              'permissionsSummary': permissionsSummary,
+          }
+        }),
+        options: Options(headers: {'Content-Type': 'application/json'}),
+      );
+    } catch (_) {
+      // Health reporting should never block the shift lifecycle.
+    }
+  }
 }
 
 final fieldRepositoryProvider = Provider<FieldRepository>((ref) {

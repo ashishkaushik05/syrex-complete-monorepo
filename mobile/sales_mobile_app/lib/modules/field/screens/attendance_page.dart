@@ -107,16 +107,18 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
     final canAdmin = user != null &&
         ref.watch(permissionServiceProvider).can(user, 'field:admin');
     final historyAsync = ref.watch(todayAttendanceProvider);
-    final agentsAsync = ref.watch(agentsProvider);
     final now = DateTime.now().toLocal();
     final from = now.subtract(const Duration(days: 30)).toIso8601String().substring(0, 10);
     final to = now.toIso8601String().substring(0, 10);
-    final adminAsync = ref.watch(attendanceAdminProvider((
-      userId: _selectedAgentId,
-      from: from,
-      to: to,
-      status: _selectedStatus?.apiValue,
-    )));
+    final agentsAsync = canAdmin ? ref.watch(agentsProvider) : null;
+    final adminAsync = canAdmin
+        ? ref.watch(attendanceAdminProvider((
+            userId: _selectedAgentId,
+            from: from,
+            to: to,
+            status: _selectedStatus?.apiValue,
+          )))
+        : null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Attendance')),
@@ -199,7 +201,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                   children: [
                     const Text('Admin View', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                     const SizedBox(height: 10),
-                    agentsAsync.when(
+                    agentsAsync!.when(
                       loading: () => const LinearProgressIndicator(),
                       error: (_, __) => const Text('Unable to load agents'),
                       data: (agents) => DropdownButtonFormField<String?>(
@@ -236,7 +238,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage> {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    adminAsync.when(
+                    adminAsync!.when(
                       loading: () => const LinearProgressIndicator(),
                       error: (_, __) => const Text('Unable to load filtered attendance'),
                       data: (records) {

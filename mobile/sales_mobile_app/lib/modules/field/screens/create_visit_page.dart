@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
+import '../../../app/theme/app_theme.dart';
 import '../../../core/api/sales_client.dart';
-import '../../../shared/widgets/premium_surfaces.dart';
+import '../../../shared/widgets/rb_components.dart';
 import '../providers/field_providers.dart';
 import '../repository/field_repository.dart';
 
-final _outletsProvider = FutureProvider.autoDispose<List<SalesOutlet>>((ref) async {
+final _visitOutletsProvider = FutureProvider.autoDispose<List<SalesOutlet>>((ref) {
   return ref.read(salesClientProvider).outlets();
 });
 
@@ -19,112 +22,59 @@ class CreateVisitPage extends ConsumerStatefulWidget {
 }
 
 class _CreateVisitPageState extends ConsumerState<CreateVisitPage> {
-  final _notesCtrl = TextEditingController();
-  final _audioCtrl = TextEditingController();
+  final _noteCtrl = TextEditingController();
   Position? _position;
-  bool _loadingLocation = false;
+  bool _loadingGps = false;
   bool _submitting = false;
+  bool _success = false;
   String? _outletId;
-  String? _customerId;
-  String? _banner;
 
   @override
   void initState() {
     super.initState();
-    _captureLocation();
+    _fetchGps();
   }
 
   @override
   void dispose() {
-    _notesCtrl.dispose();
-    _audioCtrl.dispose();
+    _noteCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _captureLocation() async {
-    final shift = await ref.read(activeShiftProvider.future);
-    if (shift == null) {
-      setState(() => _banner = 'No active shift. Start a shift before logging a visit.');
-      return;
-    }
-    setState(() => _loadingLocation = true);
+  Future<void> _fetchGps() async {
+    setState(() => _loadingGps = true);
     try {
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.deniedForever) {
-        setState(() => _banner = 'Location permission permanently denied. Please enable it in app settings.');
-        return;
-      }
-      if (permission == LocationPermission.denied) {
-        setState(() => _banner = 'Location permission is required for visit logging.');
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
-        ),
-      );
-      setState(() => _position = position);
-    } catch (_) {
-      setState(() => _banner = 'Unable to capture GPS lock. Retry to continue.');
-    } finally {
-      if (mounted) setState(() => _loadingLocation = false);
-    }
-  }
-
-  bool _canSubmit(bool hasActiveShift) {
-    return hasActiveShift &&
-        _position != null &&
-        _notesCtrl.text.trim().length >= 8 &&
-        !_submitting;
+      final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+      if (mounted) setState(() => _position = pos);
+    } catch (_) {}
+    if (mounted) setState(() => _loadingGps = false);
   }
 
   Future<void> _submit() async {
-    final shift = await ref.read(activeShiftProvider.future);
+    final pos = _position;
+    if (pos == null) return;
+    final shift = await ref.read(fieldRepositoryProvider).activeShift();
     if (shift == null) {
-      setState(() => _banner = 'No active shift. Start shift before logging visit.');
+      if (mounted) RbToast.show(context, 'No active shift');
       return;
     }
-    if (_position == null) {
-      setState(() => _banner = 'GPS lock required before submitting visit.');
-      return;
-    }
-    setState(() {
-      _submitting = true;
-      _banner = null;
-    });
+    setState(() => _submitting = true);
     try {
       await ref.read(fieldRepositoryProvider).logVisit(
-            lat: _position!.latitude,
-            lng: _position!.longitude,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            notes: _noteCtrl.text.trim().isEmpty ? null : _noteCtrl.text.trim(),
             outletId: _outletId,
-            customerId: _customerId,
-            notes: _notesCtrl.text.trim(),
-            audioUrl: _audioCtrl.text.trim().isEmpty ? null : _audioCtrl.text.trim(),
-            recordedAt: _position!.timestamp,
           );
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Visit logged successfully.')),
-      );
+      ref.invalidate(visitsForShiftProvider(shift.id));
+      if (mounted) {
+        setState(() => _success = true);
+        await Future.delayed(const Duration(milliseconds: 1200));
+        if (mounted) context.pop();
+      }
     } catch (e) {
-      final msg = e.toString();
-      setState(() {
-        if (msg.contains('No active shift')) {
-          _banner = 'No active shift. Start shift and retry.';
-        } else if (msg.contains('SocketException')) {
-          _banner = 'No network. Retry when online.';
-        } else if (msg.contains('permission')) {
-          _banner = 'Permission denied. Enable location access and retry.';
-        } else {
-          _banner = 'Visit submission failed. Please retry.';
-        }
-      });
+      if (mounted) RbToast.show(context, 'Error: $e');
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -132,155 +82,235 @@ class _CreateVisitPageState extends ConsumerState<CreateVisitPage> {
 
   @override
   Widget build(BuildContext context) {
+    final c = rbColors(context);
+    final outletsAsync = ref.watch(_visitOutletsProvider);
     final shiftAsync = ref.watch(activeShiftProvider);
-    final outletsAsync = ref.watch(_outletsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Create Visit')),
-      body: PremiumGradientBackground(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          children: [
-            shiftAsync.when(
-              loading: () => const PremiumCard(child: LinearProgressIndicator()),
-              error: (_, __) => const PremiumCard(child: Text('Unable to check shift status.')),
-              data: (shift) => PremiumCard(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Shift State', style: TextStyle(fontWeight: FontWeight.w700)),
-                        Text(shift == null ? 'Inactive' : 'Active', style: const TextStyle(color: Color(0xFF617182))),
-                      ],
-                    ),
-                    StateBadge(
-                      label: shift == null ? 'SHIFT OFF' : 'SHIFT ON',
-                      color: shift == null ? AppPalette.amber : AppPalette.mint,
-                    ),
-                  ],
-                ),
-              ),
+      backgroundColor: c.bg,
+      body: Column(
+        children: [
+          RbTopBar(
+            title: 'Log visit',
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back, size: 20, color: c.ink),
+              onPressed: () => context.pop(),
             ),
-            PremiumCard(
+            sub: 'Captures current GPS',
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Location Evidence', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  if (_position == null)
-                    Text(
-                      _loadingLocation ? 'Acquiring GPS lock...' : 'No location fix yet.',
-                      style: const TextStyle(color: Color(0xFF617182)),
-                    )
-                  else
-                    Text(
-                      'Lat: ${_position!.latitude.toStringAsFixed(6)}\nLng: ${_position!.longitude.toStringAsFixed(6)}\nAccuracy: ±${_position!.accuracy.toStringAsFixed(0)}m\nTimestamp: ${_position!.timestamp.toLocal()}',
-                      style: const TextStyle(color: Color(0xFF4D5B68), height: 1.3),
+                  // GPS card
+                  RbCard(
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        children: [
+                          Icon(Icons.navigation_outlined,
+                              size: 20, color: RbColors.accent),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _loadingGps
+                                ? Text('Getting location…',
+                                    style: GoogleFonts.inter(
+                                        fontSize: 13, color: c.muted))
+                                : _position == null
+                                    ? Text('Location unavailable',
+                                        style: GoogleFonts.inter(
+                                            fontSize: 13, color: RbColors.danger))
+                                    : Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${_position!.latitude.toStringAsFixed(6)}, ${_position!.longitude.toStringAsFixed(6)}',
+                                            style: GoogleFonts.jetBrainsMono(
+                                                fontSize: 12, color: c.ink),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            '±${_position!.accuracy.toStringAsFixed(0)}m accuracy',
+                                            style: GoogleFonts.inter(
+                                                fontSize: 11, color: c.muted),
+                                          ),
+                                        ],
+                                      ),
+                          ),
+                          if (_loadingGps)
+                            const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: RbColors.accent),
+                            )
+                          else
+                            GestureDetector(
+                              onTap: _fetchGps,
+                              child: Icon(Icons.refresh, size: 18, color: c.muted),
+                            ),
+                        ],
+                      ),
                     ),
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      onPressed: _loadingLocation ? null : _captureLocation,
-                      icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('Refresh GPS'),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Outlet selector
+                  outletsAsync.maybeWhen(
+                    data: (outlets) => RbCard(
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+                            child: Row(
+                              children: [
+                                Text('Outlet (optional)',
+                                    style: GoogleFonts.inter(
+                                        fontSize: 12, color: c.muted)),
+                              ],
+                            ),
+                          ),
+                          for (int i = 0; i < outlets.length; i++)
+                            RbRow(
+                              isFirst: i == 0,
+                              onTap: () => setState(() => _outletId =
+                                  _outletId == outlets[i].id
+                                      ? null
+                                      : outlets[i].id),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(outlets[i].name,
+                                        style: GoogleFonts.inter(
+                                            fontSize: 14, color: c.ink)),
+                                  ),
+                                  if (_outletId == outlets[i].id)
+                                    const Icon(Icons.check,
+                                        size: 16, color: RbColors.accent),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Note
+                  RbCard(
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: TextField(
+                        controller: _noteCtrl,
+                        maxLines: 4,
+                        style: GoogleFonts.inter(fontSize: 14, color: c.ink),
+                        decoration: InputDecoration(
+                          hintText: 'Add a note (optional)',
+                          hintStyle: GoogleFonts.inter(color: c.muted2),
+                          border: InputBorder.none,
+                          filled: false,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  RbBtn(
+                    label: _success
+                        ? 'Visit logged ✓'
+                        : 'Log visit at this location',
+                    variant: _success ? RbBtnVariant.outline : RbBtnVariant.accent,
+                    size: RbBtnSize.lg,
+                    loading: _submitting,
+                    onPressed: (_submitting || _position == null || _success)
+                        ? null
+                        : _submit,
+                  ),
+
+                  // Today's visits
+                  shiftAsync.maybeWhen(
+                    data: (shift) => shift != null
+                        ? _TodayVisitsList(shiftId: shift.id)
+                        : const SizedBox.shrink(),
+                    orElse: () => const SizedBox.shrink(),
                   ),
                 ],
               ),
             ),
-            if (_banner != null)
-              InlineBanner(
-                message: _banner!,
-                type: _banner!.contains('failed') || _banner!.contains('required')
-                    ? BannerType.error
-                    : BannerType.warning,
-              ),
-            PremiumCard(
-              child: outletsAsync.when(
-                loading: () => const LinearProgressIndicator(),
-                error: (_, __) => const Text('Unable to load outlets'),
-                data: (outlets) {
-                  final selectedOutlet = outlets.where((e) => e.id == _outletId).firstOrNull;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      DropdownButtonFormField<String>(
-                        value: _outletId,
-                        decoration: const InputDecoration(labelText: 'Outlet (optional)'),
-                        isExpanded: true,
-                        items: outlets
-                            .map((outlet) => DropdownMenuItem(
-                                  value: outlet.id,
-                                  child: Text('${outlet.name} (${outlet.outletCode})'),
-                                ))
-                            .toList(),
-                        onChanged: (v) {
-                          setState(() {
-                            _outletId = v;
-                            _customerId = null;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String?>(
-                        value: _customerId,
-                        decoration: const InputDecoration(labelText: 'Customer (optional)'),
-                        items: [
-                          const DropdownMenuItem<String?>(value: null, child: Text('No customer link')),
-                          if (selectedOutlet != null)
-                            DropdownMenuItem<String?>(
-                              value: selectedOutlet.userId,
-                              child: Text(selectedOutlet.ownerName),
-                            ),
-                        ],
-                        onChanged: (v) => setState(() => _customerId = v),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _notesCtrl,
-                        minLines: 3,
-                        maxLines: 5,
-                        decoration: const InputDecoration(
-                          labelText: 'Visit Notes *',
-                          hintText: 'Minimum 8 characters',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _audioCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Audio / Media URL (optional)',
-                          hintText: 'Paste uploaded file link',
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      shiftAsync.maybeWhen(
-                        data: (shift) => SizedBox(
-                          width: double.infinity,
-                          child: FilledButton(
-                            onPressed: _canSubmit(shift != null) ? _submit : null,
-                            child: _submitting
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                  )
-                                : const Text('Submit Visit'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TodayVisitsList extends ConsumerWidget {
+  const _TodayVisitsList({required this.shiftId});
+  final String shiftId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(visitsForShiftProvider(shiftId));
+    final c = rbColors(context);
+
+    return async.maybeWhen(
+      data: (visits) {
+        if (visits.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 20),
+            RbSection(label: "Today's visits (${visits.length})"),
+            const SizedBox(height: 8),
+            RbCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < visits.length; i++)
+                    RbRow(
+                      isFirst: i == 0,
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                                color: RbColors.accent,
+                                shape: BoxShape.circle),
                           ),
-                        ),
-                        orElse: () => const SizedBox.shrink(),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              visits[i].description ?? 'Visit logged',
+                              style: GoogleFonts.inter(
+                                  fontSize: 14, color: c.ink),
+                            ),
+                          ),
+                          Text(_fmtTime(visits[i].recordedAt),
+                              style: GoogleFonts.inter(
+                                  fontSize: 12, color: c.muted)),
+                        ],
                       ),
-                    ],
-                  );
-                },
+                    ),
+                ],
               ),
             ),
           ],
-        ),
-      ),
+        );
+      },
+      orElse: () => const SizedBox.shrink(),
     );
+  }
+
+  static String _fmtTime(String iso) {
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '—';
+    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m ${dt.hour >= 12 ? 'PM' : 'AM'}';
   }
 }

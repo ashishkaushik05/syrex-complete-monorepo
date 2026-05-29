@@ -8,6 +8,7 @@ import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 const productSchema = z.object({
   id: z.string(),
   categoryId: z.string(),
+  brandId: z.string().nullable(),
   name: z.string(),
   displayName: z.string().nullable(),
   sku: z.string(),
@@ -49,6 +50,7 @@ const updateProductSchema = z.object({
 });
 
 const listProductsInputSchema = paginationInputSchema.extend({
+  brandId: z.string().uuid().optional(),
   categoryId: z.string().uuid().optional(),
   isActive: z.boolean().optional(),
   q: z.string().min(1).optional()
@@ -69,6 +71,7 @@ function toInputJson(
 function toProduct(product: {
   id: string;
   categoryId: string;
+  category?: { brandId: string } | null;
   name: string;
   displayName: string | null;
   sku: string;
@@ -84,6 +87,7 @@ function toProduct(product: {
   return {
     id: product.id,
     categoryId: product.categoryId,
+    brandId: product.category?.brandId ?? null,
     name: product.name,
     displayName: product.displayName,
     sku: product.sku,
@@ -107,6 +111,7 @@ export const productsRouter = createTRPCRouter({
       const products = await ctx.prisma.product.findMany({
         where: {
           categoryId: input.categoryId,
+          category: input.brandId ? { brandId: input.brandId } : undefined,
           isActive: input.isActive,
           OR: input.q
             ? [
@@ -116,6 +121,7 @@ export const productsRouter = createTRPCRouter({
               ]
             : undefined
         },
+        include: { category: { select: { brandId: true } } },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }, { id: "desc" }],
         skip: offset,
         take: input.limit + 1
@@ -132,7 +138,10 @@ export const productsRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(productSchema)
     .query(async ({ ctx, input }) => {
-      const product = await ctx.prisma.product.findUnique({ where: { id: input.id } });
+      const product = await ctx.prisma.product.findUnique({
+        where: { id: input.id },
+        include: { category: { select: { brandId: true } } }
+      });
       if (!product) {
         throw apiError("NOT_FOUND", "Product not found");
       }

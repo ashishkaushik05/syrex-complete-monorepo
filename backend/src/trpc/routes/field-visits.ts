@@ -2,7 +2,8 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertCanReadAgent, resolveReadOrgId } from "./field-helpers";
+import { assertCanReadAgent, assertFieldEnabled, resolveReadOrgId } from "./field-helpers";
+import type { TrpcContext } from "../context";
 
 const visitSchema = z.object({
   id: z.string(),
@@ -55,14 +56,33 @@ function toVisit(v: {
   };
 }
 
+async function resolveOrgIdForShiftRead(ctx: TrpcContext, shiftId: string) {
+  if (ctx.actor.orgId) return resolveReadOrgId(ctx);
+  const shift = await ctx.prisma.shift.findUnique({
+    where: { id: shiftId },
+    select: { agentId: true, orgId: true }
+  });
+  if (!shift) throw apiError("NOT_FOUND", "Shift not found");
+  assertCanReadAgent(ctx, shift.agentId);
+  return shift.orgId;
+}
+
 export const fieldVisitsRouter = createTRPCRouter({
   log: perm(P.field.write)
     .input(
       z.object({
+        agentId: z.string().uuid().optional(),
         lat: z.number(),
         lng: z.number(),
         description: z.string().min(1).optional(),
-        audioUrl: z.string().url().optional(),
+        // M-05: audioUrl must be HTTPS only; reject file://, data://, http://
+        audioUrl: z
+          .string()
+          .url()
+          .refine((u) => u.startsWith("https://"), {
+            message: "audioUrl must use HTTPS"
+          })
+          .optional(),
         outletId: z.string().uuid().optional(),
         customerId: z.string().uuid().optional(),
         recordedAt: z.string().datetime().optional()
@@ -71,25 +91,42 @@ export const fieldVisitsRouter = createTRPCRouter({
     .output(visitSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
-      const orgId = ctx.actor.orgId;
-      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
-
+      await assertFieldEnabled(ctx.prisma, agentId);
+      // H-11: if the client passes agentId, it MUST match the actor. Check BEFORE
+      // the shift lookup so a spoofed agentId can't be used to probe shifts.
+      if (input.agentId && input.agentId !== agentId) {
+        throw apiError(
+          "FORBIDDEN",
+          "Cannot create records on another agent's shift"
+        );
+      }
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, orgId, status: "active" },
+        where: {
+          agentId,
+          status: "active",
+          orgId: ctx.actor.orgId ?? undefined
+        },
         select: { id: true, orgId: true }
       });
       if (!shift) throw apiError("BAD_REQUEST", "No active shift — visits require an active shift");
 
       if (input.outletId) {
+        // C-18: Outlet has no orgId column (pre-Batch-08), so the previous
+        // `orgId: shift.orgId` filter was silently a no-op. Org isolation here
+        // is enforced indirectly: the resulting visit row is stamped with
+        // shift.orgId, and the customer must own the outlet (checked below).
+        // Once Batch 08 adds Outlet.orgId, add `orgId: shift.orgId` back.
         const outlet = await ctx.prisma.outlet.findFirst({
-          where: { id: input.outletId, isActive: true, orgId: shift.orgId },
+          where: { id: input.outletId, isActive: true },
           select: { id: true, userId: true }
         });
         if (!outlet) throw apiError("BAD_REQUEST", "Outlet not found or inactive");
 
         if (input.customerId) {
+          // C-18: User model has no orgId column either; scope is enforced
+          // transitively via outlet.userId === customer.id.
           const customer = await ctx.prisma.user.findFirst({
-            where: { id: input.customerId, isActive: true, userType: "outlet", orgId: shift.orgId },
+            where: { id: input.customerId, isActive: true, userType: "outlet" },
             select: { id: true }
           });
           if (!customer) throw apiError("BAD_REQUEST", "Customer not found or inactive");
@@ -131,7 +168,9 @@ export const fieldVisitsRouter = createTRPCRouter({
     .output(z.array(visitSchema))
     .query(async ({ ctx, input }) => {
       if (input.agentId) assertCanReadAgent(ctx, input.agentId);
-      const orgId = resolveReadOrgId(ctx);
+      const orgId = input.shiftId
+        ? await resolveOrgIdForShiftRead(ctx, input.shiftId)
+        : resolveReadOrgId(ctx);
       const timeFilter: Record<string, Date> = {};
       if (input.from) timeFilter.gte = new Date(input.from);
       if (input.to) timeFilter.lte = new Date(input.to);
@@ -166,7 +205,7 @@ export const fieldVisitsRouter = createTRPCRouter({
     .input(z.object({ shiftId: z.string().uuid() }))
     .output(z.array(visitSchema))
     .query(async ({ ctx, input }) => {
-      const orgId = resolveReadOrgId(ctx);
+      const orgId = await resolveOrgIdForShiftRead(ctx, input.shiftId);
       const visits = await ctx.prisma.fieldVisit.findMany({
         where: { shiftId: input.shiftId, orgId },
         select: VISIT_SELECT,

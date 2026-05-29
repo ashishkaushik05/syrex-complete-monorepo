@@ -1,9 +1,20 @@
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
-import { P } from "../../rbac/catalog";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
-import { assertOutletAccess } from "./outlet-access";
+import { assertOutletAccess, findActorLinkedOutletId } from "./outlet-access";
+
+const dispatchListItemSchema = z.object({
+  id: z.string(),
+  dispatchDate: z.string(),
+  deliveryStatus: z.string(),
+  transporterName: z.string(),
+  vehicleNumber: z.string(),
+  lrNumber: z.string().nullable(),
+  estimatedDelivery: z.string().nullable(),
+  deliveredAt: z.string().nullable(),
+});
 import {
   orderDetailSchema,
   orderListFilterSchema,
@@ -41,10 +52,27 @@ export const outletPortalRouter = createTRPCRouter({
 
       const outlet = await ctx.prisma.outlet.findUnique({
         where: { id: input.outletId },
-        select: { id: true },
+        select: { id: true, warehouseId: true },
       });
       if (!outlet) {
         throw apiError("NOT_FOUND", "Outlet not found");
+      }
+
+      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+      if (!isSuperAdmin) {
+        const linkedOutletId = await findActorLinkedOutletId(ctx);
+        if (linkedOutletId) {
+          if (linkedOutletId !== input.outletId) {
+            throw apiError("FORBIDDEN", "Access denied to this outlet");
+          }
+        } else if (ctx.managedWarehouseId) {
+          if (outlet.warehouseId !== ctx.managedWarehouseId) {
+            throw apiError("FORBIDDEN", "Access denied to this outlet");
+          }
+        } else {
+          throw apiError("FORBIDDEN", "No safe outlet scope available");
+        }
+        // TODO(batch-08): replace warehouse fallback with outlet.orgId/warehouse.orgId check.
       }
 
       const [invoiceAgg, openInvoicesCount, ordersCount] = await Promise.all([
@@ -254,6 +282,50 @@ export const outletPortalRouter = createTRPCRouter({
           qtyDispatched: l.qtyDispatched,
           serialNumbers: (l.serialNumbers as string[]) ?? [],
         })),
+      };
+    }),
+
+  dispatchHistory: perm(P.dispatches.read)
+    .input(paginationInputSchema.extend({ outletId: z.string().uuid() }))
+    .output(z.object({ items: z.array(dispatchListItemSchema), nextCursor: z.string().nullable() }))
+    .query(async ({ ctx, input }) => {
+      await assertOutletAccess(ctx, input.outletId);
+
+      const offset = decodeCursor(input.cursor) ?? 0;
+      const rows = await ctx.prisma.dispatch.findMany({
+        where: {
+          lines: { some: { orderLine: { order: { outletId: input.outletId } } } },
+        },
+        select: {
+          id: true,
+          dispatchDate: true,
+          deliveryStatus: true,
+          transporterName: true,
+          vehicleNumber: true,
+          lrNumber: true,
+          estimatedDelivery: true,
+          deliveredAt: true,
+        },
+        orderBy: [{ dispatchDate: "desc" }, { id: "desc" }],
+        skip: offset,
+        take: input.limit + 1,
+      });
+
+      const hasMore = rows.length > input.limit;
+      const pageItems = hasMore ? rows.slice(0, input.limit) : rows;
+
+      return {
+        items: pageItems.map((d) => ({
+          id: d.id,
+          dispatchDate: d.dispatchDate.toISOString(),
+          deliveryStatus: d.deliveryStatus,
+          transporterName: d.transporterName,
+          vehicleNumber: d.vehicleNumber,
+          lrNumber: d.lrNumber,
+          estimatedDelivery: d.estimatedDelivery?.toISOString() ?? null,
+          deliveredAt: d.deliveredAt?.toISOString() ?? null,
+        })),
+        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null,
       };
     }),
 

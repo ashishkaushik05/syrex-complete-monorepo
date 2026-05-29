@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { resolveReadOrgId } from "./field-helpers";
+import { assertFieldEnabled, resolveReadOrgId } from "./field-helpers";
 
 const syncStatusSchema = z.object({
   id: z.string(),
@@ -96,7 +96,19 @@ export const fieldSyncStatusRouter = createTRPCRouter({
     .output(syncStatusSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
-      const orgId = input.orgId ?? ctx.actor.orgId;
+      await assertFieldEnabled(ctx.prisma, agentId);
+      let orgId = input.orgId ?? ctx.actor.orgId;
+      if (!orgId && (input.shiftId || input.clientShiftId)) {
+        const shift = await ctx.prisma.shift.findFirst({
+          where: {
+            agentId,
+            id: input.shiftId,
+            clientShiftId: input.clientShiftId
+          },
+          select: { orgId: true }
+        });
+        orgId = shift?.orgId ?? null;
+      }
       if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
 
       if (input.shiftId) {

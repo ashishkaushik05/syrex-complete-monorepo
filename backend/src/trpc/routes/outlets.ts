@@ -1,9 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
-import { P } from "../../rbac/catalog";
+import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { actorHasInternalSalesOutletAccess, findActorLinkedOutletId } from "./outlet-access";
 
 const outletSchema = z.object({
   id: z.string(),
@@ -126,18 +127,31 @@ export const outletsRouter = createTRPCRouter({
     .output(z.object({ items: z.array(outletSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const offset = decodeCursor(input.cursor) ?? 0;
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasGlobalOutletAccess = isSuperAdmin || hasInternalSalesAccess;
+      const isWarehouseScoped = !hasGlobalOutletAccess && !linkedOutletId && !!ctx.managedWarehouseId;
+      if (!hasGlobalOutletAccess && !linkedOutletId && !isWarehouseScoped) {
+        throw apiError("FORBIDDEN", "No safe outlet scope available");
+      }
+
+      const where: Prisma.OutletWhereInput = {
+        warehouseId: input.warehouseId,
+        isActive: input.isActive,
+        OR: input.q
+          ? [
+              { outletCode: { contains: input.q, mode: "insensitive" } },
+              { name: { contains: input.q, mode: "insensitive" } },
+              { ownerName: { contains: input.q, mode: "insensitive" } }
+            ]
+          : undefined,
+        ...(linkedOutletId && !hasGlobalOutletAccess ? { id: linkedOutletId } : {}),
+        ...(isWarehouseScoped ? { warehouseId: ctx.managedWarehouseId } : {}),
+        // TODO(batch-08): switch to outlet.orgId/warehouse.orgId once org columns land.
+      };
       const outlets = await ctx.prisma.outlet.findMany({
-        where: {
-          warehouseId: input.warehouseId,
-          isActive: input.isActive,
-          OR: input.q
-            ? [
-                { outletCode: { contains: input.q, mode: "insensitive" } },
-                { name: { contains: input.q, mode: "insensitive" } },
-                { ownerName: { contains: input.q, mode: "insensitive" } }
-              ]
-            : undefined
-        },
+        where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: offset,
         take: input.limit + 1
@@ -170,7 +184,27 @@ export const outletsRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(outletSchema)
     .query(async ({ ctx, input }) => {
-      const outlet = await ctx.prisma.outlet.findUnique({ where: { id: input.id } });
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasGlobalOutletAccess = isSuperAdmin || hasInternalSalesAccess;
+
+      if (linkedOutletId && !hasGlobalOutletAccess && linkedOutletId !== input.id) {
+        throw apiError("NOT_FOUND", "Outlet not found");
+      }
+
+      const isWarehouseScoped = !hasGlobalOutletAccess && !linkedOutletId && !!ctx.managedWarehouseId;
+      if (!hasGlobalOutletAccess && !linkedOutletId && !isWarehouseScoped) {
+        throw apiError("FORBIDDEN", "No safe outlet scope available");
+      }
+
+      const outlet = await ctx.prisma.outlet.findFirst({
+        where: {
+          id: input.id,
+          ...(isWarehouseScoped ? { warehouseId: ctx.managedWarehouseId } : {}),
+          // TODO(batch-08): replace warehouse fallback with outlet.orgId/warehouse.orgId.
+        },
+      });
       if (!outlet) {
         throw apiError("NOT_FOUND", "Outlet not found");
       }

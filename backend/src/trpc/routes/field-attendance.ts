@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { resolveReadOrgId } from "./field-helpers";
+import { assertFieldEnabled, resolveReadOrgId } from "./field-helpers";
 
 const attendanceStatusSchema = z.enum(["present", "absent", "half_day", "leave"]);
 
@@ -70,6 +70,8 @@ export const fieldAttendanceRouter = createTRPCRouter({
       const callerId = ctx.actor.id!;
       const targetUserId = input.userId ?? callerId;
       const isOverride = targetUserId !== callerId;
+
+      await assertFieldEnabled(ctx.prisma, callerId);
 
       if (isOverride && !ctx.permissions.includes(SUPER_ADMIN_PERMISSION) && !ctx.permissions.includes(P.field.admin)) {
         throw apiError("FORBIDDEN", "Admin override requires field:admin");
@@ -164,6 +166,8 @@ export const fieldAttendanceRouter = createTRPCRouter({
     )
     .output(attendanceSchema)
     .mutation(async ({ ctx, input }) => {
+      await assertFieldEnabled(ctx.prisma, ctx.actor.id!);
+
       if (!ctx.permissions.includes(SUPER_ADMIN_PERMISSION) && !ctx.permissions.includes(P.field.admin)) {
         throw apiError("FORBIDDEN", "Patching attendance requires field:admin");
       }

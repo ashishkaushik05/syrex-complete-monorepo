@@ -15,8 +15,10 @@ dependencies:
   go_router: ^14.8.1
   dio: ^5.8.0+1
   flutter_secure_storage: ^9.2.4
-  logger: ^2.5.0
+  flutter_svg: ^2.0.10+1
   geolocator: ^13.0.0
+  google_fonts: ^6.2.1
+  logger: ^2.5.0
   flutter_background_service: ^5.0.6
   shared_preferences: ^2.3.0
   permission_handler: ^11.3.1

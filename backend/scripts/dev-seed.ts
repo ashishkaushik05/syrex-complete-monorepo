@@ -1,6 +1,12 @@
 import { PrismaClient, UserType } from "@prisma/client";
 import { validatePermissionKeys } from "../src/rbac/catalog";
-import { DEV_SALES_PERMISSIONS, DEV_WAREHOUSE_PERMISSIONS, OUTLET_PERMISSIONS } from "./seed-permissions";
+import {
+  DEV_SALES_PERMISSIONS,
+  DEV_WAREHOUSE_PERMISSIONS,
+  OUTLET_PERMISSIONS,
+  SERVICE_ASI_PERMISSIONS,
+  SERVICE_SE_PERMISSIONS,
+} from "./seed-permissions";
 
 const prisma = new PrismaClient();
 
@@ -9,6 +15,8 @@ const IDS = {
   salesRole: "d0000000-0000-4000-8000-000000000002",
   warehouseRole: "d0000000-0000-4000-8000-000000000003",
   outletRole: "d0000000-0000-4000-8000-000000000004",
+  asiRole: "d0000000-0000-4000-8000-000000000005",
+  serviceEngineerRole: "d0000000-0000-4000-8000-000000000006",
   adminUser: "d1000000-0000-4000-8000-000000000001",
   outletUser: "d1000000-0000-4000-8000-000000000002",
   warehouseUser: "d1000000-0000-4000-8000-000000000003"
@@ -25,10 +33,12 @@ async function main() {
   assertValidSeedPermissions("Sales", DEV_SALES_PERMISSIONS);
   assertValidSeedPermissions("Warehouse Manager", DEV_WAREHOUSE_PERMISSIONS);
   assertValidSeedPermissions("Outlet", OUTLET_PERMISSIONS);
+  assertValidSeedPermissions("ASI", SERVICE_ASI_PERMISSIONS);
+  assertValidSeedPermissions("Service Engineer", SERVICE_SE_PERMISSIONS);
 
-  const adminPasswordHash = await Bun.password.hash("admin123");
-  const outletPasswordHash = await Bun.password.hash("outlet123");
-  const warehousePasswordHash = await Bun.password.hash("warehouse123");
+  const adminPasswordHash = await Bun.password.hash("admin123", { algorithm: "bcrypt", cost: 12 });
+  const outletPasswordHash = await Bun.password.hash("outlet123", { algorithm: "bcrypt", cost: 12 });
+  const warehousePasswordHash = await Bun.password.hash("warehouse123", { algorithm: "bcrypt", cost: 12 });
 
   await prisma.role.upsert({
     where: { id: IDS.adminRole },
@@ -57,6 +67,18 @@ async function main() {
     where: { id: IDS.outletRole },
     update: { name: "Outlet", permissions: [...OUTLET_PERMISSIONS], isSystem: false },
     create: { id: IDS.outletRole, name: "Outlet", permissions: [...OUTLET_PERMISSIONS], isSystem: false }
+  });
+
+  await prisma.role.upsert({
+    where: { id: IDS.asiRole },
+    update: { name: "ASI", permissions: [...SERVICE_ASI_PERMISSIONS], isSystem: false },
+    create: { id: IDS.asiRole, name: "ASI", permissions: [...SERVICE_ASI_PERMISSIONS], isSystem: false }
+  });
+
+  await prisma.role.upsert({
+    where: { id: IDS.serviceEngineerRole },
+    update: { name: "Service Engineer", permissions: [...SERVICE_SE_PERMISSIONS], isSystem: false },
+    create: { id: IDS.serviceEngineerRole, name: "Service Engineer", permissions: [...SERVICE_SE_PERMISSIONS], isSystem: false }
   });
 
   await prisma.user.upsert({

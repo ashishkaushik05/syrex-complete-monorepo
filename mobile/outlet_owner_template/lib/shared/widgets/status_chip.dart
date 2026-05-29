@@ -6,6 +6,7 @@ class StatusChip extends StatelessWidget {
   final String status;
 
   static Color _color(String s) => switch (s) {
+        // Order statuses
         'pending_approval' => Colors.orange,
         'approved' => Colors.blue,
         'partially_dispatched' => Colors.lightBlue,
@@ -13,6 +14,20 @@ class StatusChip extends StatelessWidget {
         'rejected' => Colors.red,
         'cancelled' => Colors.grey,
         'on_hold' => Colors.amber,
+        // Delivery statuses
+        'delivered' => Colors.green,
+        'in_transit' => Colors.blue,
+        'pending' => Colors.orange,
+        'dispatched' => Colors.lightBlue,
+        // Complaint statuses
+        'raised' => Colors.orange,
+        'assigned' => Colors.blue,
+        'resolved' => Colors.green,
+        'closed' => Colors.grey,
+        // Payment / invoice
+        'paid' => Colors.green,
+        'due' => Colors.red,
+        'partial' => Colors.orange,
         _ => Colors.grey,
       };
 

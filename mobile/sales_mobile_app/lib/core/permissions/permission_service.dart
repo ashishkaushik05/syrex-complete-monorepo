@@ -32,7 +32,7 @@ final canUseFieldProvider = Provider<bool>((ref) {
   if (user == null) return false;
   if (!user.isFieldEnabled) return false;
   final service = ref.watch(permissionServiceProvider);
-  return service.can(user, "field:read") || service.can(user, "field:write");
+  return service.can(user, "field:read") && service.can(user, "field:write");
 });
 
 final canAdminFieldProvider = Provider<bool>((ref) {

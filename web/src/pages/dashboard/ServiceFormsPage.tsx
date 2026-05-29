@@ -53,6 +53,7 @@ const DEFAULT_FIELD: NewField = {
 export function ServiceFormsPage() {
   const queryClient = useQueryClient()
   const { can } = usePermission()
+  const canManageTemplates = can('service:templates') || can('service:manage')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [createName, setCreateName] = useState('')
@@ -166,7 +167,7 @@ export function ServiceFormsPage() {
         <div className="lg:col-span-2 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Form Templates</h2>
-            {can('service:manage') && (
+            {canManageTemplates && (
               <Button
                 type="button"
                 size="sm"
@@ -247,7 +248,7 @@ export function ServiceFormsPage() {
                   {selectedTemplate.isActive ? (
                     <>
                       <Button type="button" size="sm" variant="outline" onClick={() => setPreviewOpen(true)} className="text-xs">Preview</Button>
-                      {can('service:manage') && (
+                      {canManageTemplates && (
                         <Button
                           type="button" size="sm"
                           onClick={() => { setNewField(DEFAULT_FIELD); setFieldError(null); setFieldOpen(true) }}
@@ -256,7 +257,7 @@ export function ServiceFormsPage() {
                           + Field
                         </Button>
                       )}
-                      {can('service:manage') && (
+                      {canManageTemplates && (
                         <Button
                           type="button" size="sm" variant="outline"
                           className="border-rose-300 text-rose-600 hover:bg-rose-50 text-xs"

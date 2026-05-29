@@ -3,11 +3,73 @@ import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { broadcastLocationUpdate } from "../../infra/sse";
 import { apiError } from "../error";
+import type { TrpcContext } from "../context";
 import {
   assertCanReadAgent,
+  assertFieldEnabled,
   resolveReadOrgId,
   validateLocationPoint
 } from "./field-helpers";
+
+// ---------------------------------------------------------------------------
+// M-04: in-memory sliding-window rate limiter for location ingest.
+// Keyed by `${agentId}:${shiftId}`. Cap: INGEST_RATE_LIMIT points per window.
+// Single-instance only (D-09); resets are best-effort. Stale buckets are
+// swept every 5 min. Tests can call resetIngestBucket() to clear state.
+// ---------------------------------------------------------------------------
+const INGEST_RATE_WINDOW_MS = 60_000;
+const INGEST_RATE_LIMIT = 2_000;
+const ingestBuckets = new Map<string, number[]>();
+
+function ingestKey(agentId: string, shiftId: string) {
+  return `${agentId}:${shiftId}`;
+}
+
+function checkIngestRate(
+  agentId: string,
+  shiftId: string,
+  incoming: number
+): boolean {
+  const key = ingestKey(agentId, shiftId);
+  const now = Date.now();
+  const cutoff = now - INGEST_RATE_WINDOW_MS;
+  const bucket = ingestBuckets.get(key) ?? [];
+  // Drop expired timestamps
+  let firstFresh = 0;
+  while (firstFresh < bucket.length && bucket[firstFresh] < cutoff) firstFresh++;
+  const fresh = firstFresh === 0 ? bucket : bucket.slice(firstFresh);
+  if (fresh.length + incoming > INGEST_RATE_LIMIT) {
+    ingestBuckets.set(key, fresh);
+    return false;
+  }
+  for (let i = 0; i < incoming; i++) fresh.push(now);
+  ingestBuckets.set(key, fresh);
+  return true;
+}
+
+export function resetIngestBucket(agentId: string, shiftId: string) {
+  ingestBuckets.delete(ingestKey(agentId, shiftId));
+}
+
+// Sweep stale buckets every 5 min. Skip when running under tests.
+if (
+  typeof process === "undefined" ||
+  (process.env.NODE_ENV !== "test" && !process.env.BUN_TEST)
+) {
+  setInterval(() => {
+    const cutoff = Date.now() - INGEST_RATE_WINDOW_MS;
+    for (const [key, bucket] of ingestBuckets) {
+      let firstFresh = 0;
+      while (firstFresh < bucket.length && bucket[firstFresh] < cutoff)
+        firstFresh++;
+      if (firstFresh === bucket.length) {
+        ingestBuckets.delete(key);
+      } else if (firstFresh > 0) {
+        ingestBuckets.set(key, bucket.slice(firstFresh));
+      }
+    }
+  }, 5 * 60_000).unref?.();
+}
 
 // ---------------------------------------------------------------------------
 // Trail math helpers
@@ -56,6 +118,14 @@ function rdp<T extends { lat: number; lng: number }>(
   pts: T[],
   tolerance: number
 ): T[] {
+  // M-01: surgical guard against stack overflow on very large trails.
+  // For >50k points, evenly downsample to ~10k before recursing. The DB
+  // already caps reads at 50k, but we keep this defensive in case callers
+  // pass larger arrays (tests, future endpoints).
+  if (pts.length > 50_000) {
+    const step = Math.ceil(pts.length / 10_000);
+    pts = pts.filter((_, i) => i % step === 0);
+  }
   if (pts.length <= 2) return pts;
   let maxDist = 0;
   let maxIdx = 0;
@@ -91,6 +161,17 @@ function totalDistanceMetres(pts: { lat: number; lng: number }[]): number {
     total += haversineMetres(pts[i - 1], pts[i]);
   }
   return Math.round(total);
+}
+
+async function resolveOrgIdForShiftRead(ctx: TrpcContext, shiftId: string) {
+  if (ctx.actor.orgId) return resolveReadOrgId(ctx);
+  const shift = await ctx.prisma.shift.findUnique({
+    where: { id: shiftId },
+    select: { agentId: true, orgId: true }
+  });
+  if (!shift) throw apiError("NOT_FOUND", "Shift not found");
+  assertCanReadAgent(ctx, shift.agentId);
+  return shift.orgId;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +272,7 @@ export const fieldLocationRouter = createTRPCRouter({
     .output(z.object({ accepted: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      await assertFieldEnabled(ctx.prisma, agentId);
       const orgId = ctx.actor.orgId;
 
       const shift = await ctx.prisma.shift.findFirst({
@@ -198,6 +280,14 @@ export const fieldLocationRouter = createTRPCRouter({
         select: { id: true, orgId: true }
       });
       if (!shift) return { accepted: 0 };
+
+      // M-04: per-(agent,shift) rate limit
+      if (!checkIngestRate(agentId, shift.id, input.locations.length)) {
+        throw apiError(
+          "TOO_MANY_REQUESTS",
+          "Ingest rate limit exceeded for this shift"
+        );
+      }
 
       const data = input.locations.map((l) => ({
         agentId,
@@ -212,9 +302,13 @@ export const fieldLocationRouter = createTRPCRouter({
 
       await ctx.prisma.fieldLocation.createMany({ data });
 
-      // Fan out last point to SSE connections
+      // C-11: Broadcast ONLY to shift.orgId. Previously a second broadcast went
+      // to the attacker-controlled `x-org-id` header (now `ctx.actor.orgId`),
+      // which leaked location data across orgs whenever the header diverged
+      // from the shift's true org. `shift.orgId` is the single source of truth.
       const last = input.locations[input.locations.length - 1];
       broadcastLocationUpdate(shift.orgId, {
+        orgId: shift.orgId,
         agentId,
         shiftId: shift.id,
         lat: last.lat,
@@ -223,14 +317,6 @@ export const fieldLocationRouter = createTRPCRouter({
         recordedAt: last.recordedAt,
         receivedAt: new Date().toISOString()
       });
-      if (orgId && orgId !== shift.orgId) {
-        broadcastLocationUpdate(orgId, {
-          agentId,
-          shiftId: shift.id,
-          lat: last.lat,
-          lng: last.lng
-        });
-      }
 
       return { accepted: data.length };
     }),
@@ -247,6 +333,7 @@ export const fieldLocationRouter = createTRPCRouter({
     .output(ingestV2AckSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      await assertFieldEnabled(ctx.prisma, agentId);
 
       // Prefer orgId from x-org-id header; if absent, infer it from the shift
       // so mobile clients that don't send the header still work.
@@ -299,6 +386,14 @@ export const fieldLocationRouter = createTRPCRouter({
           rejected: [],
           retryable: true
         };
+      }
+
+      // M-04: per-(agent,shift) rate limit
+      if (!checkIngestRate(agentId, shift.id, input.points.length)) {
+        throw apiError(
+          "TOO_MANY_REQUESTS",
+          "Ingest rate limit exceeded for this shift"
+        );
       }
 
       const rejected: Array<{ clientPointId: string; reason: string }> = [];
@@ -475,6 +570,7 @@ export const fieldLocationRouter = createTRPCRouter({
 
       if (broadcastCandidate) {
         broadcastLocationUpdate(orgId, {
+          orgId,
           agentId,
           shiftId: shift.id,
           lat: broadcastCandidate.lat,
@@ -505,10 +601,11 @@ export const fieldLocationRouter = createTRPCRouter({
     )
     .output(trailMetaSchema)
     .query(async ({ ctx, input }) => {
+      const orgId = await resolveOrgIdForShiftRead(ctx, input.shiftId);
       const raw = await ctx.prisma.fieldLocation.findMany({
         where: {
           shiftId: input.shiftId,
-          shift: { orgId: resolveReadOrgId(ctx) }
+          shift: { orgId }
         },
         select: { lat: true, lng: true, recordedAt: true },
         orderBy: { recordedAt: "asc" },
@@ -664,15 +761,28 @@ export const fieldLocationRouter = createTRPCRouter({
     }),
 
   activeAgents: perm(P.field.read)
-    .input(z.object({ orgId: z.string().optional() }))
-    .output(z.array(activeAgentSchema))
+    .input(
+      z.object({
+        orgId: z.string().optional(),
+        // L-13: cap result size; default 100, hard max 200
+        limit: z.number().int().min(1).max(200).default(100)
+      })
+    )
+    .output(
+      z.object({
+        agents: z.array(activeAgentSchema),
+        hasMore: z.boolean()
+      })
+    )
     .query(async ({ ctx, input }) => {
       const orgId = resolveReadOrgId(ctx, input.orgId);
 
       const activeShifts = await ctx.prisma.shift.findMany({
         where: {
           status: "active",
-          orgId: orgId ?? undefined
+          orgId: orgId ?? undefined,
+          // M-06: hide deactivated users from active-agents views
+          agent: { isActive: true }
         },
         select: {
           id: true,
@@ -680,10 +790,11 @@ export const fieldLocationRouter = createTRPCRouter({
           orgId: true,
           startedAt: true,
           agent: { select: { name: true } }
-        }
+        },
+        take: input.limit
       });
 
-      if (activeShifts.length === 0) return [];
+      if (activeShifts.length === 0) return { agents: [], hasMore: false };
 
       const shiftIds = activeShifts.map((s) => s.id);
       const agentIds = activeShifts.map((s) => s.agentId);
@@ -740,7 +851,7 @@ export const fieldLocationRouter = createTRPCRouter({
         }
       }
 
-      return activeShifts.map((shift) => {
+      const agents = activeShifts.map((shift) => {
         const lastLoc = lastLocByShift.get(shift.id) ?? null;
         const health = healthByAgent.get(shift.agentId) ?? null;
         return {
@@ -766,5 +877,7 @@ export const fieldLocationRouter = createTRPCRouter({
             : null
         };
       });
+      // L-13: hasMore is true when we hit the page cap exactly
+      return { agents, hasMore: agents.length === input.limit };
     })
 });

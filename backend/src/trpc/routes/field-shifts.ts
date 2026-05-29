@@ -4,7 +4,8 @@ import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { resolveReadOrgId } from "./field-helpers";
+import { assertFieldEnabled, buildDateRangeFilter, resolveReadOrgId } from "./field-helpers";
+import { resetIngestBucket } from "./field-location";
 
 const shiftSchema = z.object({
   id: z.string(),
@@ -149,19 +150,6 @@ async function inferOrgIdForShiftStart(
   }
   if (process.env.DEFAULT_ORG_ID) return process.env.DEFAULT_ORG_ID;
   throw apiError("BAD_REQUEST", "orgId required: send x-org-id or orgId");
-}
-
-async function assertFieldEnabled(prisma: PrismaClient, userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { isFieldEnabled: true, userType: true }
-  });
-  if (!user?.isFieldEnabled) {
-    throw apiError("FORBIDDEN", "Field Sense not enabled for this user");
-  }
-  if (user.userType !== "internal") {
-    throw apiError("FORBIDDEN", "Field Sense is only available to internal users");
-  }
 }
 
 function parseClientDate(value: string, fieldName: string) {
@@ -326,6 +314,10 @@ export const fieldShiftsRouter = createTRPCRouter({
         data: { endedAt: new Date(), endType: "manual", status: "completed" },
         select: SHIFT_SELECT
       });
+      // Batch 06: release the in-memory ingest rate-limit bucket so the next
+      // shift for this agent starts with a clean window. Best-effort; no-op
+      // on other instances (D-09 single-instance limit still applies).
+      resetIngestBucket(agentId, shift.id);
       return toShift(updated);
     }),
 
@@ -382,6 +374,8 @@ export const fieldShiftsRouter = createTRPCRouter({
         },
         select: SHIFT_SELECT
       });
+      // Batch 06: release the in-memory ingest rate-limit bucket.
+      resetIngestBucket(agentId, shift.id);
       return {
         shift: toShift(updated),
         serverShiftId: updated.id,
@@ -434,20 +428,14 @@ export const fieldShiftsRouter = createTRPCRouter({
     )
     .output(z.array(shiftSchema))
     .query(async ({ ctx, input }) => {
-      const dateFilter = input.date
-        ? {
-            startedAt: {
-              gte: new Date(`${input.date}T00:00:00.000Z`),
-              lt: new Date(`${input.date}T23:59:59.999Z`)
-            }
-          }
-        : {};
+      // L-14: use shared date-range filter helper
+      const range = buildDateRangeFilter(input.date);
       const shifts = await ctx.prisma.shift.findMany({
         where: {
           agentId: input.agentId,
           orgId: resolveReadOrgId(ctx, input.orgId),
           status: input.status,
-          ...dateFilter
+          ...(range ? { startedAt: range } : {})
         },
         select: SHIFT_SELECT,
         orderBy: { startedAt: "desc" },

@@ -1,17 +1,15 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:google_fonts/google_fonts.dart';
 
+import '../../../app/theme/app_theme.dart';
 import '../../../core/location/background_location_service.dart';
 import '../../../core/location/field_sync_store.dart';
 import '../../../core/permissions/field_permission_service.dart';
-import '../../../core/permissions/permission_service.dart';
-import '../../../shared/widgets/premium_surfaces.dart';
+import '../../../shared/widgets/rb_components.dart';
 import '../models/field_models.dart';
 import '../providers/field_providers.dart';
 import '../repository/field_repository.dart';
@@ -25,550 +23,663 @@ class FieldHomePage extends ConsumerStatefulWidget {
 
 class _FieldHomePageState extends ConsumerState<FieldHomePage> {
   bool _pending = false;
-  String? _message;
-  final MapController _mapController = MapController();
 
-  Future<void> _startShift() async {
-    setState(() {
-      _pending = true;
-      _message = null;
-    });
+  Future<void> _toggleShift(ShiftModel? shift) async {
+    setState(() => _pending = true);
     try {
-      final permissions = await FieldPermissionService.requestAll();
-      if (!permissions.location || !permissions.backgroundLocation) {
-        setState(() {
-          _message = 'Location and background tracking permissions are required.';
-        });
-        return;
-      }
+      final repository = ref.read(fieldRepositoryProvider);
       final syncStore = ref.read(fieldSyncStoreProvider);
       final deviceId = await syncStore.getOrCreateDeviceId();
-      final clientShiftId = FieldSyncStore.newClientShiftId(deviceId);
-      final result = await ref.read(fieldRepositoryProvider).syncStartShift(
-            clientShiftId: clientShiftId,
-            startedAt: DateTime.now(),
-            deviceId: deviceId,
-            platform: Platform.isIOS ? 'ios' : 'android',
-          );
-      await syncStore.saveActiveShift(
-        clientShiftId: result.clientShiftId,
-        serverShiftId: result.serverShiftId,
-      );
-      await BackgroundLocationService.start();
-      ref.invalidate(activeShiftProvider);
-      setState(() => _message = 'Shift started.');
-    } catch (e) {
-      setState(() => _message = _friendlyError(e));
-    } finally {
-      if (mounted) setState(() => _pending = false);
-    }
-  }
-
-  Future<void> _endShift() async {
-    setState(() {
-      _pending = true;
-      _message = null;
-    });
-    try {
-      final syncStore = ref.read(fieldSyncStoreProvider);
-      final active = await syncStore.readActiveShift();
-      final deviceId = await syncStore.getOrCreateDeviceId();
-      await BackgroundLocationService.stop();
-      if (active != null) {
-        await _flushQueuedLocations(active, deviceId);
-        await ref.read(fieldRepositoryProvider).syncEndShift(
-              clientShiftId: active.clientShiftId,
-              endedAt: DateTime.now(),
-              deviceId: deviceId,
-            );
-        final remaining = await syncStore.readPendingPoints();
-        if (remaining.isEmpty) {
-          await syncStore.clearActiveShift();
-        }
+      if (shift != null) {
+        await BackgroundLocationService.stop();
+        final v2Shift = await _ensureV2ShiftForEnd(
+          repository: repository,
+          syncStore: syncStore,
+          shift: shift,
+          deviceId: deviceId,
+        );
+        await _flushPendingPoints(
+          repository: repository,
+          syncStore: syncStore,
+          deviceId: deviceId,
+          clientShiftId: v2Shift.clientShiftId,
+          serverShiftId: v2Shift.id,
+        );
+        await repository.syncEndShift(
+          clientShiftId: v2Shift.clientShiftId!,
+          endedAt: DateTime.now().toUtc(),
+          deviceId: deviceId,
+        );
+        await syncStore.clearActiveShift();
+        await repository.reportSyncStatus(
+          deviceId: deviceId,
+          clientShiftId: v2Shift.clientShiftId,
+          serverShiftId: v2Shift.id,
+          platform: _platformName,
+          lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
+          pendingQueueDepth: (await syncStore.readPendingPoints()).length,
+        );
       } else {
-        await ref.read(fieldRepositoryProvider).endShift();
+        final perms = await FieldPermissionService.requestAll();
+        if (!perms.location) {
+          await _reportPermissionStatus(syncStore, repository, deviceId, perms);
+          if (mounted) {
+            RbToast.show(context, 'Location permission required');
+          }
+          setState(() => _pending = false);
+          return;
+        }
+        if (!perms.backgroundLocation) {
+          await _reportPermissionStatus(syncStore, repository, deviceId, perms);
+          if (mounted) {
+            RbToast.show(context, 'Background location permission required');
+          }
+          setState(() => _pending = false);
+          return;
+        }
+        final startedAt = DateTime.now().toUtc();
+        final clientShiftId = FieldSyncStore.newClientShiftId(deviceId);
+        final syncedShift = await repository.syncStartShift(
+          clientShiftId: clientShiftId,
+          startedAt: startedAt,
+          deviceId: deviceId,
+          platform: _platformName,
+        );
+        await syncStore.saveActiveShift(
+          clientShiftId: syncedShift.clientShiftId,
+          serverShiftId: syncedShift.serverShiftId,
+        );
+        await repository.reportSyncStatus(
+          deviceId: deviceId,
+          clientShiftId: syncedShift.clientShiftId,
+          serverShiftId: syncedShift.serverShiftId,
+          platform: _platformName,
+          lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
+          pendingQueueDepth: (await syncStore.readPendingPoints()).length,
+          permissionsSummary: _permissionSummary(perms),
+        );
+        await BackgroundLocationService.start();
       }
       ref.invalidate(activeShiftProvider);
-      ref.invalidate(activeStopProvider);
-      setState(() => _message = 'Shift ended.');
     } catch (e) {
-      setState(() => _message = _friendlyError(e));
+      if (mounted) RbToast.show(context, 'Error: $e');
     } finally {
       if (mounted) setState(() => _pending = false);
     }
   }
 
-  Future<void> _flushQueuedLocations(
-    ActiveFieldShift active,
+  Future<ShiftModel> _ensureV2ShiftForEnd({
+    required FieldRepository repository,
+    required FieldSyncStore syncStore,
+    required ShiftModel shift,
+    required String deviceId,
+  }) async {
+    if (shift.clientShiftId != null && shift.clientShiftId!.isNotEmpty) {
+      await syncStore.saveActiveShift(
+        clientShiftId: shift.clientShiftId!,
+        serverShiftId: shift.id,
+      );
+      return shift;
+    }
+
+    final stored = await syncStore.readActiveShift();
+    if (stored != null) {
+      final reconciled = await repository.syncStartShift(
+        clientShiftId: stored.clientShiftId,
+        startedAt: DateTime.tryParse(shift.startedAt)?.toUtc() ??
+            DateTime.now().toUtc(),
+        deviceId: deviceId,
+        platform: _platformName,
+      );
+      await syncStore.saveActiveShift(
+        clientShiftId: reconciled.clientShiftId,
+        serverShiftId: reconciled.serverShiftId,
+      );
+      return reconciled.shift;
+    }
+
+    final clientShiftId = FieldSyncStore.newClientShiftId(deviceId);
+    final reconciled = await repository.syncStartShift(
+      clientShiftId: clientShiftId,
+      startedAt:
+          DateTime.tryParse(shift.startedAt)?.toUtc() ?? DateTime.now().toUtc(),
+      deviceId: deviceId,
+      platform: _platformName,
+    );
+    await syncStore.saveActiveShift(
+      clientShiftId: reconciled.clientShiftId,
+      serverShiftId: reconciled.serverShiftId,
+    );
+    return reconciled.shift;
+  }
+
+  Future<void> _flushPendingPoints({
+    required FieldRepository repository,
+    required FieldSyncStore syncStore,
+    required String deviceId,
+    required String? clientShiftId,
+    required String serverShiftId,
+  }) async {
+    if (clientShiftId == null || clientShiftId.isEmpty) return;
+    var pending = await syncStore.readPendingPoints();
+    while (pending.isNotEmpty) {
+      final batchSize = pending.length < 500 ? pending.length : 500;
+      final batch = List<Map<String, dynamic>>.from(
+        pending.take(batchSize),
+      );
+      try {
+        final ack = await repository.ingestLocationsV2(
+          clientShiftId: clientShiftId,
+          serverShiftId: serverShiftId,
+          deviceId: deviceId,
+          points: batch,
+        );
+        if (ack.retryable) break;
+        final removable = ack.removablePointIds;
+        pending = pending
+            .where((point) => !removable.contains(point['clientPointId']))
+            .toList();
+        await syncStore.writePendingPoints(pending);
+      } catch (_) {
+        await repository.reportSyncStatus(
+          deviceId: deviceId,
+          clientShiftId: clientShiftId,
+          serverShiftId: serverShiftId,
+          platform: _platformName,
+          lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
+          lastSyncErrorCode: 'FINAL_FLUSH_FAILED',
+          pendingQueueDepth: pending.length,
+        );
+        break;
+      }
+    }
+  }
+
+  Future<void> _reportPermissionStatus(
+    FieldSyncStore syncStore,
+    FieldRepository repository,
     String deviceId,
+    FieldPermissionStatus perms,
   ) async {
-    final syncStore = ref.read(fieldSyncStoreProvider);
-    var queue = await syncStore.readPendingPoints();
-    const maxBatch = 500;
-    while (queue.isNotEmpty) {
-      final end = queue.length < maxBatch ? queue.length : maxBatch;
-      final batch = List<Map<String, dynamic>>.from(queue.sublist(0, end));
-      final ack = await ref.read(fieldRepositoryProvider).ingestLocationsV2(
-            clientShiftId: active.clientShiftId,
-            serverShiftId: active.serverShiftId,
-            deviceId: deviceId,
-            points: batch,
-          );
-      if (ack.retryable) return;
-      final removable = ack.removablePointIds;
-      queue = queue
-          .where((point) => !removable.contains(point['clientPointId']))
-          .toList();
-      await syncStore.writePendingPoints(queue);
-      if (removable.isEmpty) return;
-    }
+    await repository.reportSyncStatus(
+      deviceId: deviceId,
+      platform: _platformName,
+      lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
+      pendingQueueDepth: (await syncStore.readPendingPoints()).length,
+      permissionsSummary: _permissionSummary(perms),
+    );
   }
 
-  Future<void> _extendShift() async {
-    setState(() {
-      _pending = true;
-      _message = null;
-    });
+  Map<String, dynamic> _permissionSummary(FieldPermissionStatus perms) {
+    return {
+      'location': perms.location,
+      'backgroundLocation': perms.backgroundLocation,
+      'batteryOptimizationDisabled': perms.batteryOptimizationDisabled,
+    };
+  }
+
+  String get _platformName {
+    if (Platform.isIOS) return 'ios';
+    if (Platform.isAndroid) return 'android';
+    return 'unknown';
+  }
+
+  Future<void> _endStop() async {
     try {
-      await ref.read(fieldRepositoryProvider).extendShift();
-      ref.invalidate(activeShiftProvider);
-      setState(() => _message = 'Shift extended.');
+      final stop = await ref.read(fieldRepositoryProvider).activeStop();
+      if (stop == null) return;
+      await ref.read(fieldRepositoryProvider).endStop(stopId: stop.id);
+      ref.invalidate(activeStopProvider);
     } catch (e) {
-      setState(() => _message = _friendlyError(e));
-    } finally {
-      if (mounted) setState(() => _pending = false);
+      if (mounted) RbToast.show(context, 'Error: $e');
     }
-  }
-
-  String _friendlyError(Object err) {
-    final msg = err.toString();
-    if (msg.contains('No active shift')) return 'No active shift found.';
-    if (msg.contains('Field Sense not enabled')) {
-      return 'Field Sense is not enabled for your account.';
-    }
-    if (msg.contains('already exists')) return 'A shift is already active.';
-    if (msg.contains('SocketException')) return 'Network unavailable. Try again.';
-    return 'Action failed. Please retry.';
-  }
-
-  bool _showExtendButton(ShiftModel shift) {
-    if (!shift.isActive) return false;
-    if (shift.endType == 'extended') return false;
-    final now = DateTime.now();
-    return now.hour > 18 || (now.hour == 18 && now.minute >= 30);
   }
 
   @override
   Widget build(BuildContext context) {
-    final canUseField = ref.watch(canUseFieldProvider);
     final shiftAsync = ref.watch(activeShiftProvider);
     final stopAsync = ref.watch(activeStopProvider);
+    final c = rbColors(context);
 
-    if (!canUseField) {
-      return const PremiumGradientBackground(
-        child: EmptyStateView(
-          title: 'Field Access Restricted',
-          subtitle: 'Your role does not include Field Sense permissions.',
-          icon: Icons.lock_outline,
-        ),
-      );
-    }
-
-    return PremiumGradientBackground(
-      child: RefreshIndicator(
+    return Scaffold(
+      backgroundColor: c.bg,
+      body: RefreshIndicator(
+        color: RbColors.accent,
         onRefresh: () async {
           ref.invalidate(activeShiftProvider);
           ref.invalidate(activeStopProvider);
         },
-        child: ListView(
+        child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-          children: [
-            const Text(
-              'Field',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppPalette.ink),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Shift controls, visits, stops, attendance and map layers',
-              style: TextStyle(color: Color(0xFF566271)),
-            ),
-            const SizedBox(height: 16),
-            if (_message != null)
-              InlineBanner(
-                message: _message!,
-                type: _message!.contains('failed') || _message!.contains('not')
-                    ? BannerType.warning
-                    : BannerType.success,
+          slivers: [
+            SliverToBoxAdapter(
+              child: RbTopBar(
+                title: 'Field Sense',
+                actions: [
+                  RbIconBtn(
+                    icon: Icons.history_outlined,
+                    onTap: () => context.push('/field/shift-history'),
+                  ),
+                ],
               ),
-            PremiumCard(
-              child: shiftAsync.when(
-                loading: () => const LinearProgressIndicator(),
-                error: (_, __) => const Text('Unable to load shift status'),
-                data: (shift) {
-                  final active = shift?.isActive == true;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  // Big shift card
+                  shiftAsync.when(
+                    loading: () => const _ShiftCardSkeleton(),
+                    error: (e, _) => RbEmpty(
+                        icon: Icons.cloud_off_outlined,
+                        title: 'Shift status unavailable'),
+                    data: (shift) => _ShiftCard(
+                      shift: shift,
+                      pending: _pending,
+                      onToggle: () => _toggleShift(shift),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Active stop banner
+                  stopAsync.maybeWhen(
+                    data: (stop) => stop != null && stop.isActive
+                        ? Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child:
+                                _ActiveStopBanner(stop: stop, onEnd: _endStop),
+                          )
+                        : const SizedBox.shrink(),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+
+                  // Field actions
+                  Row(
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'Shift Status',
-                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                          ),
-                          StateBadge(
-                            label: active ? 'ACTIVE' : 'OFF SHIFT',
-                            color: active ? AppPalette.mint : AppPalette.amber,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      if (active && shift != null) ...[
-                        _ShiftMetaRow(shift: shift),
-                        const SizedBox(height: 10),
-                      ] else
-                        const Text(
-                          'Start shift to unlock visits and stops.',
-                          style: TextStyle(color: Color(0xFF60707E)),
+                      Expanded(
+                        child: _FieldActionCard(
+                          icon: Icons.add_location_alt_outlined,
+                          label: 'Log visit',
+                          sub: 'Record current location',
+                          onTap: () => context.push('/field/visit'),
                         ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton.icon(
-                              onPressed: (_pending || active) ? null : _startShift,
-                              icon: const Icon(Icons.play_arrow_rounded),
-                              label: const Text('Start Shift'),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: (_pending || !active) ? null : _endShift,
-                              icon: const Icon(Icons.stop_circle_outlined),
-                              label: const Text('End Shift'),
-                            ),
-                          ),
-                        ],
                       ),
-                      if (active && shift != null && _showExtendButton(shift)) ...[
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _pending ? null : _extendShift,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppPalette.amber,
-                              side: BorderSide(color: AppPalette.amber.withOpacity(0.5)),
-                            ),
-                            icon: const Icon(Icons.more_time_rounded),
-                            label: const Text('Extend Shift'),
-                          ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _FieldActionCard(
+                          icon: Icons.coffee_outlined,
+                          label: 'Take a stop',
+                          sub: 'Pause tracking',
+                          onTap: () => context.push('/field/stop'),
                         ),
-                      ],
-                    ],
-                  );
-                },
-              ),
-            ),
-            // Trail mini map — only when shift is active
-            shiftAsync.whenData((shift) => shift).value?.isActive == true
-                ? _TrailMiniMap(
-                    shiftId: shiftAsync.value!.id,
-                    mapController: _mapController,
-                  )
-                : const SizedBox.shrink(),
-            PremiumCard(
-              child: stopAsync.when(
-                loading: () => const SizedBox(height: 4),
-                error: (_, __) => const Text('Unable to load stop status'),
-                data: (stop) => Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      stop == null ? 'No active stop' : 'Stop running',
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    StateBadge(
-                      label: stop == null ? 'CLEAR' : 'STOPPED',
-                      color: stop == null ? AppPalette.info : AppPalette.rose,
-                    )
-                  ],
-                ),
-              ),
-            ),
-            QuickActionRail(
-              actions: [
-                QuickActionItem(
-                  label: 'Create Visit',
-                  icon: Icons.add_location_alt_rounded,
-                  onTap: () => context.push('/field/visit'),
-                ),
-                QuickActionItem(
-                  label: 'Report Stop',
-                  icon: Icons.pause_circle_filled_rounded,
-                  color: AppPalette.rose,
-                  onTap: () => context.push('/field/stop'),
-                ),
-                QuickActionItem(
-                  label: 'Attendance',
-                  icon: Icons.event_available_rounded,
-                  onTap: () => context.push('/field/attendance'),
-                ),
-                QuickActionItem(
-                  label: 'Agent Map',
-                  icon: Icons.map_rounded,
-                  onTap: () => context.push('/field/map'),
-                ),
-                QuickActionItem(
-                  label: 'Schedule',
-                  icon: Icons.alarm_rounded,
-                  onTap: () => context.push('/field/schedule'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Shows started-at time + live duration ticker + distance from trail
-class _ShiftMetaRow extends ConsumerWidget {
-  const _ShiftMetaRow({required this.shift});
-
-  final ShiftModel shift;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final trailAsync = ref.watch(trailForShiftProvider(shift.id));
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.access_time_rounded, size: 15, color: Color(0xFF60707E)),
-            const SizedBox(width: 5),
-            Text(
-              'Started ${_displayTime(shift.startedAt)}',
-              style: const TextStyle(color: Color(0xFF60707E), fontSize: 13),
-            ),
-            const SizedBox(width: 12),
-            const Icon(Icons.timer_outlined, size: 15, color: Color(0xFF60707E)),
-            const SizedBox(width: 5),
-            _LiveDuration(startedAt: shift.startedAt),
-          ],
-        ),
-        const SizedBox(height: 4),
-        trailAsync.when(
-          loading: () => const SizedBox.shrink(),
-          error: (_, __) => const SizedBox.shrink(),
-          data: (trail) {
-            final km = (trail.totalDistanceMeters / 1000).toStringAsFixed(2);
-            return Row(
-              children: [
-                const Icon(Icons.route_rounded, size: 15, color: Color(0xFF60707E)),
-                const SizedBox(width: 5),
-                Text(
-                  '$km km traveled',
-                  style: const TextStyle(color: Color(0xFF60707E), fontSize: 13),
-                ),
-                const SizedBox(width: 12),
-                const Icon(Icons.location_on_outlined, size: 15, color: Color(0xFF60707E)),
-                const SizedBox(width: 5),
-                Text(
-                  '${trail.rawPointCount} pts',
-                  style: const TextStyle(color: Color(0xFF60707E), fontSize: 13),
-                ),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  String _displayTime(String iso) {
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return iso;
-    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
-    final m = dt.minute.toString().padLeft(2, '0');
-    final suffix = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$h:$m $suffix';
-  }
-}
-
-// Ticking duration counter
-class _LiveDuration extends StatefulWidget {
-  const _LiveDuration({required this.startedAt});
-
-  final String startedAt;
-
-  @override
-  State<_LiveDuration> createState() => _LiveDurationState();
-}
-
-class _LiveDurationState extends State<_LiveDuration> {
-  late Timer _timer;
-  late Duration _elapsed;
-
-  @override
-  void initState() {
-    super.initState();
-    _elapsed = _compute();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _elapsed = _compute());
-    });
-  }
-
-  Duration _compute() {
-    final start = DateTime.tryParse(widget.startedAt)?.toLocal();
-    if (start == null) return Duration.zero;
-    return DateTime.now().difference(start);
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final h = _elapsed.inHours;
-    final m = _elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = _elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
-    final label = h > 0 ? '${h}h ${m}m ${s}s' : '${m}m ${s}s';
-    return Text(
-      label,
-      style: const TextStyle(
-        color: AppPalette.mint,
-        fontWeight: FontWeight.w700,
-        fontSize: 13,
-      ),
-    );
-  }
-}
-
-// Embedded mini map showing the trail for the active shift
-class _TrailMiniMap extends ConsumerWidget {
-  const _TrailMiniMap({required this.shiftId, required this.mapController});
-
-  final String shiftId;
-  final MapController mapController;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final trailAsync = ref.watch(trailForShiftProvider(shiftId));
-
-    return trailAsync.when(
-      loading: () => const SizedBox.shrink(),
-      error: (_, __) => const SizedBox.shrink(),
-      data: (trail) {
-        if (trail.points.isEmpty) return const SizedBox.shrink();
-
-        final latlngs = trail.points
-            .map((p) => LatLng(p.lat, p.lng))
-            .toList();
-
-        double minLat = latlngs.first.latitude;
-        double maxLat = latlngs.first.latitude;
-        double minLng = latlngs.first.longitude;
-        double maxLng = latlngs.first.longitude;
-        for (final p in latlngs) {
-          if (p.latitude < minLat) minLat = p.latitude;
-          if (p.latitude > maxLat) maxLat = p.latitude;
-          if (p.longitude < minLng) minLng = p.longitude;
-          if (p.longitude > maxLng) maxLng = p.longitude;
-        }
-        final center = LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
-
-        return PremiumCard(
-          padding: EdgeInsets.zero,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Today\'s Trail',
-                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => context.push('/field/map'),
-                      icon: const Icon(Icons.open_in_full_rounded, size: 14),
-                      label: const Text('Full Map', style: TextStyle(fontSize: 13)),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppPalette.ocean,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              ClipRRect(
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(18),
-                  bottomRight: Radius.circular(18),
-                ),
-                child: SizedBox(
-                  height: 210,
-                  child: FlutterMap(
-                    mapController: mapController,
-                    options: MapOptions(
-                      initialCenter: center,
-                      initialZoom: 14,
-                      interactionOptions: const InteractionOptions(
-                        flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
-                      ),
-                    ),
-                    children: [
-                      TileLayer(
-                        urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.syrex.sales_mobile_app',
-                      ),
-                      if (latlngs.length >= 2)
-                        PolylineLayer(
-                          polylines: [
-                            Polyline(
-                              points: latlngs,
-                              color: AppPalette.ocean,
-                              strokeWidth: 3.0,
-                            ),
-                          ],
-                        ),
-                      MarkerLayer(
-                        markers: [
-                          Marker(
-                            point: latlngs.last,
-                            width: 20,
-                            height: 20,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: AppPalette.mint,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white, width: 2),
-                              ),
-                            ),
-                          ),
-                        ],
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 16),
+
+                  // Today's visits
+                  shiftAsync.maybeWhen(
+                    data: (shift) => shift != null
+                        ? _TodayVisits(shiftId: shift.id)
+                        : const SizedBox.shrink(),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // More section
+                  RbSection(label: 'More'),
+                  const SizedBox(height: 8),
+                  RbCard(
+                    child: Column(
+                      children: [
+                        RbRow(
+                          isFirst: true,
+                          onTap: () => context.push('/field/shift-history'),
+                          child: Row(
+                            children: [
+                              Icon(Icons.history_outlined,
+                                  size: 18, color: c.muted),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: Text('Shift history',
+                                      style: GoogleFonts.inter(
+                                          fontSize: 14, color: c.ink))),
+                              Icon(Icons.chevron_right,
+                                  size: 16, color: c.muted),
+                            ],
+                          ),
+                        ),
+                        RbRow(
+                          onTap: () {},
+                          child: Row(
+                            children: [
+                              Icon(Icons.sync_outlined,
+                                  size: 18, color: c.muted),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: Text('Background sync settings',
+                                      style: GoogleFonts.inter(
+                                          fontSize: 14, color: c.ink))),
+                              Icon(Icons.chevron_right,
+                                  size: 16, color: c.muted),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ]),
               ),
-            ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Shift card ────────────────────────────────────────────────────────────────
+
+class _ShiftCard extends StatelessWidget {
+  const _ShiftCard(
+      {required this.shift, required this.pending, required this.onToggle});
+  final ShiftModel? shift;
+  final bool pending;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = rbColors(context);
+    final isActive = shift != null;
+
+    return RbCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Map background
+          ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            child: SizedBox(
+              height: 120,
+              child: Stack(
+                children: [
+                  const MapBackground(),
+                  Center(
+                    child: StatusDot(
+                        tone: isActive ? RbTone.success : RbTone.neutral,
+                        pulse: isActive,
+                        size: 12),
+                  ),
+                ],
+              ),
+            ),
           ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      isActive ? _shiftDuration(shift!.startedAt) : '00:00',
+                      style: GoogleFonts.inter(
+                          fontSize: 32,
+                          fontWeight: FontWeight.w700,
+                          color: c.ink,
+                          fontFeatures: const [FontFeature.tabularFigures()]),
+                    ),
+                    const Spacer(),
+                    StatusDot(
+                        tone: isActive ? RbTone.success : RbTone.neutral,
+                        pulse: isActive,
+                        label: isActive ? 'Live' : 'Offline'),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  isActive
+                      ? 'Since ${_fmtTime(shift!.startedAt)}'
+                      : 'No active shift',
+                  style: GoogleFonts.inter(fontSize: 12, color: c.muted),
+                ),
+                const SizedBox(height: 12),
+                RbBtn(
+                  label: isActive ? 'End shift' : 'Start shift',
+                  variant:
+                      isActive ? RbBtnVariant.outline : RbBtnVariant.accent,
+                  size: RbBtnSize.lg,
+                  loading: pending,
+                  onPressed: pending ? null : onToggle,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _shiftDuration(String iso) {
+    final start = DateTime.tryParse(iso)?.toLocal();
+    if (start == null) return '00:00';
+    final diff = DateTime.now().difference(start);
+    final h = diff.inHours.toString().padLeft(2, '0');
+    final m = (diff.inMinutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  static String _fmtTime(String iso) {
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '—';
+    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final m = dt.minute.toString().padLeft(2, '0');
+    final ap = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$h:$m $ap';
+  }
+}
+
+class _ShiftCardSkeleton extends StatelessWidget {
+  const _ShiftCardSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 240,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: RbColors.line, width: 0.5),
+      ),
+      child: const Center(
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: RbColors.accent)),
+    );
+  }
+}
+
+// ─── Active stop banner ────────────────────────────────────────────────────────
+
+class _ActiveStopBanner extends StatelessWidget {
+  const _ActiveStopBanner({required this.stop, required this.onEnd});
+  final FieldStopModel stop;
+  final VoidCallback onEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: RbColors.warnSoft,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: RbColors.warn.withOpacity(0.4), width: 0.5),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.coffee_outlined, size: 18, color: RbColors.warn),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(stop.reason ?? 'Break',
+                    style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: RbColors.warn)),
+                Text(_duration(stop.startedAt),
+                    style:
+                        GoogleFonts.inter(fontSize: 12, color: RbColors.warn)),
+              ],
+            ),
+          ),
+          RbBtn(
+            label: 'End stop',
+            variant: RbBtnVariant.outline,
+            size: RbBtnSize.sm,
+            onPressed: onEnd,
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _duration(String iso) {
+    final start = DateTime.tryParse(iso)?.toLocal();
+    if (start == null) return '—';
+    final diff = DateTime.now().difference(start);
+    final m = diff.inMinutes;
+    return m < 60 ? '${m}m' : '${diff.inHours}h ${m % 60}m';
+  }
+}
+
+// ─── Field action card ─────────────────────────────────────────────────────────
+
+class _FieldActionCard extends StatelessWidget {
+  const _FieldActionCard({
+    required this.icon,
+    required this.label,
+    required this.sub,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String sub;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = rbColors(context);
+    return RbCard(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 22, color: c.ink),
+            const SizedBox(height: 10),
+            Text(label,
+                style: GoogleFonts.inter(
+                    fontSize: 14, fontWeight: FontWeight.w600, color: c.ink)),
+            const SizedBox(height: 2),
+            Text(sub, style: GoogleFonts.inter(fontSize: 12, color: c.muted)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Today's visits ────────────────────────────────────────────────────────────
+
+class _TodayVisits extends ConsumerWidget {
+  const _TodayVisits({required this.shiftId});
+  final String shiftId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(visitsForShiftProvider(shiftId));
+
+    return async.maybeWhen(
+      data: (visits) {
+        if (visits.isEmpty) return const SizedBox.shrink();
+        final latest = visits.take(3).toList();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            RbSection(
+              label: "Today's visits",
+              action: visits.length > 3 ? 'See all' : null,
+              onAction: () {},
+            ),
+            const SizedBox(height: 8),
+            RbCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < latest.length; i++)
+                    _VisitRow(visit: latest[i], isFirst: i == 0),
+                ],
+              ),
+            ),
+          ],
         );
       },
+      orElse: () => const SizedBox.shrink(),
     );
+  }
+}
+
+class _VisitRow extends StatelessWidget {
+  const _VisitRow({required this.visit, required this.isFirst});
+  final FieldVisitModel visit;
+  final bool isFirst;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = rbColors(context);
+    return RbRow(
+      isFirst: isFirst,
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: const BoxDecoration(
+                color: RbColors.accent, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  visit.description ?? 'Visit logged',
+                  style: GoogleFonts.inter(fontSize: 14, color: c.ink),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '${visit.lat.toStringAsFixed(4)}, ${visit.lng.toStringAsFixed(4)}',
+                  style:
+                      GoogleFonts.jetBrainsMono(fontSize: 11, color: c.muted),
+                ),
+              ],
+            ),
+          ),
+          Text(_fmtTime(visit.recordedAt),
+              style: GoogleFonts.inter(fontSize: 12, color: c.muted)),
+        ],
+      ),
+    );
+  }
+
+  static String _fmtTime(String iso) {
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '—';
+    final h = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
+    final m = dt.minute.toString().padLeft(2, '0');
+    final ap = dt.hour >= 12 ? 'PM' : 'AM';
+    return '$h:$m $ap';
   }
 }

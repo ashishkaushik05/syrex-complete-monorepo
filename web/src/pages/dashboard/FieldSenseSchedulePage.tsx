@@ -28,6 +28,11 @@ type User = {
   isFieldEnabled?: boolean
 }
 
+type UsersListResponse = {
+  items: User[]
+  nextCursor: string | null
+}
+
 type EditState = {
   userId: string
   userName: string
@@ -137,10 +142,8 @@ export function FieldSenseSchedulePage() {
   const usersQuery = useQuery({
     queryKey: ['field-users'],
     queryFn: async () => {
-      const all = await trpcQuery<User[]>('users.list', { limit: 200 })
-      return (Array.isArray(all) ? all : (all as any)?.items ?? []).filter(
-        (u: User) => u.isFieldEnabled,
-      ) as User[]
+      const page = await trpcQuery<UsersListResponse>('users.list', { limit: 100 })
+      return (page.items ?? []).filter((u: User) => u.isFieldEnabled) as User[]
     },
   })
 

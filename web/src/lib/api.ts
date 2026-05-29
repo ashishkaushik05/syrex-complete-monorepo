@@ -30,24 +30,85 @@ const fallbackApi = axios.create({
   withCredentials: true,
 })
 
-const ACTOR_KEY = 'syrex_phase1_actor_id'
+const ACCESS_TOKEN_KEY = 'syrex_phase1_access_token'
 const ORG_KEY = 'syrex_phase1_org_id'
-const DEV_FALLBACK_ACTOR_ID = (import.meta.env.VITE_DEV_ACTOR_ID as string | undefined)?.trim() || '21000000-0000-4000-8000-000000000001'
+const REFRESH_TOKEN_KEY = 'syrex_phase1_refresh_token'
 const DEV_FALLBACK_ORG_ID = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim() || (import.meta.env.DEV ? 'default' : '')
 
-function getActorId() {
-  const stored = window.localStorage.getItem(ACTOR_KEY)
-  if (stored) return stored
-  if (import.meta.env.DEV) return DEV_FALLBACK_ACTOR_ID
+let accessTokenInMemory: string | null = window.localStorage.getItem(ACCESS_TOKEN_KEY)
+let refreshInFlight: Promise<boolean> | null = null
+
+type AuthSessionPayload = {
+  accessToken: string
+  refreshToken: string
+  expiresIn: number
+  user: {
+    id: string
+    email: string
+    name: string
+    userType: string
+    roleId: string
+    role: {
+      id: string
+      name: string
+      permissions: string[]
+    }
+    managedWarehouseId: string | null
+    outletId: string | null
+  }
+}
+
+function isAuthSessionPayload(value: unknown): value is AuthSessionPayload {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<AuthSessionPayload>
+  return (
+    typeof candidate.accessToken === 'string' &&
+    candidate.accessToken.length > 0 &&
+    typeof candidate.refreshToken === 'string' &&
+    candidate.refreshToken.length > 0
+  )
+}
+
+function setAuthSession(session: Pick<AuthSessionPayload, 'accessToken' | 'refreshToken'>) {
+  accessTokenInMemory = session.accessToken
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, session.accessToken)
+  window.localStorage.setItem(REFRESH_TOKEN_KEY, session.refreshToken)
+}
+
+function clearAuthSession() {
+  accessTokenInMemory = null
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+  window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+}
+
+function getAccessToken() {
+  if (accessTokenInMemory) return accessTokenInMemory
+  const stored = window.localStorage.getItem(ACCESS_TOKEN_KEY)
+  if (stored && stored.trim().length > 0) {
+    accessTokenInMemory = stored
+    return stored
+  }
   return null
 }
 
-function setActorId(actorId: string | null) {
-  if (!actorId) {
-    window.localStorage.removeItem(ACTOR_KEY)
-    return
+function getRefreshToken() {
+  const stored = window.localStorage.getItem(REFRESH_TOKEN_KEY)
+  return stored && stored.trim().length > 0 ? stored : null
+}
+
+function isAuthProcedure(procedure: string) {
+  return procedure === 'auth.login' || procedure === 'auth.refresh'
+}
+
+function normalizeHeaders(headers?: HeadersInit): Record<string, string> {
+  if (!headers) return {}
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries())
   }
-  window.localStorage.setItem(ACTOR_KEY, actorId)
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers)
+  }
+  return { ...headers }
 }
 
 function getOrgId() {
@@ -56,12 +117,13 @@ function getOrgId() {
   return DEV_FALLBACK_ORG_ID || null
 }
 
-function trpcHeaders(extra?: HeadersInit): HeadersInit {
-  const actorId = getActorId()
+function trpcHeaders(extra?: HeadersInit, options?: { includeAuth?: boolean }): HeadersInit {
+  const includeAuth = options?.includeAuth !== false
   const orgId = getOrgId()
+  const accessToken = includeAuth ? getAccessToken() : null
   return {
-    ...(extra ?? {}),
-    ...(actorId ? { 'x-actor-id': actorId } : {}),
+    ...normalizeHeaders(extra),
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     ...(orgId ? { 'x-org-id': orgId } : {}),
   }
 }
@@ -94,27 +156,92 @@ function unwrap(payload: any) {
   return payload?.result?.data?.json
 }
 
-async function trpcQuery<T>(procedure: string, input: unknown): Promise<T> {
+async function refreshAccessToken(): Promise<boolean> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) {
+    clearAuthSession()
+    return false
+  }
+
+  if (refreshInFlight) {
+    return refreshInFlight
+  }
+
+  refreshInFlight = (async () => {
+    try {
+      const session = await trpcMutationInternal<AuthSessionPayload>('auth.refresh', { refreshToken }, { includeAuth: false, retryOn401: false })
+      if (!isAuthSessionPayload(session)) {
+        clearAuthSession()
+        return false
+      }
+      setAuthSession(session)
+      return true
+    } catch {
+      clearAuthSession()
+      return false
+    } finally {
+      refreshInFlight = null
+    }
+  })()
+
+  return refreshInFlight
+}
+
+async function trpcQueryInternal<T>(
+  procedure: string,
+  input: unknown,
+  options?: { includeAuth?: boolean; retryOn401?: boolean },
+): Promise<T> {
   const qs =
     input === undefined
       ? ''
       : `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`
   const response = await fetch(`${trpcBaseURL}/${procedure}${qs}`, {
     method: 'GET',
-    headers: trpcHeaders(),
+    headers: trpcHeaders(undefined, { includeAuth: options?.includeAuth !== false }),
   })
+  if (response.status === 401 && options?.retryOn401 !== false) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      return trpcQueryInternal<T>(procedure, input, { includeAuth: true, retryOn401: false })
+    }
+  }
   const payload = await response.json()
   return unwrap(payload) as T
 }
 
-async function trpcMutation<T>(procedure: string, input: unknown): Promise<T> {
+async function trpcMutationInternal<T>(
+  procedure: string,
+  input: unknown,
+  options?: { includeAuth?: boolean; retryOn401?: boolean },
+): Promise<T> {
   const response = await fetch(`${trpcBaseURL}/${procedure}`, {
     method: 'POST',
-    headers: trpcHeaders({ 'content-type': 'application/json' }),
+    headers: trpcHeaders({ 'content-type': 'application/json' }, { includeAuth: options?.includeAuth !== false }),
     body: JSON.stringify({ json: input }),
   })
+  if (response.status === 401 && options?.retryOn401 !== false) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      return trpcMutationInternal<T>(procedure, input, { includeAuth: true, retryOn401: false })
+    }
+  }
   const payload = await response.json()
   return unwrap(payload) as T
+}
+
+async function trpcQuery<T>(procedure: string, input: unknown): Promise<T> {
+  return trpcQueryInternal<T>(procedure, input, {
+    includeAuth: true,
+    retryOn401: !isAuthProcedure(procedure),
+  })
+}
+
+async function trpcMutation<T>(procedure: string, input: unknown): Promise<T> {
+  return trpcMutationInternal<T>(procedure, input, {
+    includeAuth: true,
+    retryOn401: !isAuthProcedure(procedure),
+  })
 }
 
 async function trpcListAll<TItem>(
@@ -1238,6 +1365,11 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     return { data: { data: clients } }
   }
 
+  if (url === '/service/assignments/candidates') {
+    const candidates = await trpcQuery<any>('serviceAssignments.candidates', undefined)
+    return { data: { data: candidates } }
+  }
+
   if (url === '/settings/billing/charges') {
     const result = await trpcQuery<{ items: any[] }>('taxCharges.list', undefined)
     return { data: { data: result.items } }
@@ -1423,9 +1555,12 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
 
 async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   if (url === '/auth/login') {
-    const session = await trpcMutation<any>('auth.login', body)
+    const session = await trpcMutation<AuthSessionPayload>('auth.login', body)
+    if (!isAuthSessionPayload(session)) {
+      throw makeApiError('Invalid auth session payload', 500)
+    }
+    setAuthSession(session)
     const permissions = (session.user.role?.permissions ?? []) as string[]
-    setActorId(session.user.id)
     return {
       data: {
         user: {
@@ -1448,8 +1583,11 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (url === '/auth/logout') {
-    await trpcMutation('auth.logout', {})
-    setActorId(null)
+    try {
+      await trpcMutation('auth.logout', {})
+    } finally {
+      clearAuthSession()
+    }
     return { data: { ok: true } }
   }
 
@@ -1593,7 +1731,8 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (url === '/outlets') {
-    const actorId = getActorId()
+    const actor = await trpcQuery<any>('auth.me', undefined)
+    const actorId = typeof actor?.id === 'string' ? actor.id : null
     if (!actorId) {
       throw makeApiError('Missing logged in actor context', 401)
     }
@@ -1611,7 +1750,6 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
 
     if (existingOutlets.some((outlet) => outlet.userId === actorId)) {
       const rolesIndex = await getRolesIndex()
-      const actor = await trpcQuery<any>('auth.me', undefined)
       const fallbackRoleId = actor?.roleId ?? rolesIndex.roles[0]?.id
       const roleId = rolesIndex.byName.get('Outlet')?.id ?? rolesIndex.byName.get('Sales')?.id ?? fallbackRoleId
       if (!roleId) {
@@ -1904,12 +2042,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (/^\/tickets\/[^/]+\/claim$/.test(url)) {
-    const id = url.split('/')[2]
-    const assignment = await trpcMutation<any>('serviceAssignments.assign', {
-      complaintId: id,
-      note: body?.note ?? 'Claimed by current service user',
-    })
-    return { data: { data: assignment } }
+    throw makeApiError('Direct claim is not supported. Appoint an ASI first, then assign a service engineer.', 400)
   }
 
   if (/^\/tickets\/[^/]+\/route$/.test(url)) {
@@ -1921,6 +2054,23 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       note: body?.note ?? null,
     })
     return { data: { data: assignment } }
+  }
+
+  if (/^\/tickets\/[^/]+\/lines\/[^/]+$/.test(url)) {
+    const [, , complaintId, , lineId] = url.split('/')
+    const updated = await trpcMutation<any>('serviceComplaints.updateLine', {
+      complaintId,
+      lineId,
+      productId: body?.productId || undefined,
+      serialNumber:
+        body?.serialNumber === null
+          ? null
+          : body?.serialNumber
+            ? body.serialNumber
+            : undefined,
+      notes: body?.notes ?? undefined,
+    })
+    return { data: { data: updated } }
   }
 
   if (/^\/tickets\/[^/]+\/comments$/.test(url)) {
@@ -1958,7 +2108,25 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   if (/^\/tickets\/[^/]+\/assign$/.test(url)) {
     const id = url.split('/')[2]
     const op = body?.reassign ? 'serviceAssignments.reassign' : 'serviceAssignments.assign'
-    const assigned = await trpcMutation<any>(op, {
+    const payload = body?.reassign
+      ? {
+          complaintId: id,
+          asiUserId: body?.asiUserId ?? null,
+          seUserId: body?.seUserId ?? null,
+          note: body?.note ?? null,
+        }
+      : {
+          complaintId: id,
+          asiUserId: body?.asiUserId,
+          note: body?.note ?? null,
+        }
+    const assigned = await trpcMutation<any>(op, payload)
+    return { data: { data: assigned } }
+  }
+
+  if (/^\/tickets\/[^/]+\/engineer$/.test(url)) {
+    const id = url.split('/')[2]
+    const assigned = await trpcMutation<any>('serviceAssignments.reassign', {
       complaintId: id,
       asiUserId: body?.asiUserId ?? null,
       seUserId: body?.seUserId ?? null,
@@ -2044,11 +2212,13 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     const created = await trpcMutation<any>('serviceComplaints.create', {
       title: body?.title || undefined,
       description: body?.description || undefined,
+      customerName: body?.customerName,
+      customerPhone: body?.customerPhone,
       outletId: body?.outletId || undefined,
       lines: Array.isArray(body?.lines)
         ? body.lines.map((line: any) => ({
-            serialNumber: line.serialNumber,
-            productId: line.productId ?? undefined,
+            productId: line.productId,
+            serialNumber: line.serialNumber || undefined,
             notes: line.notes ?? undefined,
           }))
         : [],
@@ -2461,12 +2631,37 @@ async function resolveDelete<T = unknown>(url: string, config?: RequestConfig): 
   return { data: response.data as T }
 }
 
+fallbackApi.interceptors.request.use((config) => {
+  const headers = (config.headers ?? {}) as any
+  const accessToken = getAccessToken()
+  const orgId = getOrgId()
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`
+  }
+  if (orgId) {
+    headers['x-org-id'] = orgId
+  }
+  config.headers = headers
+  return config
+})
+
 fallbackApi.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
     const requestUrl = (err?.config?.url as string | undefined) ?? ''
+    const originalConfig = (err?.config ?? {}) as RequestConfig & { _retry?: boolean }
     const isAuthStateProbe = requestUrl.includes('/auth/me')
+    const isAuthEndpoint = requestUrl.includes('/auth/login') || requestUrl.includes('/auth/refresh')
+    if (err.response?.status === 401 && !originalConfig._retry && !isAuthEndpoint) {
+      originalConfig._retry = true
+      const refreshed = await refreshAccessToken()
+      if (refreshed) {
+        return fallbackApi.request(originalConfig)
+      }
+    }
+
     if (err.response?.status === 401 && !isAuthStateProbe && window.location.pathname !== '/login') {
+      clearAuthSession()
       window.location.href = '/login'
     }
     return Promise.reject(err)
@@ -2481,14 +2676,15 @@ export const api = {
   delete: resolveDelete,
 }
 
-export { trpcQuery, trpcMutation, getActorId }
+export { trpcQuery, trpcMutation }
 
 const sseBaseURL = import.meta.env.DEV
-  ? 'http://localhost:3000'
+  ? ''
   : (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:3000'
 
 export function openFieldSenseStream(
   onLocation: (payload: {
+    orgId?: string
     agentId: string
     shiftId: string
     lat: number
@@ -2498,8 +2694,8 @@ export function openFieldSenseStream(
     receivedAt: string
   }) => void,
   signal: AbortSignal,
+  onConnect?: () => void,
 ): void {
-  const actorId = getActorId()
   const orgId = getOrgId()
   const url = `${sseBaseURL}/field/live-stream`
 
@@ -2509,23 +2705,33 @@ export function openFieldSenseStream(
 
   function connect() {
     if (signal.aborted) return
+    const accessToken = getAccessToken()
 
     fetch(url, {
       signal,
       headers: {
         Accept: 'text/event-stream',
-        ...(actorId ? { 'x-actor-id': actorId } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...(orgId ? { 'x-org-id': orgId } : {}),
       },
     })
       .then(async (res) => {
         if (signal.aborted) return
         if (!res.ok || !res.body) {
+          if (res.status === 401) {
+            const refreshed = await refreshAccessToken()
+            if (refreshed) {
+              reconnectDelay = 1000
+              scheduleReconnect()
+              return
+            }
+          }
           scheduleReconnect()
           return
         }
         // Successful connection — reset backoff
         reconnectDelay = 1000
+        onConnect?.()
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''

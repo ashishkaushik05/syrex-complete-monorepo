@@ -3,7 +3,15 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertOrgAccess, normalizeSerial, recordComplaintActivity, resolveTransition } from "./service-shared";
+import { normalizeSerial, recordComplaintActivity, resolveTransition } from "./service-shared";
+
+// Batch 04: refuse null actor orgId rather than silently widening filters.
+function requireOrgId(actorOrgId: string | null): string {
+  if (!actorOrgId) {
+    throw apiError("FORBIDDEN", "Org context required");
+  }
+  return actorOrgId;
+}
 
 async function nextOrderNumber(tx: Prisma.TransactionClient, now: Date) {
   const year = now.getUTCFullYear();
@@ -42,13 +50,13 @@ export const serviceWarrantyRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const updated = await ctx.prisma.$transaction(async (tx) => {
-        const complaint = await tx.serviceComplaint.findUnique({
-          where: { id: input.complaintId },
+        const complaint = await tx.serviceComplaint.findFirst({
+          where: { id: input.complaintId, orgId },
           select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const transition = resolveTransition(complaint.status, "warranty_approve");
 
@@ -129,13 +137,13 @@ export const serviceWarrantyRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const updated = await ctx.prisma.$transaction(async (tx) => {
-        const complaint = await tx.serviceComplaint.findUnique({
-          where: { id: input.complaintId },
+        const complaint = await tx.serviceComplaint.findFirst({
+          where: { id: input.complaintId, orgId },
           select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const transition = resolveTransition(complaint.status, "warranty_reject");
 
@@ -217,6 +225,7 @@ export const serviceWarrantyRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const normalizedReplacementSerial = normalizeSerial(input.replacementSerial);
 
       const updated = await ctx.prisma.$transaction(async (tx) => {
@@ -234,8 +243,12 @@ export const serviceWarrantyRouter = createTRPCRouter({
           throw apiError("CONFLICT", "Replacement serial is already linked to another complaint");
         }
 
-        const line = await tx.serviceComplaintLine.findUnique({
-          where: { id: input.complaintLineId },
+        const line = await tx.serviceComplaintLine.findFirst({
+          where: {
+            id: input.complaintLineId,
+            complaintId: input.complaintId,
+            complaint: { orgId },
+          },
           include: {
             complaint: {
               select: {
@@ -246,10 +259,9 @@ export const serviceWarrantyRouter = createTRPCRouter({
             },
           },
         });
-        if (!line || line.complaintId !== input.complaintId) {
+        if (!line) {
           throw apiError("NOT_FOUND", "Complaint line not found");
         }
-        assertOrgAccess(ctx.actor.orgId, line.complaint.orgId, "Complaint");
 
         const patched = await tx.serviceComplaintLine.update({
           where: { id: input.complaintLineId },
@@ -333,16 +345,16 @@ export const serviceWarrantyRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const result = await ctx.prisma.$transaction(async (tx) => {
-        const complaint = await tx.serviceComplaint.findUnique({
-          where: { id: input.complaintId },
+        const complaint = await tx.serviceComplaint.findFirst({
+          where: { id: input.complaintId, orgId },
           include: {
             outlet: true,
             lines: true,
           },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const decision = await tx.serviceWarrantyDecision.findUnique({
           where: { complaintId: input.complaintId },

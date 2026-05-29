@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 
@@ -26,8 +26,9 @@ import { apiErrorMessage } from '@/lib/http'
 
 type ComplaintLine = {
   id: string
-  serialNumber: string
-  normalizedSerial: string
+  batterySku: string | null
+  serialNumber: string | null
+  normalizedSerial: string | null
   replacementSerialNumber: string | null
   productId: string | null
   notes: string | null
@@ -59,6 +60,8 @@ type ComplaintDetail = {
   status: ComplaintStatus
   title: string | null
   description: string | null
+  customerName: string | null
+  customerPhone: string | null
   outletId: string | null
   outletName: string | null
   raisedById: string
@@ -105,7 +108,6 @@ type ComplaintDetail = {
   serialInsights: SerialInsight[]
 }
 
-type UserOption = { id: string; name: string; email: string; userType: string }
 type WarehouseOption = { id: string; name: string; location: string }
 type FormSubmission = {
   id: string
@@ -115,6 +117,21 @@ type FormSubmission = {
   isDisabled: boolean
   values: Array<{ id: string; fieldKey: string; rawValue: string; isValid: boolean; validationError: string | null }>
 }
+type ServiceStaffUser = { id: string; name: string; email: string; roleName: string }
+type ServiceAssignmentCandidates = {
+  asiUsers: ServiceStaffUser[]
+  serviceEngineers: ServiceStaffUser[]
+  actor: { id: string | null; roleName: string | null; isAsi: boolean }
+}
+type SkuOption = {
+  id: string
+  name: string
+  displayName?: string | null
+  skuCode?: string | null
+  sku?: string | null
+  isActive?: boolean
+}
+type LineDraft = { productId: string; serialNumber: string; notes: string }
 
 // ── Action config ─────────────────────────────────────────────────────────────
 
@@ -194,6 +211,7 @@ export function ServiceComplaintDetailPage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [actionNote, setActionNote] = useState('')
   const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set())
+  const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({})
   const [mutationError, setMutationError] = useState<string | null>(null)
 
   const invalidate = async () => {
@@ -220,13 +238,12 @@ export function ServiceComplaintDetailPage() {
     },
   })
 
-  const usersQuery = useQuery<UserOption[]>({
-    queryKey: ['service-users-internal'],
+  const assignmentCandidatesQuery = useQuery<ServiceAssignmentCandidates>({
+    queryKey: ['service-assignment-candidates'],
     queryFn: async () => {
-      const r = await api.get('/users', { params: { limit: 200, isActive: true } })
+      const r = await api.get('/service/assignments/candidates')
       const p = r.data as any
-      const list: UserOption[] = Array.isArray(p?.data?.data) ? p.data.data : Array.isArray(p?.data) ? p.data : []
-      return list.filter((u) => u.userType === 'internal')
+      return (p?.data?.data ?? p?.data ?? p) as ServiceAssignmentCandidates
     },
   })
 
@@ -250,6 +267,16 @@ export function ServiceComplaintDetailPage() {
     },
   })
 
+  const skusQuery = useQuery<SkuOption[]>({
+    queryKey: ['service-complaint-detail-sku-options'],
+    queryFn: async () => {
+      const r = await api.get('/catalog/skus', { params: { limit: 500 } })
+      const p = r.data as any
+      const rows = Array.isArray(p?.data) ? p.data : Array.isArray(p) ? p : []
+      return rows.filter((row: SkuOption) => row.isActive !== false)
+    },
+  })
+
   const submissionsQuery = useQuery<FormSubmission[]>({
     queryKey: ['service', 'submissions', id],
     enabled: Boolean(id),
@@ -269,14 +296,30 @@ export function ServiceComplaintDetailPage() {
   })
 
   const assignMutation = useMutation({
-    mutationFn: async () =>
-      api.post(`/tickets/${id}/assign`, {
-        reassign: (detail?.assignments?.length ?? 0) > 0,
+    mutationFn: async () => {
+      const hasAssignedAsi = Boolean(detail?.assignments?.[0]?.asiUserId)
+      return api.post(`/tickets/${id}/assign`, {
+        reassign: hasAssignedAsi,
         asiUserId: asiUserId || null,
         seUserId: seUserId || null,
         note: assignNote.trim() || null,
-      }),
+      })
+    },
     onSuccess: () => { invalidate(); setAssignNote('') },
+    onError: onMutErr,
+  })
+
+  const lineUpdateMutation = useMutation({
+    mutationFn: async (lineId: string) => {
+      const draft = lineDrafts[lineId]
+      if (!draft) throw new Error('No line changes found')
+      return api.post(`/tickets/${id}/lines/${lineId}`, {
+        productId: draft.productId,
+        serialNumber: draft.serialNumber.trim() || undefined,
+        notes: draft.notes.trim() || null,
+      })
+    },
+    onSuccess: invalidate,
     onError: onMutErr,
   })
 
@@ -352,18 +395,51 @@ export function ServiceComplaintDetailPage() {
   const detail = detailQuery.data
   const isFinal = detail ? FINAL_STATUSES.has(detail.status) : false
   const allowedActions = detail ? getActions(detail.status) : []
-  const internalUsers = usersQuery.data ?? []
+  const assignmentCandidates = assignmentCandidatesQuery.data
+  const latestAssignment = detail?.assignments?.[0] ?? null
+  const currentAsiUserId = latestAssignment?.asiUserId ?? null
+  const currentSeUserId = latestAssignment?.seUserId ?? null
+  const actorIsCurrentAsi = Boolean(
+    assignmentCandidates?.actor.isAsi &&
+    assignmentCandidates.actor.id &&
+    currentAsiUserId === assignmentCandidates.actor.id,
+  )
+  const asiUsers = assignmentCandidates?.asiUsers ?? []
+  const seUsers = assignmentCandidates?.serviceEngineers ?? []
   const warehouses = warehousesQuery.data ?? []
   const templates = templatesQuery.data ?? []
   const submissions = submissionsQuery.data ?? []
   const activeSubmissions = submissions.filter((s) => !s.isDisabled)
   const formReady = activeSubmissions.some((s) => s.values.every((v) => v.isValid))
+  const serialsReady = detail?.lines.every((line) => Boolean(line.serialNumber?.trim())) ?? false
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
 
   const isPending =
-    transitionMutation.isPending || assignMutation.isPending || testMutation.isPending ||
+    transitionMutation.isPending || assignMutation.isPending || lineUpdateMutation.isPending || testMutation.isPending ||
     formSubmitMutation.isPending || warrantyApproveMutation.isPending || warrantyRejectMutation.isPending ||
     replacementAssignMutation.isPending || fulfillmentMutation.isPending
+
+  useEffect(() => {
+    if (!detail) return
+    setAsiUserId(currentAsiUserId ?? '')
+    setSeUserId(currentSeUserId ?? '')
+  }, [detail?.id, currentAsiUserId, currentSeUserId])
+
+  useEffect(() => {
+    if (!detail) return
+    setLineDrafts(
+      Object.fromEntries(
+        detail.lines.map((line) => [
+          line.id,
+          {
+            productId: line.productId ?? '',
+            serialNumber: line.serialNumber ?? '',
+            notes: line.notes ?? '',
+          },
+        ]),
+      ),
+    )
+  }, [detail?.id, detail?.updatedAt])
 
   if (!id) return <p className="text-sm text-rose-600">Missing complaint ID.</p>
 
@@ -437,7 +513,12 @@ export function ServiceComplaintDetailPage() {
 
           {/* A. Assignment panel */}
           {!isFinal && can('service:assign') ? (
-            <SectionCard title="Assign Service Engineer">
+            <SectionCard title={currentAsiUserId ? 'Manage Service Assignment' : 'Appoint ASI'}>
+              {assignmentCandidatesQuery.isError ? (
+                <div className="mb-3 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-700">
+                  {apiErrorMessage(assignmentCandidatesQuery.error, 'Unable to load service staff.')}
+                </div>
+              ) : null}
               {detail.assignments.length > 0 ? (
                 <div className="mb-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-500">
                   Last assigned {timeAgo(detail.assignments[0].createdAt)}
@@ -445,33 +526,46 @@ export function ServiceComplaintDetailPage() {
                   {detail.assignments[0].seUserId ? ` · SE: ${detail.assignments[0].seUserId.slice(0, 8)}…` : ''}
                 </div>
               ) : null}
+              {assignmentCandidates?.actor.isAsi && currentAsiUserId && !actorIsCurrentAsi ? (
+                <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
+                  This complaint is assigned to another ASI. You cannot assign engineers for it.
+                </div>
+              ) : null}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label className="text-xs">ASI User</Label>
+                  <Label className="text-xs">{currentAsiUserId ? 'Assigned ASI' : 'ASI User'}</Label>
                   <select
                     className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
                     value={asiUserId}
                     onChange={(e) => setAsiUserId(e.target.value)}
+                    disabled={assignmentCandidatesQuery.isLoading || (assignmentCandidates?.actor.isAsi && Boolean(currentAsiUserId))}
                   >
-                    <option value="">— None —</option>
-                    {internalUsers.map((u) => (
+                    <option value="">{assignmentCandidatesQuery.isLoading ? 'Loading ASIs…' : '— Select ASI —'}</option>
+                    {asiUsers.map((u) => (
                       <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
                     ))}
                   </select>
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">SE User</Label>
-                  <select
-                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    value={seUserId}
-                    onChange={(e) => setSeUserId(e.target.value)}
-                  >
-                    <option value="">— None —</option>
-                    {internalUsers.map((u) => (
-                      <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-                    ))}
-                  </select>
-                </div>
+                {currentAsiUserId ? (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Service Engineer</Label>
+                    <select
+                      className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                      value={seUserId}
+                      onChange={(e) => setSeUserId(e.target.value)}
+                      disabled={assignmentCandidatesQuery.isLoading || (assignmentCandidates?.actor.isAsi && !actorIsCurrentAsi)}
+                    >
+                      <option value="">{assignmentCandidatesQuery.isLoading ? 'Loading engineers…' : '— Select engineer —'}</option>
+                      {seUsers.map((u) => (
+                        <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                    Service engineers become assignable after an ASI owns this complaint.
+                  </div>
+                )}
               </div>
               <div className="mt-3 space-y-1.5">
                 <Label className="text-xs">Note (optional)</Label>
@@ -482,9 +576,9 @@ export function ServiceComplaintDetailPage() {
                   className="text-sm"
                 />
               </div>
-              {detail.status === 'raised' && !asiUserId ? (
+              {!currentAsiUserId && !asiUserId ? (
                 <p className="mt-2 text-xs text-amber-600">
-                  ASI user required to move complaint from Raised → Assigned.
+                  Every service request must be appointed to an ASI before engineers can be assigned.
                 </p>
               ) : null}
               <div className="mt-3">
@@ -492,12 +586,17 @@ export function ServiceComplaintDetailPage() {
                   type="button"
                   size="sm"
                   onClick={() => assignMutation.mutate()}
-                  disabled={isPending || (!asiUserId && !seUserId)}
+                  disabled={
+                    isPending ||
+                    assignmentCandidatesQuery.isLoading ||
+                    !asiUserId ||
+                    Boolean(assignmentCandidates?.actor.isAsi && currentAsiUserId && !actorIsCurrentAsi)
+                  }
                   className="bg-teal-600 hover:bg-teal-700 text-white"
                 >
                   {assignMutation.isPending
                     ? 'Assigning…'
-                    : detail.assignments.length > 0 ? 'Reassign' : 'Assign'}
+                    : currentAsiUserId ? 'Update Assignment' : 'Appoint ASI'}
                 </Button>
               </div>
             </SectionCard>
@@ -598,6 +697,11 @@ export function ServiceComplaintDetailPage() {
                   <span>⚠</span> Complete a valid form submission above before submitting the test report.
                 </div>
               ) : null}
+              {!serialsReady ? (
+                <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700 mb-4">
+                  <span>⚠</span> Add serial ID on every battery line before submitting the test report.
+                </div>
+              ) : null}
 
               <div className="space-y-3">
                 <div className="space-y-1.5">
@@ -606,7 +710,7 @@ export function ServiceComplaintDetailPage() {
                     className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
                     value={testVerdict}
                     onChange={(e) => setTestVerdict(e.target.value)}
-                    disabled={!formReady || isPending}
+                    disabled={!formReady || !serialsReady || isPending}
                   >
                     <option value="tested_ok">Tested OK — No fault found</option>
                     <option value="warranty_candidate">Warranty Candidate — Replacement needed</option>
@@ -622,14 +726,14 @@ export function ServiceComplaintDetailPage() {
                     onChange={(e) => setTestSummary(e.target.value)}
                     placeholder="Technical findings, observations…"
                     maxLength={2000}
-                    disabled={!formReady || isPending}
+                    disabled={!formReady || !serialsReady || isPending}
                   />
                 </div>
                 <Button
                   type="button"
                   size="sm"
                   onClick={() => testMutation.mutate()}
-                  disabled={!formReady || isPending}
+                  disabled={!formReady || !serialsReady || isPending}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
                   {testMutation.isPending ? 'Submitting…' : 'Submit Test Report'}
@@ -767,7 +871,7 @@ export function ServiceComplaintDetailPage() {
                       >
                         <option value="">Select line…</option>
                         {detail.lines.map((line) => (
-                          <option key={line.id} value={line.id}>{line.serialNumber}</option>
+                          <option key={line.id} value={line.id}>{line.serialNumber ?? line.batterySku ?? line.id.slice(0, 8)}</option>
                         ))}
                       </select>
                     </div>
@@ -894,6 +998,8 @@ export function ServiceComplaintDetailPage() {
           {/* Complaint metadata */}
           <SectionCard title="Complaint Details">
             <div className="space-y-3">
+              <InfoRow label="Customer" value={detail.customerName ?? <span className="text-slate-400">Not captured</span>} />
+              <InfoRow label="Phone" value={detail.customerPhone ?? <span className="text-slate-400">Not captured</span>} />
               <InfoRow label="Outlet" value={detail.outletName ?? <span className="text-slate-400">No outlet</span>} />
               <InfoRow label="Created" value={timeAgo(detail.createdAt)} />
               <InfoRow label="Last updated" value={timeAgo(detail.updatedAt)} />
@@ -903,6 +1009,99 @@ export function ServiceComplaintDetailPage() {
                   <p className="text-sm text-slate-700 leading-relaxed">{detail.description}</p>
                 </div>
               ) : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Battery Lines">
+            <div className="space-y-3">
+              {!serialsReady ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                  Serial ID is optional at creation, but every line needs one before test report submission.
+                </div>
+              ) : null}
+              {detail.lines.map((line, index) => {
+                const draft = lineDrafts[line.id] ?? {
+                  productId: line.productId ?? '',
+                  serialNumber: line.serialNumber ?? '',
+                  notes: line.notes ?? '',
+                }
+                const canEditLine = !isFinal && (can('service:write') || can('service:workflow'))
+                const hasChanges =
+                  draft.productId !== (line.productId ?? '') ||
+                  draft.serialNumber !== (line.serialNumber ?? '') ||
+                  draft.notes !== (line.notes ?? '')
+                return (
+                  <div key={line.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Line {index + 1}</span>
+                      {!line.serialNumber ? <Badge className="border-0 bg-amber-100 text-amber-700 text-xs">Serial Pending</Badge> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Battery SKU</Label>
+                      <select
+                        className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:opacity-50"
+                        value={draft.productId}
+                        onChange={(e) =>
+                          setLineDrafts((prev) => ({
+                            ...prev,
+                            [line.id]: { ...draft, productId: e.target.value },
+                          }))
+                        }
+                        disabled={!canEditLine || isPending}
+                      >
+                        <option value="">{skusQuery.isLoading ? 'Loading SKUs…' : 'Select catalog SKU'}</option>
+                        {(skusQuery.data ?? []).map((sku) => (
+                          <option key={sku.id} value={sku.id}>
+                            {(sku.displayName || sku.name)} ({sku.skuCode || sku.sku || 'SKU'})
+                          </option>
+                        ))}
+                      </select>
+                      {line.batterySku ? <p className="text-xs text-slate-500">Current SKU: {line.batterySku}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Serial ID</Label>
+                      <Input
+                        value={draft.serialNumber}
+                        onChange={(e) =>
+                          setLineDrafts((prev) => ({
+                            ...prev,
+                            [line.id]: { ...draft, serialNumber: e.target.value },
+                          }))
+                        }
+                        placeholder="Required before test report"
+                        className="bg-white font-mono text-sm"
+                        disabled={!canEditLine || isPending}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Notes</Label>
+                      <Input
+                        value={draft.notes}
+                        onChange={(e) =>
+                          setLineDrafts((prev) => ({
+                            ...prev,
+                            [line.id]: { ...draft, notes: e.target.value },
+                          }))
+                        }
+                        placeholder="Line notes"
+                        className="bg-white text-sm"
+                        disabled={!canEditLine || isPending}
+                      />
+                    </div>
+                    {canEditLine ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => lineUpdateMutation.mutate(line.id)}
+                        disabled={isPending || !hasChanges || !draft.productId}
+                      >
+                        {lineUpdateMutation.isPending ? 'Saving…' : 'Save Line'}
+                      </Button>
+                    ) : null}
+                  </div>
+                )
+              })}
             </div>
           </SectionCard>
 
@@ -932,14 +1131,19 @@ export function ServiceComplaintDetailPage() {
                         })
                       }
                     >
-                      <div className="min-w-0">
-                        <code className="text-sm font-mono font-semibold text-slate-900">{line.serialNumber}</code>
-                        {insight?.resolved?.product ? (
-                          <p className="text-xs text-slate-500 truncate">{insight.resolved.product.name}</p>
-                        ) : (
-                          <p className="text-xs text-slate-400 italic">No product match</p>
-                        )}
-                      </div>
+	                      <div className="min-w-0">
+	                        <code className="text-sm font-mono font-semibold text-slate-900">
+	                          {line.serialNumber ?? 'Serial pending'}
+	                        </code>
+	                        <p className="text-xs text-slate-500 truncate">SKU: {line.batterySku ?? 'Not captured'}</p>
+	                        {line.serialNumber && insight?.resolved?.product ? (
+	                          <p className="text-xs text-slate-500 truncate">{insight.resolved.product.name}</p>
+	                        ) : (
+	                          <p className="text-xs text-slate-400 italic">
+	                            {line.serialNumber ? 'No product match' : 'Add serial to resolve product history'}
+	                          </p>
+	                        )}
+	                      </div>
                       <svg
                         className={`h-4 w-4 text-slate-400 shrink-0 mt-0.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
                         fill="none" stroke="currentColor" viewBox="0 0 24 24"

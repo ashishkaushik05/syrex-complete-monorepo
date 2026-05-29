@@ -2,7 +2,13 @@ import { z } from "zod";
 import { createTRPCRouter, perm, serviceScopedProcedure } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertOrgAccess } from "./service-shared";
+// Batch 04: refuse null actor orgId rather than silently widening filters.
+function requireOrgId(actorOrgId: string | null): string {
+  if (!actorOrgId) {
+    throw apiError("FORBIDDEN", "Org context required");
+  }
+  return actorOrgId;
+}
 
 // SI-014: Only these scopes are valid for machine clients
 const ALLOWED_MACHINE_SCOPES = ["service.read", "service.write", "service.form"] as const;
@@ -57,8 +63,9 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     .input(z.void())
     .output(z.array(clientMetaSchema))
     .query(async ({ ctx }) => {
+      const orgId = requireOrgId(ctx.actor.orgId);
       const rows = await ctx.prisma.serviceMachineClient.findMany({
-        where: { orgId: ctx.actor.orgId ?? undefined },
+        where: { orgId },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       });
       return rows.map(toClientMeta);
@@ -80,16 +87,22 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+
+      // M-09: refuse past expiresAt at creation time (auth-time guard exists in trpc.ts).
+      if (input.expiresAt && new Date(input.expiresAt) <= new Date()) {
+        throw apiError("BAD_REQUEST", "expiresAt must be in the future");
+      }
 
       const clientId = `svc_${crypto.randomUUID().replace(/-/g, "")}`;
       const secret = `sk_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
-      const secretHash = await Bun.password.hash(secret);
+      const secretHash = await Bun.password.hash(secret, { algorithm: "bcrypt", cost: 12 });
       const secretLast4 = secret.slice(-4);
 
       const created = await ctx.prisma.serviceMachineClient.create({
         data: {
           clientId,
-          orgId: ctx.actor.orgId ?? null,
+          orgId,
           name: input.name,
           scopes: input.scopes,
           secretHash,
@@ -129,13 +142,14 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
 
-      // SI-007: atomic findUnique + update inside a transaction to prevent TOCTOU race
+      const orgId = requireOrgId(ctx.actor.orgId);
+      // SI-007: atomic findFirst + update inside a transaction to prevent TOCTOU race.
+      // Org filter in the where clause guarantees cross-org NOT_FOUND (no info leak).
       const { client: updated, newSecret } = await ctx.prisma.$transaction(async (tx) => {
-        const existing = await tx.serviceMachineClient.findUnique({
-          where: { clientId: input.clientId },
+        const existing = await tx.serviceMachineClient.findFirst({
+          where: { clientId: input.clientId, orgId },
         });
         if (!existing) throw apiError("NOT_FOUND", "Client not found");
-        assertOrgAccess(ctx.actor.orgId, existing.orgId, "Client");
         if (existing.status !== "active") throw apiError("CONFLICT", "Cannot rotate secret for inactive client");
 
         const newSecret = `sk_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
@@ -177,13 +191,13 @@ export const serviceIntegrationsRouter = createTRPCRouter({
     .output(clientMetaSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
 
       // SI-008: prevent double-revocation
-      const existing = await ctx.prisma.serviceMachineClient.findUnique({
-        where: { clientId: input.clientId },
+      const existing = await ctx.prisma.serviceMachineClient.findFirst({
+        where: { clientId: input.clientId, orgId },
       });
       if (!existing) throw apiError("NOT_FOUND", "Service client not found");
-      assertOrgAccess(ctx.actor.orgId, existing.orgId, "Client");
       if (existing.status === "revoked") throw apiError("CONFLICT", "Client is already revoked");
 
       const updated = await ctx.prisma.serviceMachineClient.update({

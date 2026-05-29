@@ -126,6 +126,15 @@ class CatalogClient {
       nextCursor: data['nextCursor'] as String?,
     );
   }
+
+  Future<Product> getProduct(String id) async {
+    final res = await _dio.get(
+      '/trpc/products.getById',
+      queryParameters: {'input': '{"json":{"id":"$id"}}'},
+    );
+    final data = _extract(res.data);
+    return Product.fromJson(data as Map<String, dynamic>);
+  }
 }
 
 final catalogClientProvider = Provider<CatalogClient>((ref) {
@@ -149,9 +158,5 @@ final productsProvider = FutureProvider.autoDispose.family<PagedResult<Product>,
 });
 
 final productDetailProvider = FutureProvider.autoDispose.family<Product, String>((ref, productId) async {
-  final result = await ref.watch(catalogClientProvider).products();
-  return result.items.firstWhere(
-    (p) => p.id == productId,
-    orElse: () => throw Exception('Product not found'),
-  );
+  return ref.watch(catalogClientProvider).getProduct(productId);
 });

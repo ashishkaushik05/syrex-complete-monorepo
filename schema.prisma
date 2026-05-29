@@ -209,8 +209,7 @@ model UserInvitation {
 model AuthSession {
   id           String    @id @default(uuid())
   userId       String
-  accessToken  String    @unique
-  refreshToken String    @unique
+  refreshTokenHash String
   expiresAt    DateTime
   revokedAt    DateTime?
   createdAt    DateTime  @default(now())
@@ -1050,6 +1049,8 @@ model ServiceComplaint {
   status           ServiceComplaintStatus @default(raised)
   title            String?
   description      String?
+  customerName     String?
+  customerPhone    String?
   outletId         String?
   raisedById       String
   telephonicReason String?
@@ -1079,8 +1080,9 @@ model ServiceComplaint {
 model ServiceComplaintLine {
   id                        String   @id @default(uuid())
   complaintId               String
-  serialNumber              String
-  normalizedSerial          String
+  serialNumber              String?
+  normalizedSerial          String?
+  batterySku                String?
   replacementSerialNumber   String?
   normalizedReplacementSerial String?
   productId                 String?
@@ -1349,4 +1351,19 @@ model ServiceMachineClientAudit {
 
   @@index([serviceClientId, createdAt])
   @@map("service_machine_client_audit")
+}
+
+// Batch 06 / D-10 / C-16: cross-instance lock for cron jobs.
+// Insert a row keyed by (jobName, runKey) — unique violation = lock already held.
+// Daily jobs use runKey "YYYY-MM-DD"; per-minute jobs use "YYYY-MM-DDTHH:MM".
+// Rows older than 7 days are swept by sweepStaleLocks() (called by field-auto-close).
+model CronLock {
+  id       String   @id @default(uuid())
+  jobName  String
+  runKey   String
+  lockedAt DateTime @default(now())
+
+  @@unique([jobName, runKey])
+  @@index([lockedAt])
+  @@map("cron_locks")
 }

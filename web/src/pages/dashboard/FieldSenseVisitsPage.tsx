@@ -26,6 +26,11 @@ type Visit = {
 
 type User = { id: string; name: string; email: string }
 
+type UsersListResponse = {
+  items: User[]
+  nextCursor: string | null
+}
+
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
@@ -47,7 +52,10 @@ export function FieldSenseVisitsPage() {
 
   const usersQuery = useQuery({
     queryKey: ['users-list-for-visits'],
-    queryFn: () => trpcQuery<User[]>('users.list', { limit: 200 }),
+    queryFn: async () => {
+      const page = await trpcQuery<UsersListResponse>('users.list', { limit: 100 })
+      return page.items ?? []
+    },
   })
 
   const usersMap = new Map<string, string>(

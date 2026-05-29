@@ -213,6 +213,14 @@ export const usersRouter = createTRPCRouter({
         updatedAt: true
       }
     });
+
+    if (input.isActive === false) {
+      await ctx.prisma.authSession.updateMany({
+        where: { userId: input.id, revokedAt: null },
+        data: { revokedAt: new Date() }
+      });
+    }
+
     return toUser(user);
   }),
 

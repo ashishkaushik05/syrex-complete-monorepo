@@ -21,6 +21,11 @@ type User = {
   isFieldEnabled?: boolean
 }
 
+type UsersListResponse = {
+  items: User[]
+  nextCursor: string | null
+}
+
 type AttendanceRecord = {
   id: string
   userId: string
@@ -98,7 +103,7 @@ export function FieldSenseAttendancePage() {
       trpcQuery<AttendanceRecord[]>('fieldAttendance.list', {
         from: fromDate ? `${fromDate}T00:00:00.000Z` : undefined,
         to: toDate ? `${toDate}T23:59:59.999Z` : undefined,
-        limit: 500,
+        limit: 200,
       }),
   })
 
@@ -117,7 +122,10 @@ export function FieldSenseAttendancePage() {
 
   const usersQuery = useQuery({
     queryKey: ['users-list-for-mark'],
-    queryFn: () => trpcQuery<User[]>('users.list', { limit: 200 }),
+    queryFn: async () => {
+      const page = await trpcQuery<UsersListResponse>('users.list', { limit: 100 })
+      return page.items ?? []
+    },
     enabled: markDialogOpen,
   })
 

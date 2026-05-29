@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { resolveReadOrgId } from "./field-helpers";
+import { resolveReadOrgId, isValidTimezone } from "./field-helpers";
 
 const scheduleSchema = z.object({
   id: z.string(),
@@ -47,13 +47,10 @@ const scheduleInputSchema = z.object({
   timezone: z
     .string()
     .default("Asia/Kolkata")
-    .refine(
-      (tz) => {
-        try { Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; }
-        catch { return false; }
-      },
-      { message: "Invalid IANA timezone" }
-    ),
+    // L-12: `Intl.DateTimeFormat(undefined, { timeZone })` does not reliably
+    // throw on invalid IANA strings across runtimes. The `.format()` step
+    // (inside isValidTimezone) does. See field-helpers.ts.
+    .refine(isValidTimezone, { message: "Invalid IANA timezone" }),
   isEnabled: z.boolean().default(true)
 });
 

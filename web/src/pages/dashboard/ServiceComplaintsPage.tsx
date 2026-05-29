@@ -38,7 +38,15 @@ type TicketListPayload = {
 }
 
 type OutletOption = { id: string; name: string; outletCode: string | null }
-type SerialLine = { serialNumber: string; notes: string }
+type SkuOption = {
+  id: string
+  name: string
+  displayName?: string | null
+  skuCode?: string | null
+  sku?: string | null
+  isActive?: boolean
+}
+type SerialLine = { productId: string; serialNumber: string; notes: string }
 
 const STATUS_TABS: Array<{ key: 'all' | ComplaintStatus; label: string }> = [
   { key: 'all',                  label: 'All'              },
@@ -90,8 +98,10 @@ export function ServiceComplaintsPage() {
   }, [searchInput])
   const [createTitle, setCreateTitle] = useState('')
   const [createDescription, setCreateDescription] = useState('')
+  const [customerName, setCustomerName] = useState('')
+  const [customerPhone, setCustomerPhone] = useState('')
   const [createOutletId, setCreateOutletId] = useState('')
-  const [serialLines, setSerialLines] = useState<SerialLine[]>([{ serialNumber: '', notes: '' }])
+  const [serialLines, setSerialLines] = useState<SerialLine[]>([{ productId: '', serialNumber: '', notes: '' }])
   const [createError, setCreateError] = useState<string | null>(null)
 
   const query = useQuery({
@@ -121,16 +131,32 @@ export function ServiceComplaintsPage() {
     },
   })
 
+  const skusQuery = useQuery<SkuOption[]>({
+    queryKey: ['service-complaint-sku-options'],
+    enabled: createOpen,
+    queryFn: async () => {
+      const response = await api.get('/catalog/skus', { params: { limit: 500 } })
+      const p = response.data as any
+      const rows = Array.isArray(p?.data) ? p.data : Array.isArray(p) ? p : []
+      return rows.filter((row: SkuOption) => row.isActive !== false)
+    },
+  })
+
   const createMutation = useMutation({
     mutationFn: async () => {
-      const validLines = serialLines.filter((l) => l.serialNumber.trim())
-      if (validLines.length === 0) throw new Error('At least one serial number is required')
+      const validLines = serialLines.filter((l) => l.productId)
+      if (!customerName.trim()) throw new Error('Customer name is required')
+      if (!customerPhone.trim()) throw new Error('Customer phone number is required')
+      if (validLines.length === 0) throw new Error('At least one catalog SKU is required')
       const response = await api.post('/tickets', {
         title: createTitle.trim() || undefined,
         description: createDescription.trim() || undefined,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
         outletId: createOutletId || undefined,
         lines: validLines.map((l) => ({
-          serialNumber: l.serialNumber.trim(),
+          productId: l.productId,
+          serialNumber: l.serialNumber.trim() || undefined,
           notes: l.notes.trim() || undefined,
         })),
       })
@@ -148,8 +174,10 @@ export function ServiceComplaintsPage() {
   function resetCreateForm() {
     setCreateTitle('')
     setCreateDescription('')
+    setCustomerName('')
+    setCustomerPhone('')
     setCreateOutletId('')
-    setSerialLines([{ serialNumber: '', notes: '' }])
+    setSerialLines([{ productId: '', serialNumber: '', notes: '' }])
     setCreateError(null)
   }
 
@@ -325,6 +353,11 @@ export function ServiceComplaintsPage() {
                                 +{row.serials.length - 2}
                               </span>
                             ) : null}
+                            {row.serials.length === 0 ? (
+                              <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                                Pending
+                              </span>
+                            ) : null}
                           </div>
                         </TableCell>
                         <TableCell className="text-xs text-slate-500 whitespace-nowrap">{timeAgo(row.updatedAt)}</TableCell>
@@ -376,6 +409,27 @@ export function ServiceComplaintsPage() {
               />
             </div>
 
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Customer Name <span className="text-rose-500">*</span></Label>
+                <Input
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Customer name"
+                  maxLength={200}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Phone Number <span className="text-rose-500">*</span></Label>
+                <Input
+                  value={customerPhone}
+                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  placeholder="Customer phone number"
+                  maxLength={40}
+                />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <Label>Description <span className="text-slate-400 text-xs font-normal">(optional)</span></Label>
               <textarea
@@ -389,25 +443,40 @@ export function ServiceComplaintsPage() {
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>Serial Numbers <span className="text-rose-500">*</span></Label>
+                <Label>Battery Lines <span className="text-rose-500">*</span></Label>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setSerialLines((prev) => [...prev, { serialNumber: '', notes: '' }])}
+                  onClick={() => setSerialLines((prev) => [...prev, { productId: '', serialNumber: '', notes: '' }])}
                   className="text-xs"
                 >
-                  + Add Serial
+                  + Add Battery
                 </Button>
               </div>
+              {skusQuery.isError ? (
+                <p className="text-xs text-rose-600">Unable to load catalog SKUs.</p>
+              ) : null}
               <div className="space-y-2">
                 {serialLines.map((line, i) => (
                   <div key={i} className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+                    <select
+                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+                      value={line.productId}
+                      onChange={(e) => updateSerialLine(i, 'productId', e.target.value)}
+                    >
+                      <option value="">{skusQuery.isLoading ? 'Loading SKUs…' : `Select battery SKU ${i + 1}`}</option>
+                      {(skusQuery.data ?? []).map((sku) => (
+                        <option key={sku.id} value={sku.id}>
+                          {(sku.displayName || sku.name)} ({sku.skuCode || sku.sku || 'SKU'})
+                        </option>
+                      ))}
+                    </select>
                     <div className="flex items-center gap-2">
                       <Input
                         value={line.serialNumber}
                         onChange={(e) => updateSerialLine(i, 'serialNumber', e.target.value)}
-                        placeholder={`Serial ${i + 1}`}
+                        placeholder="Serial ID (optional at creation)"
                         className="flex-1 bg-white font-mono"
                       />
                       {serialLines.length > 1 ? (

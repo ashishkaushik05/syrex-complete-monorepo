@@ -4,8 +4,7 @@ import { createTRPCRouter, perm } from "../trpc";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
-import { assertWarehouseScope } from "./outlet-access";
-import { findActorLinkedOutletId } from "./outlet-access";
+import { actorHasInternalSalesOutletAccess, findActorLinkedOutletId } from "./outlet-access";
 import { normalizeSerial, recordComplaintActivity } from "./service-shared";
 
 function isAdmin(ctx: { permissions: string[] }) {
@@ -188,17 +187,38 @@ export const dispatchesRouter = createTRPCRouter({
     .input(
       paginationInputSchema.extend({
         warehouseId: z.string().uuid().optional(),
+        orderId: z.string().uuid().optional(),
         deliveryStatus: deliveryStatusSchema.optional()
       })
     )
     .output(z.object({ items: z.array(dispatchSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const admin = isAdmin(ctx);
+      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasGlobalDispatchAccess = admin || hasInternalSalesAccess;
+      const warehouseScoped = !hasGlobalDispatchAccess && !linkedOutletId && !!ctx.managedWarehouseId;
+      if (!hasGlobalDispatchAccess && !linkedOutletId && !warehouseScoped) {
+        throw apiError("FORBIDDEN", "No safe dispatch scope available");
+      }
+
       const offset = decodeCursor(input.cursor) ?? 0;
-      const effectiveWarehouseId = isAdmin(ctx) ? input.warehouseId : ctx.managedWarehouseId ?? undefined;
+      const dispatchAndClauses: Prisma.DispatchWhereInput[] = [];
+      if (input.orderId) {
+        dispatchAndClauses.push({
+          lines: { some: { orderLine: { orderId: input.orderId } } },
+        });
+      }
+      if (linkedOutletId && !hasGlobalDispatchAccess) {
+        dispatchAndClauses.push({
+          lines: { some: { orderLine: { order: { outletId: linkedOutletId } } } },
+        });
+      }
       const rows = await ctx.prisma.dispatch.findMany({
         where: {
-          warehouseId: effectiveWarehouseId,
-          deliveryStatus: input.deliveryStatus
+          warehouseId: hasGlobalDispatchAccess ? input.warehouseId : (ctx.managedWarehouseId ?? undefined),
+          deliveryStatus: input.deliveryStatus,
+          AND: dispatchAndClauses.length ? dispatchAndClauses : undefined,
         },
         include: {
           lines: {
@@ -235,8 +255,31 @@ export const dispatchesRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(dispatchSchema)
     .query(async ({ ctx, input }) => {
-      const dispatch = await ctx.prisma.dispatch.findUnique({
-        where: { id: input.id },
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const admin = isAdmin(ctx);
+      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasGlobalDispatchAccess = admin || hasInternalSalesAccess;
+      const warehouseScoped = !hasGlobalDispatchAccess && !linkedOutletId && !!ctx.managedWarehouseId;
+      if (!hasGlobalDispatchAccess && !linkedOutletId && !warehouseScoped) {
+        throw apiError("FORBIDDEN", "No safe dispatch scope available");
+      }
+
+      const dispatch = await ctx.prisma.dispatch.findFirst({
+        where: {
+          id: input.id,
+          ...(linkedOutletId && !hasGlobalDispatchAccess
+            ? {
+                lines: {
+                  some: {
+                    orderLine: { order: { outletId: linkedOutletId } },
+                  },
+                },
+              }
+            : {}),
+          ...(!hasGlobalDispatchAccess && !linkedOutletId && ctx.managedWarehouseId
+            ? { warehouseId: ctx.managedWarehouseId }
+            : {}),
+        },
         include: {
           lines: {
             include: {
@@ -252,7 +295,6 @@ export const dispatchesRouter = createTRPCRouter({
         throw apiError("NOT_FOUND", "Dispatch not found");
       }
 
-      assertWarehouseScope(ctx, dispatch.warehouseId);
       return toDispatchItem(dispatch);
     }),
 
@@ -260,14 +302,36 @@ export const dispatchesRouter = createTRPCRouter({
     .input(z.object({ dispatchId: z.string().uuid() }))
     .output(z.array(timelineEventSchema))
     .query(async ({ ctx, input }) => {
-      const dispatch = await ctx.prisma.dispatch.findUnique({
-        where: { id: input.dispatchId },
+      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const admin = isAdmin(ctx);
+      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasGlobalDispatchAccess = admin || hasInternalSalesAccess;
+      const warehouseScoped = !hasGlobalDispatchAccess && !linkedOutletId && !!ctx.managedWarehouseId;
+      if (!hasGlobalDispatchAccess && !linkedOutletId && !warehouseScoped) {
+        throw apiError("FORBIDDEN", "No safe dispatch scope available");
+      }
+
+      const dispatch = await ctx.prisma.dispatch.findFirst({
+        where: {
+          id: input.dispatchId,
+          ...(linkedOutletId && !hasGlobalDispatchAccess
+            ? {
+                lines: {
+                  some: {
+                    orderLine: { order: { outletId: linkedOutletId } },
+                  },
+                },
+              }
+            : {}),
+          ...(!hasGlobalDispatchAccess && !linkedOutletId && ctx.managedWarehouseId
+            ? { warehouseId: ctx.managedWarehouseId }
+            : {}),
+        },
         select: { warehouseId: true }
       });
       if (!dispatch) {
         throw apiError("NOT_FOUND", "Dispatch not found");
       }
-      assertWarehouseScope(ctx, dispatch.warehouseId);
 
       const events = await ctx.prisma.dispatchTimeline.findMany({
         where: { dispatchId: input.dispatchId },

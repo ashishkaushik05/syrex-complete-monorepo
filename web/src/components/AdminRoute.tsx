@@ -12,12 +12,12 @@ function FullScreenLoader() {
 }
 
 export function AdminRoute({ children }: { children: React.ReactNode }) {
-  const { authQuery, isAuthenticated, user, permissions, isGlobalScope } = useAuth()
+  const { authQuery, isAuthenticated, user, permissions } = useAuth()
 
   if (authQuery.isLoading) return <FullScreenLoader />
   if (!isAuthenticated) return <Navigate to="/login" replace />
   if (user?.userType !== 'internal') return <Navigate to="/forbidden" replace />
-  if (!isGlobalScope && permissions.length === 0) return <Navigate to="/forbidden" replace />
+  if (permissions.length === 0) return <Navigate to="/forbidden" replace />
 
   return <>{children}</>
 }

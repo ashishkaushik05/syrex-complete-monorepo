@@ -1,9 +1,17 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { createTRPCRouter, perm } from "../trpc";
+import { createTRPCRouter, perm, permAny } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertOrgAccess, recordComplaintActivity, resolveTransition } from "./service-shared";
+import { recordComplaintActivity, resolveTransition } from "./service-shared";
+
+// Batch 04: refuse null actor orgId rather than silently widening filters.
+function requireOrgId(actorOrgId: string | null): string {
+  if (!actorOrgId) {
+    throw apiError("FORBIDDEN", "Org context required");
+  }
+  return actorOrgId;
+}
 
 const testOutputSchema = z.object({
   id: z.string(),
@@ -17,7 +25,7 @@ const testOutputSchema = z.object({
 });
 
 export const serviceTestsRouter = createTRPCRouter({
-  submit: perm(P.service.manage)
+  submit: permAny(P.service.workflow, P.service.manage)
     .input(
       z.object({
         complaintId: z.string().uuid(),
@@ -31,15 +39,30 @@ export const serviceTestsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id!;
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const created = await ctx.prisma.$transaction(async (tx) => {
-        const complaint = await tx.serviceComplaint.findUnique({
-          where: { id: input.complaintId },
-          select: { id: true, orgId: true, status: true },
-        });
-        if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
+	        const complaint = await tx.serviceComplaint.findFirst({
+	          where: { id: input.complaintId, orgId },
+	          select: {
+	            id: true,
+	            orgId: true,
+	            status: true,
+	            lines: {
+	              select: {
+	                id: true,
+	                serialNumber: true,
+	              },
+	            },
+	          },
+	        });
+	        if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
 
-        if (input.complaintLineId) {
+	        const missingSerials = complaint.lines.filter((line) => !line.serialNumber?.trim());
+	        if (missingSerials.length > 0) {
+	          throw apiError("BAD_REQUEST", "Serial number is required on every complaint line before test report submission");
+	        }
+
+	        if (input.complaintLineId) {
           const line = await tx.serviceComplaintLine.findFirst({
             where: { id: input.complaintLineId, complaintId: input.complaintId },
           });
@@ -131,13 +154,13 @@ export const serviceTestsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id!;
 
+      const orgId = requireOrgId(ctx.actor.orgId);
       const updated = await ctx.prisma.$transaction(async (tx) => {
-        const complaint = await tx.serviceComplaint.findUnique({
-          where: { id: input.complaintId },
+        const complaint = await tx.serviceComplaint.findFirst({
+          where: { id: input.complaintId, orgId },
           select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
-        assertOrgAccess(ctx.actor.orgId, complaint.orgId, "Complaint");
 
         const transition = resolveTransition(complaint.status, "retest_requested");
         const row = await tx.serviceComplaint.update({

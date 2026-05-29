@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 
 import { AdminRoute } from '@/components/AdminRoute'
 import { DashboardErrorBoundary } from '@/components/DashboardErrorBoundary'
+import { usePermission } from '@/context/PermissionContext'
 import { PermissionProvider } from '@/context/PermissionContext'
 import { useAuth } from '@/hooks/useAuth'
 import { LoginPage } from '@/pages/LoginPage'
@@ -87,6 +88,22 @@ function DashboardShell() {
   )
 }
 
+function PermissionRoute({
+  required,
+  children,
+}: {
+  required: string | string[]
+  children: React.ReactNode
+}) {
+  const { can } = usePermission()
+  const allowed = Array.isArray(required)
+    ? required.some((permission) => can(permission))
+    : can(required)
+
+  if (!allowed) return <Navigate to="/forbidden" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <PermissionProvider>
@@ -111,52 +128,52 @@ export default function App() {
             }
           >
             <Route index element={<OverviewPage />} />
-            <Route path="users" element={<UsersPage />} />
-            <Route path="roles" element={<RolesPage />} />
-            <Route path="permissions" element={<PermissionsCatalogPage />} />
-            <Route path="outlets" element={<OutletsPage />} />
-            <Route path="outlets/:id" element={<OutletDetailPage />} />
-            <Route path="sales/orders" element={<SalesOrdersPage />} />
-            <Route path="sales/orders/:id" element={<OrderDetailPage />} />
-            <Route path="sales/dispatches" element={<SalesDispatchesPage />} />
-            <Route path="sales/dispatches/:id" element={<DispatchDetailPage />} />
-            <Route path="sales/reports" element={<SaleReportsPage />} />
-            <Route path="sales/reports/:id" element={<SaleReportDetailPage />} />
-            <Route path="catalog/brands" element={<CatalogBrandsPage />} />
-            <Route path="catalog/categories" element={<CatalogCategoriesPage />} />
-            <Route path="catalog/skus" element={<CatalogSkusPage />} />
-            <Route path="dispatch/orders" element={<SalesOrdersPage />} />
-            <Route path="dispatch/orders/:id" element={<OrderDetailPage />} />
-            <Route path="dispatch/runs" element={<SalesDispatchesPage />} />
-            <Route path="dispatch/runs/:id" element={<DispatchDetailPage />} />
-            <Route path="dispatch/warehouses" element={<WarehousesPage />} />
-            <Route path="dispatch/warehouses/:id" element={<WarehouseDetailPage />} />
+            <Route path="users" element={<PermissionRoute required="users:read"><UsersPage /></PermissionRoute>} />
+            <Route path="roles" element={<PermissionRoute required="roles:read"><RolesPage /></PermissionRoute>} />
+            <Route path="permissions" element={<PermissionRoute required="roles:read"><PermissionsCatalogPage /></PermissionRoute>} />
+            <Route path="outlets" element={<PermissionRoute required="outlets:read"><OutletsPage /></PermissionRoute>} />
+            <Route path="outlets/:id" element={<PermissionRoute required="outlets:read"><OutletDetailPage /></PermissionRoute>} />
+            <Route path="sales/orders" element={<PermissionRoute required="orders:read"><SalesOrdersPage /></PermissionRoute>} />
+            <Route path="sales/orders/:id" element={<PermissionRoute required="orders:read"><OrderDetailPage /></PermissionRoute>} />
+            <Route path="sales/dispatches" element={<PermissionRoute required="dispatches:read"><SalesDispatchesPage /></PermissionRoute>} />
+            <Route path="sales/dispatches/:id" element={<PermissionRoute required="dispatches:read"><DispatchDetailPage /></PermissionRoute>} />
+            <Route path="sales/reports" element={<PermissionRoute required="orders:read"><SaleReportsPage /></PermissionRoute>} />
+            <Route path="sales/reports/:id" element={<PermissionRoute required="orders:read"><SaleReportDetailPage /></PermissionRoute>} />
+            <Route path="catalog/brands" element={<PermissionRoute required="catalog:read"><CatalogBrandsPage /></PermissionRoute>} />
+            <Route path="catalog/categories" element={<PermissionRoute required="catalog:read"><CatalogCategoriesPage /></PermissionRoute>} />
+            <Route path="catalog/skus" element={<PermissionRoute required="catalog:read"><CatalogSkusPage /></PermissionRoute>} />
+            <Route path="dispatch/orders" element={<PermissionRoute required="orders:read"><SalesOrdersPage /></PermissionRoute>} />
+            <Route path="dispatch/orders/:id" element={<PermissionRoute required="orders:read"><OrderDetailPage /></PermissionRoute>} />
+            <Route path="dispatch/runs" element={<PermissionRoute required="dispatches:read"><SalesDispatchesPage /></PermissionRoute>} />
+            <Route path="dispatch/runs/:id" element={<PermissionRoute required="dispatches:read"><DispatchDetailPage /></PermissionRoute>} />
+            <Route path="dispatch/warehouses" element={<PermissionRoute required="warehouses:read"><WarehousesPage /></PermissionRoute>} />
+            <Route path="dispatch/warehouses/:id" element={<PermissionRoute required="warehouses:read"><WarehouseDetailPage /></PermissionRoute>} />
             <Route path="dispatch/warehouses/:id/grn" element={<Navigate to="/dashboard/dispatch/warehouses" replace />} />
             <Route path="dispatch/warehouses/:id/adjustment" element={<Navigate to="/dashboard/dispatch/warehouses" replace />} />
-            <Route path="dispatch/queue" element={<DispatchPlanPage />} />
-            <Route path="dispatch/queue/:warehouseId" element={<DispatchPlanPage />} />
-            <Route path="accounts/invoices" element={<SalesInvoicesPage />} />
-            <Route path="accounts/invoices/:id" element={<InvoiceDetailPage />} />
-            <Route path="accounts/approval" element={<AccountsApprovalQueuePage />} />
-            <Route path="accounts/ar-aging" element={<AccountsARAgingPage />} />
-            <Route path="accounts/outstanding" element={<AccountsOutstandingPage />} />
-            <Route path="accounts/payments" element={<AccountsPaymentsPage />} />
-            <Route path="warehouses" element={<WarehousesPage />} />
-            <Route path="warehouses/:id" element={<WarehouseDetailPage />} />
+            <Route path="dispatch/queue" element={<PermissionRoute required="dispatches:read"><DispatchPlanPage /></PermissionRoute>} />
+            <Route path="dispatch/queue/:warehouseId" element={<PermissionRoute required="dispatches:read"><DispatchPlanPage /></PermissionRoute>} />
+            <Route path="accounts/invoices" element={<PermissionRoute required="invoices:read"><SalesInvoicesPage /></PermissionRoute>} />
+            <Route path="accounts/invoices/:id" element={<PermissionRoute required="invoices:read"><InvoiceDetailPage /></PermissionRoute>} />
+            <Route path="accounts/approval" element={<PermissionRoute required="orders:approve"><AccountsApprovalQueuePage /></PermissionRoute>} />
+            <Route path="accounts/ar-aging" element={<PermissionRoute required="invoices:read"><AccountsARAgingPage /></PermissionRoute>} />
+            <Route path="accounts/outstanding" element={<PermissionRoute required="payments:read"><AccountsOutstandingPage /></PermissionRoute>} />
+            <Route path="accounts/payments" element={<PermissionRoute required="payments:write"><AccountsPaymentsPage /></PermissionRoute>} />
+            <Route path="warehouses" element={<PermissionRoute required="warehouses:read"><WarehousesPage /></PermissionRoute>} />
+            <Route path="warehouses/:id" element={<PermissionRoute required="warehouses:read"><WarehouseDetailPage /></PermissionRoute>} />
             <Route path="notifications" element={<NotificationsPage />} />
-            <Route path="service/complaints" element={<ServiceComplaintsPage />} />
-            <Route path="service/complaints/:id" element={<ServiceComplaintDetailPage />} />
-            <Route path="service/serials" element={<ServiceSerialsPage />} />
-            <Route path="service/warranty" element={<ServiceWarrantyPage />} />
-            <Route path="service/integrations" element={<ServiceIntegrationsPage />} />
-            <Route path="service/forms" element={<ServiceFormsPage />} />
-            <Route path="map" element={<FieldSenseLiveMapPage />} />
-            <Route path="field-schedule" element={<FieldSenseSchedulePage />} />
-            <Route path="attendance" element={<FieldSenseAttendancePage />} />
-            <Route path="field-shifts" element={<FieldSenseShiftsPage />} />
-            <Route path="field-shifts/:id" element={<FieldSenseShiftDetailPage />} />
-            <Route path="field-visits" element={<FieldSenseVisitsPage />} />
-            <Route path="field-stops" element={<FieldSenseStopsPage />} />
+            <Route path="service/complaints" element={<PermissionRoute required="service:read"><ServiceComplaintsPage /></PermissionRoute>} />
+            <Route path="service/complaints/:id" element={<PermissionRoute required="service:read"><ServiceComplaintDetailPage /></PermissionRoute>} />
+            <Route path="service/serials" element={<PermissionRoute required="service:read"><ServiceSerialsPage /></PermissionRoute>} />
+            <Route path="service/warranty" element={<PermissionRoute required="service:approve"><ServiceWarrantyPage /></PermissionRoute>} />
+            <Route path="service/integrations" element={<PermissionRoute required="service:manage"><ServiceIntegrationsPage /></PermissionRoute>} />
+            <Route path="service/forms" element={<PermissionRoute required={['service:templates', 'service:manage']}><ServiceFormsPage /></PermissionRoute>} />
+            <Route path="map" element={<PermissionRoute required="field:read"><FieldSenseLiveMapPage /></PermissionRoute>} />
+            <Route path="field-schedule" element={<PermissionRoute required="field:write"><FieldSenseSchedulePage /></PermissionRoute>} />
+            <Route path="attendance" element={<PermissionRoute required="field:read"><FieldSenseAttendancePage /></PermissionRoute>} />
+            <Route path="field-shifts" element={<PermissionRoute required="field:read"><FieldSenseShiftsPage /></PermissionRoute>} />
+            <Route path="field-shifts/:id" element={<PermissionRoute required="field:read"><FieldSenseShiftDetailPage /></PermissionRoute>} />
+            <Route path="field-visits" element={<PermissionRoute required="field:read"><FieldSenseVisitsPage /></PermissionRoute>} />
+            <Route path="field-stops" element={<PermissionRoute required="field:read"><FieldSenseStopsPage /></PermissionRoute>} />
             <Route path="service/catalog/brands" element={<Navigate to="/dashboard/catalog/brands" replace />} />
             <Route path="service/catalog/categories" element={<Navigate to="/dashboard/catalog/categories" replace />} />
             <Route path="service/catalog/skus" element={<Navigate to="/dashboard/catalog/skus" replace />} />
@@ -165,7 +182,7 @@ export default function App() {
             <Route path="dispatch/invoices" element={<Navigate to="/dashboard/accounts/invoices" replace />} />
             <Route path="dispatch/invoices/:id" element={<InvoiceDetailPage />} />
             <Route path="distribution/warehouse-assignment" element={<Navigate to="/dashboard/dispatch/queue" replace />} />
-            <Route path="settings/billing" element={<BillingSettingsPage />} />
+            <Route path="settings/billing" element={<PermissionRoute required="billing:manage"><BillingSettingsPage /></PermissionRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

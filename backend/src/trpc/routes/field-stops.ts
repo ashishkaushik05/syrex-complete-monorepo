@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { assertCanReadAgent, resolveReadOrgId } from "./field-helpers";
+import { assertCanReadAgent, assertFieldEnabled } from "./field-helpers";
 
 const stopSchema = z.object({
   id: z.string(),
@@ -59,6 +59,7 @@ export const fieldStopsRouter = createTRPCRouter({
   start: perm(P.field.write)
     .input(
       z.object({
+        agentId: z.string().uuid().optional(),
         lat: z.number(),
         lng: z.number(),
         reason: z.string().min(1).optional(),
@@ -69,14 +70,22 @@ export const fieldStopsRouter = createTRPCRouter({
     .output(stopSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
-      const orgId = ctx.actor.orgId;
-      if (!orgId) throw apiError("BAD_REQUEST", "orgId required");
-
+      await assertFieldEnabled(ctx.prisma, agentId);
+      // H-11: a client-provided agentId must match the actor. Check BEFORE the
+      // shift lookup so a spoofed agentId cannot be used to probe other shifts.
+      if (input.agentId && input.agentId !== agentId) {
+        throw apiError(
+          "FORBIDDEN",
+          "Cannot create records on another agent's shift"
+        );
+      }
+      // Prefer x-org-id header; fall back to looking up the active shift for this agent.
       const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, orgId, status: "active" },
+        where: { agentId, ...(ctx.actor.orgId ? { orgId: ctx.actor.orgId } : {}), status: "active" },
         select: { id: true, orgId: true }
       });
       if (!shift) throw apiError("BAD_REQUEST", "No active shift — stops require an active shift");
+      const orgId = shift.orgId;
 
       const openStop = await ctx.prisma.fieldStop.findFirst({
         where: { agentId, orgId, endedAt: null },
@@ -111,9 +120,17 @@ export const fieldStopsRouter = createTRPCRouter({
     .output(stopSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      await assertFieldEnabled(ctx.prisma, agentId);
 
-      const orgId = ctx.actor.orgId;
-      if (!orgId) throw apiError("FORBIDDEN", "orgId required");
+      // Resolve orgId from the stop record itself — don't require x-org-id header.
+      const stopRecord = await ctx.prisma.fieldStop.findUnique({
+        where: { id: input.stopId },
+        select: { orgId: true, agentId: true }
+      });
+      if (!stopRecord || stopRecord.agentId !== agentId) {
+        throw new TRPCError({ code: "CONFLICT", message: "Stop not found or already ended" });
+      }
+      const orgId = stopRecord.orgId;
 
       let stop;
       try {
@@ -155,7 +172,7 @@ export const fieldStopsRouter = createTRPCRouter({
     .output(z.array(stopSchema))
     .query(async ({ ctx, input }) => {
       if (input.agentId) assertCanReadAgent(ctx, input.agentId);
-      const orgId = resolveReadOrgId(ctx);
+      const orgId = ctx.actor.orgId ?? undefined;
       const timeFilter: Record<string, Date> = {};
       if (input.from) timeFilter.gte = new Date(input.from);
       if (input.to) timeFilter.lte = new Date(input.to);
@@ -198,10 +215,11 @@ export const fieldStopsRouter = createTRPCRouter({
       const callerId = ctx.actor.id!;
       const targetAgentId = input.agentId ?? callerId;
       assertCanReadAgent(ctx, targetAgentId);
-      const orgId = resolveReadOrgId(ctx);
+      // orgId is optional for own-agent queries — without it we search across all orgs.
+      const orgId = ctx.actor.orgId ?? undefined;
 
       const stop = await ctx.prisma.fieldStop.findFirst({
-        where: { agentId: targetAgentId, orgId, endedAt: null },
+        where: { agentId: targetAgentId, ...(orgId ? { orgId } : {}), endedAt: null },
         select: STOP_SELECT,
         orderBy: { startedAt: "desc" }
       });

@@ -1,10 +1,55 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./trpc/router";
 import { createRequestContext } from "./trpc/context";
 import { prisma } from "./infra/db/prisma";
 import { addSseConnection, removeSseConnection } from "./infra/sse";
 import { P, SUPER_ADMIN_PERMISSION } from "./rbac/catalog";
+import { verifyAccessToken } from "./trpc/routes/auth";
+
+type ActorResolution = {
+  userId: string;
+  sessionId: string;
+};
+
+export async function resolveActorFromBearer(
+  c: Pick<Context, "req">,
+  deps: Pick<typeof prisma, "authSession"> = prisma
+): Promise<ActorResolution | null> {
+  const authHeader = c.req.header("authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = authHeader.slice(7).trim();
+  if (!token) {
+    return null;
+  }
+
+  const claims = await verifyAccessToken(token);
+  if (!claims) {
+    return null;
+  }
+
+  const session = await deps.authSession.findUnique({
+    where: { id: claims.sessionId },
+    select: { userId: true, expiresAt: true, revokedAt: true }
+  });
+
+  if (!session || session.userId !== claims.userId) {
+    return null;
+  }
+
+  if (session.revokedAt || session.expiresAt.getTime() <= Date.now()) {
+    return null;
+  }
+
+  return {
+    userId: session.userId,
+    sessionId: claims.sessionId
+  };
+}
 
 export function createApp() {
   const app = new Hono();
@@ -22,23 +67,17 @@ export function createApp() {
     }
   });
 
-  // Resolve bearer token → actor headers before tRPC handler.
-  // Internal callers may still send x-actor-id directly (trusted network only).
+  // Resolve Bearer JWT for actor/session context and ignore inbound x-actor-id.
   app.use("/trpc/*", async (c, next) => {
-    const existingActorId = c.req.header("x-actor-id");
-    if (!existingActorId) {
-      const auth = c.req.header("authorization") ?? "";
-      if (auth.startsWith("Bearer ")) {
-        const token = auth.slice(7);
-        const session = await prisma.authSession.findUnique({
-          where: { accessToken: token },
-          select: { userId: true, expiresAt: true, revokedAt: true }
-        });
-        if (session && !session.revokedAt && session.expiresAt.getTime() > Date.now()) {
-          c.req.raw.headers.set("x-actor-id", session.userId);
-        }
-      }
+    c.req.raw.headers.delete("x-actor-id");
+    c.req.raw.headers.delete("x-auth-session-id");
+
+    const resolved = await resolveActorFromBearer(c);
+    if (resolved) {
+      c.req.raw.headers.set("x-actor-id", resolved.userId);
+      c.req.raw.headers.set("x-auth-session-id", resolved.sessionId);
     }
+
     await next();
   });
 
@@ -53,25 +92,11 @@ export function createApp() {
 
   // SSE live-stream: internal field:read users only
   app.get("/field/live-stream", async (c) => {
-    // Resolve actor from Bearer token or direct x-actor-id header
-    let actorId = c.req.header("x-actor-id");
-    if (!actorId) {
-      const auth = c.req.header("authorization") ?? "";
-      if (auth.startsWith("Bearer ")) {
-        const token = auth.slice(7);
-        const session = await prisma.authSession.findUnique({
-          where: { accessToken: token },
-          select: { userId: true, expiresAt: true, revokedAt: true }
-        });
-        if (session && !session.revokedAt && session.expiresAt.getTime() > Date.now()) {
-          actorId = session.userId;
-        }
-      }
-    }
-    if (!actorId) return c.json({ error: "Unauthorized" }, 401);
+    const resolved = await resolveActorFromBearer(c);
+    if (!resolved) return c.json({ error: "Unauthorized" }, 401);
 
     const user = await prisma.user.findUnique({
-      where: { id: actorId },
+      where: { id: resolved.userId },
       include: { role: { select: { permissions: true } } }
     });
     if (!user || user.userType !== "internal") {
@@ -83,11 +108,12 @@ export function createApp() {
     }
 
     const requestedOrgId = c.req.header("x-org-id");
-    // Users without super-admin/cross-org perms may only subscribe to a specific org
+    // Users without super-admin perms may only subscribe to a specific org
     // (org ID comes from client header — User model has no direct orgId field).
-    // Wildcard subscription is restricted to super-admins.
-    const canAccessAllOrgs =
-      perms.includes(SUPER_ADMIN_PERMISSION) || perms.includes("orgs:read");
+    // Wildcard subscription is restricted to super-admins ONLY. C-12: previously
+    // `orgs:read` could also wildcard-subscribe; that permission is for reading
+    // org records, not for streaming all orgs' live field data.
+    const canAccessAllOrgs = perms.includes(SUPER_ADMIN_PERMISSION) || perms.includes(P.field.admin);
     if (!requestedOrgId && !canAccessAllOrgs) {
       return c.json({ error: "x-org-id header required" }, 400);
     }
@@ -112,7 +138,11 @@ export function createApp() {
         c.req.raw.signal.addEventListener("abort", () => {
           clearInterval(hb);
           removeSseConnection(orgId, ctrl);
-          try { controller.close(); } catch { /* already closed */ }
+          try {
+            controller.close();
+          } catch {
+            // already closed
+          }
         });
       },
       cancel() {

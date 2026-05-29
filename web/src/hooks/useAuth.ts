@@ -75,7 +75,10 @@ export function useAuth() {
         const response = await api.get<{ data: AuthMe }>('/auth/me')
         return unwrapEnvelope<AuthMe>(response as { data: AuthMe } | { data: { data: AuthMe } }) ?? null
       } catch (error) {
-        if (axios.isAxiosError(error) && error.response?.status === 401) {
+        const status = axios.isAxiosError(error)
+          ? error.response?.status
+          : (error as { response?: { status?: number } })?.response?.status
+        if (status === 401) {
           return null
         }
 
