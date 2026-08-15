@@ -1,1 +1,0 @@
-{"decision_id":"DEC-20260508-001","model":"codex","task":"Create AI governance system prompts + decision protocol","status":"completed","scope":["plan/ai-governance/**"],"cleanup_required":["Add optional CI check that enforces decision log updates for code changes"],"timestamp":"2026-05-08T00:00:00Z"}
