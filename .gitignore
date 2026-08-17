@@ -2,4 +2,7 @@
 AGENTS.md
 CLAUDE.md
 GEMINI.md
-/node_modulesbackend/.env
+/node_modules
+backend/.env
+backend/.env.local
+web/.env
