@@ -11,9 +11,28 @@ if (!env.SERVICE_PORTAL_JWT_SECRET) {
 }
 
 // Idempotent bootstrap: ensure the complaint number sequence exists.
-prisma.$executeRaw`CREATE SEQUENCE IF NOT EXISTS service_complaint_number_seq`.catch((err) => {
-  logger.error("bootstrap_sequence_failed", { err });
-});
+// Retried with backoff because this can race Postgres still starting up
+// (e.g. right after a machine reboot, before Docker's DB container is
+// ready to accept connections) — a bare fire-and-forget attempt here
+// silently loses that race and leaves the sequence missing until the
+// next successful boot. db:reset also recreates it explicitly via
+// scripts/ensure-sequences.ts, since --force-reset drops it.
+async function ensureComplaintNumberSequence(retries = 5, delayMs = 1000): Promise<void> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await prisma.$executeRaw`CREATE SEQUENCE IF NOT EXISTS service_complaint_number_seq`;
+      return;
+    } catch (err) {
+      if (attempt === retries) {
+        logger.error("bootstrap_sequence_failed", { err, attempts: attempt });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+}
+
+await ensureComplaintNumberSequence();
 
 const app = createApp();
 

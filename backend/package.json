@@ -14,10 +14,10 @@
     "ledger:backfill": "bun run scripts/backfill-ledger.ts",
     "rbac:preflight": "bun run scripts/rbac-preflight.ts",
     "prisma:generate": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma generate --schema ../schema.prisma",
-    "db:reset": "bun run scripts/assert-non-production.ts db:reset && PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate",
+    "db:reset": "bun run scripts/assert-non-production.ts db:reset && PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate && bun run scripts/ensure-sequences.ts",
     "db:seed": "bun run scripts/assert-non-production.ts db:seed && bun run rbac:preflight && bun run scripts/demo-seed.ts",
     "db:prepare": "bun run db:reset && bun run db:seed",
-    "db:test:prepare": "bun run scripts/assert-test-environment.ts db:test:prepare && PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate && bun run scripts/demo-seed.ts",
+    "db:test:prepare": "bun run scripts/assert-test-environment.ts db:test:prepare && PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma db push --schema ../schema.prisma --force-reset --accept-data-loss --skip-generate && bun run scripts/ensure-sequences.ts && bun run scripts/demo-seed.ts",
     "ci:preflight": "bun run typecheck && bun run rbac:preflight"
   },
   "dependencies": {
