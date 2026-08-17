@@ -16,13 +16,14 @@ function createFieldMock() {
         if (args.include?.role) {
           return {
             id: agentId,
+            isActive: true,
             isFieldEnabled: true,
             userType: "internal",
             role: { permissions: [P.field.write, P.field.read, P.field.admin] },
             managedWarehouse: null
           };
         }
-        return { isFieldEnabled: true, userType: "internal" };
+        return { isActive: true, isFieldEnabled: true, userType: "internal" };
       }
     },
     shift: {
@@ -98,14 +99,16 @@ function createFieldMock() {
     },
     fieldSyncStatus: {
       upsert: async () => ({})
-    }
+    },
+    $queryRawUnsafe: async () => [],
+    $transaction: async (fn: (tx: any) => Promise<any>) => fn(prisma)
   };
 
   const caller = appRouter.createCaller({
     requestId: "test",
     actor: { id: agentId, orgId },
     prisma,
-    permissions: [],
+    permissions: [P.field.write, P.field.read, P.field.admin],
     managedWarehouseId: null,
     serviceClientId: null,
     serviceClientSecret: null,
@@ -390,9 +393,18 @@ function createSecurityMock(opts: SecurityMockOptions = {}) {
         for (const row of args.data) locations.push(row);
         return { count: args.data.length };
       },
-      findMany: async () => []
+      findMany: async (args: any) => {
+        const ids = args.where?.clientPointId?.in;
+        return locations.filter(
+          (point) =>
+            point.orgId === args.where.orgId &&
+            point.agentId === args.where.agentId &&
+            (!ids || ids.includes(point.clientPointId))
+        );
+      }
     },
     fieldVisit: {
+      findUnique: async () => null,
       create: async (args: any) => ({
         id: "visit-1111",
         recordedAt: new Date(),
@@ -402,6 +414,7 @@ function createSecurityMock(opts: SecurityMockOptions = {}) {
     },
     fieldStop: {
       findFirst: async () => null,
+      findUnique: async () => null,
       create: async (args: any) => ({
         id: "stop-1111",
         startedAt: new Date(),
@@ -413,7 +426,8 @@ function createSecurityMock(opts: SecurityMockOptions = {}) {
     fieldSyncStatus: {
       findMany: async () => [],
       upsert: async () => ({})
-    }
+    },
+    $queryRawUnsafe: async () => []
   };
 
   const caller = appRouter.createCaller({
@@ -559,6 +573,48 @@ describe("Batch 05 — Field Sense security regressions", () => {
     expect(res.hasMore).toBe(true);
   });
 
+  it("P1-1: ingestV2 rejects future-dated points with RECORDED_AT_TOO_FAR_IN_FUTURE", async () => {
+    const { caller } = createSecurityMock();
+    const futureTs = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min in future
+    const result = await caller.fieldLocation.ingestV2({
+      clientShiftId: "client-shift-a",
+      shiftId: "77777777-7777-4777-8777-777777777777",
+      points: [
+        {
+          clientPointId: "future-point",
+          lat: 12.97,
+          lng: 77.59,
+          accuracy: 10,
+          recordedAt: futureTs
+        }
+      ]
+    });
+    expect(result.rejected).toEqual([
+      { clientPointId: "future-point", reason: "RECORDED_AT_TOO_FAR_IN_FUTURE" }
+    ]);
+    expect(result.accepted).toEqual([]);
+  });
+
+  it("P1-1: ingestV2 accepts old (>48h) points without rejection", async () => {
+    const { caller } = createSecurityMock();
+    const oldTs = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString(); // 50 h ago
+    const result = await caller.fieldLocation.ingestV2({
+      clientShiftId: "client-shift-a",
+      shiftId: "77777777-7777-4777-8777-777777777777",
+      points: [
+        {
+          clientPointId: "old-point",
+          lat: 12.97,
+          lng: 77.59,
+          accuracy: 10,
+          recordedAt: oldTs
+        }
+      ]
+    });
+    expect(result.rejected).toEqual([]);
+    expect(result.accepted).toContain("old-point");
+  });
+
   it("M-04: ingest throws TOO_MANY_REQUESTS when exceeding the per-shift cap", async () => {
     const { caller, agentId, shiftId } = createSecurityMock();
     resetIngestBucket(agentId, shiftId);
@@ -603,5 +659,135 @@ describe("Batch 05 — Field Sense security regressions", () => {
       ]
     });
     expect(result.accepted).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0-4 — Org-scoped clientEventId idempotency
+// ---------------------------------------------------------------------------
+
+describe("P0-4 — Org-scoped clientEventId idempotency", () => {
+  it("same clientEventId in same org returns the existing visit (idempotent)", async () => {
+    const orgId = "11111111-1111-4111-8111-111111111111";
+    const agentId = "33333333-3333-4333-8333-333333333333";
+    const shiftId = "77777777-7777-4777-8777-777777777777";
+    const clientEventId = "evt-org-a-001";
+
+    const existingVisit = {
+      id: "visit-existing",
+      agentId,
+      shiftId,
+      orgId,
+      lat: 1,
+      lng: 1,
+      description: null,
+      audioUrl: null,
+      outletId: null,
+      customerId: null,
+      clientEventId,
+      recordedAt: new Date(),
+      createdAt: new Date()
+    };
+
+    const prisma: any = {
+      user: {
+        findUnique: async () => ({
+          id: agentId,
+          isActive: true,
+          isFieldEnabled: true,
+          userType: "internal",
+          role: { permissions: ["field:write", "field:read"] },
+          managedWarehouse: null
+        })
+      },
+      shift: {
+        findFirst: async () => ({ id: shiftId, orgId }),
+        findUnique: async () => null
+      },
+      fieldVisit: {
+        findUnique: async (args: any) => {
+          // P0-4: key is orgId_clientEventId, not just clientEventId
+          if (args.where?.orgId_clientEventId?.orgId === orgId &&
+              args.where?.orgId_clientEventId?.clientEventId === clientEventId) {
+            return existingVisit;
+          }
+          return null;
+        },
+        create: async () => { throw new Error("Should not create a duplicate"); }
+      },
+      outlet: { findFirst: async () => null },
+      $queryRawUnsafe: async () => []
+    };
+
+    const caller = appRouter.createCaller({
+      requestId: "test",
+      actor: { id: agentId, orgId },
+      prisma,
+      permissions: ["field:write", "field:read"],
+      managedWarehouseId: null,
+      serviceClientId: null,
+      serviceClientSecret: null,
+      serviceScopes: []
+    } as any);
+
+    const result = await caller.fieldVisits.log({ lat: 1, lng: 1, clientEventId });
+    expect(result.id).toBe("visit-existing");
+  });
+
+  it("same clientEventId in a different org creates a new visit (cross-org allowed)", async () => {
+    const orgA = "11111111-1111-4111-8111-111111111111";
+    const orgB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const agentId = "33333333-3333-4333-8333-333333333333";
+    const shiftId = "77777777-7777-4777-8777-777777777777";
+    const clientEventId = "evt-same-id";
+    let created = false;
+
+    const prisma: any = {
+      user: {
+        findUnique: async () => ({
+          id: agentId,
+          isActive: true,
+          isFieldEnabled: true,
+          userType: "internal",
+          role: { permissions: ["field:write", "field:read"] },
+          managedWarehouse: null
+        })
+      },
+      shift: {
+        findFirst: async () => ({ id: shiftId, orgId: orgB }),
+        findUnique: async () => null
+      },
+      fieldVisit: {
+        // orgA has an existing visit with same clientEventId, but orgB does not.
+        findUnique: async (args: any) => {
+          if (args.where?.orgId_clientEventId?.orgId === orgA &&
+              args.where?.orgId_clientEventId?.clientEventId === clientEventId) {
+            return { id: "visit-org-a", clientEventId, orgId: orgA };
+          }
+          return null;
+        },
+        create: async (args: any) => {
+          created = true;
+          return { id: "visit-org-b", recordedAt: new Date(), createdAt: new Date(), ...args.data };
+        }
+      },
+      outlet: { findFirst: async () => null },
+      $queryRawUnsafe: async () => []
+    };
+
+    const caller = appRouter.createCaller({
+      requestId: "test",
+      actor: { id: agentId, orgId: orgB },
+      prisma,
+      permissions: ["field:write", "field:read"],
+      managedWarehouseId: null,
+      serviceClientId: null,
+      serviceClientSecret: null,
+      serviceScopes: []
+    } as any);
+
+    const result = await caller.fieldVisits.log({ lat: 1, lng: 1, clientEventId });
+    expect(created).toBe(true);
+    expect(result.id).toBe("visit-org-b");
   });
 });

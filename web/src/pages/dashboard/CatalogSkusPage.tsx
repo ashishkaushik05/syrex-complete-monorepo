@@ -53,6 +53,10 @@ type Sku = {
   skuCode: string
   basePrice: number
   warrantyMonths: number
+  hsnCode: string
+  uqc: string
+  gstRate: number
+  transferValue: number
   category: string | null
   brand: string | null
   type: string | null
@@ -277,6 +281,10 @@ export function CatalogSkusPage() {
   const [skuCode, setSkuCode] = useState('')
   const [basePrice, setBasePrice] = useState('0')
   const [warrantyMonths, setWarrantyMonths] = useState('0')
+  const [hsnCode, setHsnCode] = useState('')
+  const [uqc, setUqc] = useState('NOS')
+  const [gstRate, setGstRate] = useState('18')
+  const [transferValue, setTransferValue] = useState('0')
   const [typeName, setTypeName] = useState('General')
   const [description, setDescription] = useState('')
   const [imagesText, setImagesText] = useState('')
@@ -353,6 +361,10 @@ export function CatalogSkusPage() {
       skuCode: string
       basePrice: number
       warrantyMonths: number
+      hsnCode: string
+      uqc: string
+      gstRate: number
+      transferValue: number
       description?: string
       details: SkuDetails
       images: string[]
@@ -377,6 +389,10 @@ export function CatalogSkusPage() {
         skuCode: string
         basePrice: number
         warrantyMonths: number
+        hsnCode: string
+        uqc: string
+        gstRate: number
+        transferValue: number
         description?: string
         details: SkuDetails
         images: string[]
@@ -475,6 +491,10 @@ export function CatalogSkusPage() {
     setSkuCode('')
     setBasePrice('0')
     setWarrantyMonths('0')
+    setHsnCode('')
+    setUqc('NOS')
+    setGstRate('18')
+    setTransferValue('0')
     setTypeName('General')
     setDescription('')
     setImagesText('')
@@ -521,6 +541,10 @@ export function CatalogSkusPage() {
     setSkuCode(sku.skuCode)
     setBasePrice(String(sku.basePrice))
     setWarrantyMonths(String(sku.warrantyMonths))
+    setHsnCode(sku.hsnCode)
+    setUqc(sku.uqc)
+    setGstRate(String(sku.gstRate))
+    setTransferValue(String(sku.transferValue))
     setTypeName(sku.type ?? 'General')
     setDescription(sku.description ?? '')
     setImagesText(sku.images.join('\n'))
@@ -544,6 +568,10 @@ export function CatalogSkusPage() {
           skuCode: sku.skuCode,
           basePrice: sku.basePrice,
           warrantyMonths: sku.warrantyMonths,
+          hsnCode: sku.hsnCode,
+          uqc: sku.uqc,
+          gstRate: sku.gstRate,
+          transferValue: sku.transferValue,
           details: sku.details ?? { version: 1, customFields: [] },
           images: sku.images,
           isActive: !sku.isActive,
@@ -564,6 +592,10 @@ export function CatalogSkusPage() {
       skuCode: skuCode.trim(),
       basePrice: Math.max(0, toNumber(basePrice)),
       warrantyMonths: Math.max(0, Math.trunc(toNumber(warrantyMonths))),
+      hsnCode: hsnCode.trim(),
+      uqc: uqc.trim(),
+      gstRate: Math.max(0, toNumber(gstRate)),
+      transferValue: Math.max(0, toNumber(transferValue)),
       description: normalizeOptional(description),
       details: buildDetailsPayload(customFields),
       images: parseImages(imagesText),
@@ -572,6 +604,10 @@ export function CatalogSkusPage() {
     try {
       if (!createBrandId || !createCategoryId) {
         setErrorMessage('Select brand and category.')
+        return
+      }
+      if (!payload.hsnCode || !payload.uqc || payload.transferValue <= 0) {
+        setErrorMessage('HSN, UQC, and a transfer value greater than zero are required.')
         return
       }
 
@@ -846,6 +882,24 @@ export function CatalogSkusPage() {
                 </select>
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="sku-hsn">HSN Code</Label>
+                <Input id="sku-hsn" value={hsnCode} onChange={(e) => setHsnCode(e.target.value)} required />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sku-uqc">UQC</Label>
+                <Input id="sku-uqc" value={uqc} onChange={(e) => setUqc(e.target.value)} required />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sku-gst">GST Rate (%)</Label>
+                <Input id="sku-gst" type="number" min={0} max={100} step="0.01" value={gstRate} onChange={(e) => setGstRate(e.target.value)} required />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="sku-transfer">Transfer Value (₹)</Label>
+                <Input id="sku-transfer" type="number" min={0.01} step="0.01" value={transferValue} onChange={(e) => setTransferValue(e.target.value)} required />
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="sku-type-name">Product Type (Optional)</Label>
               <p className="text-xs text-slate-400">Leave blank to use "General".</p>
@@ -1048,6 +1102,9 @@ export function CatalogSkusPage() {
                 <div><span className="text-slate-500">Type:</span> <span className="font-medium text-slate-900">{viewSku.type ?? '—'}</span></div>
                 <div><span className="text-slate-500">Base Price:</span> <span className="font-medium text-slate-900">{formatCurrencyINR(viewSku.basePrice)}</span></div>
                 <div><span className="text-slate-500">Warranty:</span> <span className="font-medium text-slate-900">{viewSku.warrantyMonths} months</span></div>
+                <div><span className="text-slate-500">HSN / UQC:</span> <span className="font-medium text-slate-900">{viewSku.hsnCode} / {viewSku.uqc}</span></div>
+                <div><span className="text-slate-500">GST:</span> <span className="font-medium text-slate-900">{viewSku.gstRate}%</span></div>
+                <div><span className="text-slate-500">Transfer Value:</span> <span className="font-medium text-slate-900">{formatCurrencyINR(viewSku.transferValue)}</span></div>
                 <div><span className="text-slate-500">Status:</span> <span className="font-medium text-slate-900">{viewSku.isActive ? 'Active' : 'Inactive'}</span></div>
               </div>
 

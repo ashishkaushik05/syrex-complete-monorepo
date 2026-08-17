@@ -34,6 +34,18 @@ type OrgBillingProfile = {
   logoUrl: string | null
 }
 
+type BillingProfile = {
+  id: string
+  legalName: string
+  gstin: string
+  pan: string
+  state: string
+  stateCode: string
+  profileType: 'company' | 'warehouse' | 'outlet'
+  canIssueGrnInvoice: boolean
+  isActive: boolean
+}
+
 type ProfileFormState = {
   companyName: string
   addressLine1: string
@@ -92,6 +104,35 @@ const DEFAULT_FORM: ChargeFormState = {
 export function BillingSettingsPage() {
   const { can } = usePermission()
   const qc = useQueryClient()
+  const [newProfile, setNewProfile] = useState({
+    legalName: '', gstin: '', pan: '', addressLine1: '', addressLine2: '', city: '',
+    state: '', stateCode: '', pincode: '', country: 'India',
+    profileType: 'company' as BillingProfile['profileType'], canIssueGrnInvoice: true,
+  })
+  const [newProfileError, setNewProfileError] = useState<string | null>(null)
+
+  const profilesQuery = useQuery({
+    queryKey: ['billing-profiles'],
+    queryFn: async () => (await api.get<{ data: BillingProfile[] }>('/settings/billing/profiles')).data.data,
+  })
+  const createProfileMutation = useMutation({
+    mutationFn: () => api.post('/settings/billing/profiles', {
+      ...newProfile,
+      addressLine2: newProfile.addressLine2.trim() || null,
+      canIssueGrnInvoice: newProfile.profileType === 'company' && newProfile.canIssueGrnInvoice,
+      isActive: true,
+    }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['billing-profiles'] })
+      setNewProfile((current) => ({ ...current, legalName: '', gstin: '', pan: '', addressLine1: '', addressLine2: '', city: '', state: '', stateCode: '', pincode: '' }))
+      setNewProfileError(null)
+    },
+    onError: (error) => setNewProfileError(apiErrorMessage(error, 'Unable to create billing profile.')),
+  })
+  const toggleProfileMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => api.patch(`/settings/billing/profiles/${id}`, { isActive }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-profiles'] }),
+  })
 
   // --- Org billing profile state ---
   const [profileForm, setProfileForm] = useState<ProfileFormState>(DEFAULT_PROFILE_FORM)
@@ -238,6 +279,29 @@ export function BillingSettingsPage() {
 
   return (
     <div className="space-y-4">
+      <Card className="border-slate-200 bg-white shadow-sm">
+        <CardHeader><CardTitle>Reusable Billing Profiles</CardTitle><p className="text-sm text-slate-500">Company profiles issue GRN invoices; warehouse and outlet profiles are assigned to their records.</p></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-4">
+            <Input placeholder="Legal name" value={newProfile.legalName} onChange={(e) => setNewProfile((p) => ({ ...p, legalName: e.target.value }))} />
+            <Input placeholder="GSTIN" value={newProfile.gstin} onChange={(e) => setNewProfile((p) => ({ ...p, gstin: e.target.value.toUpperCase() }))} />
+            <Input placeholder="PAN" value={newProfile.pan} onChange={(e) => setNewProfile((p) => ({ ...p, pan: e.target.value.toUpperCase() }))} />
+            <select className="h-10 rounded-md border px-3 text-sm" value={newProfile.profileType} onChange={(e) => setNewProfile((p) => ({ ...p, profileType: e.target.value as BillingProfile['profileType'] }))}><option value="company">Company</option><option value="warehouse">Warehouse</option><option value="outlet">Outlet</option></select>
+            <Input placeholder="Address line 1" value={newProfile.addressLine1} onChange={(e) => setNewProfile((p) => ({ ...p, addressLine1: e.target.value }))} />
+            <Input placeholder="City" value={newProfile.city} onChange={(e) => setNewProfile((p) => ({ ...p, city: e.target.value }))} />
+            <Input placeholder="State" value={newProfile.state} onChange={(e) => setNewProfile((p) => ({ ...p, state: e.target.value }))} />
+            <Input placeholder="State code (2 digits)" value={newProfile.stateCode} onChange={(e) => setNewProfile((p) => ({ ...p, stateCode: e.target.value }))} />
+            <Input placeholder="Pincode" value={newProfile.pincode} onChange={(e) => setNewProfile((p) => ({ ...p, pincode: e.target.value }))} />
+            {newProfile.profileType === 'company' ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={newProfile.canIssueGrnInvoice} onChange={(e) => setNewProfile((p) => ({ ...p, canIssueGrnInvoice: e.target.checked }))} />Eligible GRN issuer</label> : null}
+          </div>
+          {newProfileError ? <p className="text-sm text-red-600">{newProfileError}</p> : null}
+          <Button onClick={() => createProfileMutation.mutate()} disabled={!can('billing:manage') || createProfileMutation.isPending}>Add Billing Profile</Button>
+          <Table><TableHeader><TableRow><TableHead>Legal Name</TableHead><TableHead>Type</TableHead><TableHead>GSTIN</TableHead><TableHead>State</TableHead><TableHead>Issuer</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+            <TableBody>{(profilesQuery.data ?? []).map((profile) => <TableRow key={profile.id}><TableCell>{profile.legalName}</TableCell><TableCell className="capitalize">{profile.profileType}</TableCell><TableCell>{profile.gstin}</TableCell><TableCell>{profile.state} ({profile.stateCode})</TableCell><TableCell>{profile.canIssueGrnInvoice ? 'Yes' : 'No'}</TableCell><TableCell><Button size="sm" variant="outline" onClick={() => toggleProfileMutation.mutate({ id: profile.id, isActive: !profile.isActive })}>{profile.isActive ? 'Deactivate' : 'Activate'}</Button></TableCell></TableRow>)}</TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
       {/* Company / Seller Details */}
       <Card className="border-slate-200 bg-white shadow-sm">
         <CardHeader>

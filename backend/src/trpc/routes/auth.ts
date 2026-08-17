@@ -27,6 +27,8 @@ const sessionTokenSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string(),
   expiresIn: z.number().int(),
+  // Org the session operates under. Single-tenant: always DEFAULT_ORG_ID from env.
+  orgId: z.string().nullable(),
   user: z.object({
     id: z.string(),
     email: z.string().email(),
@@ -305,6 +307,7 @@ export const authRouter = createTRPCRouter({
       accessToken,
       refreshToken: created.refreshToken,
       expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+      orgId: process.env.DEFAULT_ORG_ID ?? null,
       user: buildSessionUser(user)
     };
   }),
@@ -352,6 +355,7 @@ export const authRouter = createTRPCRouter({
       accessToken,
       refreshToken: rotated.refreshToken,
       expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+      orgId: process.env.DEFAULT_ORG_ID ?? null,
       user: buildSessionUser(user)
     };
   }),

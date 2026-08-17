@@ -16,6 +16,7 @@ const visitSchema = z.object({
   audioUrl: z.string().nullable(),
   outletId: z.string().nullable(),
   customerId: z.string().nullable(),
+  clientEventId: z.string().nullable().optional(),
   recordedAt: z.string(),
   createdAt: z.string()
 });
@@ -31,6 +32,7 @@ const VISIT_SELECT = {
   audioUrl: true,
   outletId: true,
   customerId: true,
+  clientEventId: true,
   recordedAt: true,
   createdAt: true
 } as const;
@@ -46,6 +48,7 @@ function toVisit(v: {
   audioUrl: string | null;
   outletId: string | null;
   customerId: string | null;
+  clientEventId?: string | null;
   recordedAt: Date;
   createdAt: Date;
 }) {
@@ -72,6 +75,8 @@ export const fieldVisitsRouter = createTRPCRouter({
     .input(
       z.object({
         agentId: z.string().uuid().optional(),
+        // P1-2: shiftId allows offline replay into a specific (possibly closed) shift.
+        shiftId: z.string().uuid().optional(),
         lat: z.number(),
         lng: z.number(),
         description: z.string().min(1).optional(),
@@ -85,7 +90,8 @@ export const fieldVisitsRouter = createTRPCRouter({
           .optional(),
         outletId: z.string().uuid().optional(),
         customerId: z.string().uuid().optional(),
-        recordedAt: z.string().datetime().optional()
+        recordedAt: z.string().datetime().optional(),
+        clientEventId: z.string().min(1).optional()
       })
     )
     .output(visitSchema)
@@ -100,15 +106,27 @@ export const fieldVisitsRouter = createTRPCRouter({
           "Cannot create records on another agent's shift"
         );
       }
-      const shift = await ctx.prisma.shift.findFirst({
-        where: {
-          agentId,
-          status: "active",
-          orgId: ctx.actor.orgId ?? undefined
-        },
-        select: { id: true, orgId: true }
-      });
-      if (!shift) throw apiError("BAD_REQUEST", "No active shift — visits require an active shift");
+      // P1-2: If shiftId is provided, validate it belongs to this agent/org and
+      // use it directly (allows offline replay into closed shifts). Otherwise fall
+      // back to the current active shift.
+      const shift = input.shiftId
+        ? await ctx.prisma.shift.findFirst({
+            where: {
+              id: input.shiftId,
+              agentId,
+              orgId: ctx.actor.orgId ?? undefined
+            },
+            select: { id: true, orgId: true }
+          })
+        : await ctx.prisma.shift.findFirst({
+            where: {
+              agentId,
+              status: "active",
+              orgId: ctx.actor.orgId ?? undefined
+            },
+            select: { id: true, orgId: true }
+          });
+      if (!shift) throw apiError("BAD_REQUEST", input.shiftId ? "Shift not found or not accessible" : "No active shift — visits require an active shift");
 
       if (input.outletId) {
         // C-18: Outlet has no orgId column (pre-Batch-08), so the previous
@@ -136,6 +154,20 @@ export const fieldVisitsRouter = createTRPCRouter({
         }
       }
 
+      if (input.clientEventId) {
+        // P0-4: Scope duplicate check to org — same clientEventId across different orgs is allowed.
+        const existing = await ctx.prisma.fieldVisit.findUnique({
+          where: {
+            orgId_clientEventId: {
+              orgId: shift.orgId,
+              clientEventId: input.clientEventId
+            }
+          },
+          select: VISIT_SELECT
+        });
+        if (existing) return toVisit(existing);
+      }
+
       const visit = await ctx.prisma.fieldVisit.create({
         data: {
           agentId,
@@ -147,6 +179,7 @@ export const fieldVisitsRouter = createTRPCRouter({
           audioUrl: input.audioUrl ?? null,
           outletId: input.outletId ?? null,
           customerId: input.customerId ?? null,
+          clientEventId: input.clientEventId ?? null,
           recordedAt: input.recordedAt ? new Date(input.recordedAt) : new Date()
         },
         select: VISIT_SELECT

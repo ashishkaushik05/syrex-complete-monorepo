@@ -16,6 +16,7 @@ type OutletRow = {
   outstandingBalance: Prisma.Decimal;
   isActive: boolean;
   createdAt: Date;
+  billingProfileId?: string | null;
   legalName?: string | null;
   gstin?: string | null;
   billingAddress1?: string | null;
@@ -46,6 +47,7 @@ function makeOutlet(id: string, warehouseId: string | null, createdAtIso: string
     outstandingBalance: new Prisma.Decimal(0),
     isActive: true,
     createdAt: new Date(createdAtIso),
+    billingProfileId: null,
     billingCountry: "India",
   };
 }
@@ -125,8 +127,9 @@ function createCaller(opts: {
     requestId: "test",
     actor: { id: ACTOR_ID, orgId: opts.actorOrgId ?? null },
     prisma: prisma as any,
-    permissions: [],
-    managedWarehouseId: null,
+    permissions: opts.permissions,
+    managedWarehouseId: opts.managedWarehouseId,
+    linkedOutletId: opts.linkedOutletId,
     serviceClientId: null,
     serviceClientSecret: null,
     serviceScopes: [],

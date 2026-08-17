@@ -1,9 +1,11 @@
 import { createTRPCRouter } from "./trpc";
 import { attachmentsRouter } from "./routes/attachments";
+import { accountsRouter } from "./routes/accounts";
 import { authRouter } from "./routes/auth";
 import { brandsRouter } from "./routes/brands";
 import { categoriesRouter } from "./routes/categories";
 import { dispatchesRouter } from "./routes/dispatches";
+import { fieldAnalyticsRouter } from "./routes/field-analytics";
 import { fieldAttendanceRouter } from "./routes/field-attendance";
 import { fieldLocationRouter } from "./routes/field-location";
 import { fieldScheduleRouter } from "./routes/field-schedule";
@@ -21,13 +23,16 @@ import { outletsRouter } from "./routes/outlets";
 import { paymentsRouter } from "./routes/payments";
 import { productsRouter } from "./routes/products";
 import { rolesRouter } from "./routes/roles";
+import { serviceAnalyticsRouter } from "./routes/service-analytics";
 import { serviceAssignmentsRouter } from "./routes/service-assignments";
 import { serviceComplaintsRouter } from "./routes/service-complaints";
 import { serviceFormsRouter } from "./routes/service-forms";
 import { serviceIntegrationsRouter } from "./routes/service-integrations";
+import { servicePortalRouter } from "./routes/service-portal";
 import { serviceSerialsRouter } from "./routes/service-serials";
 import { serviceTestsRouter } from "./routes/service-tests";
 import { serviceWarrantyRouter } from "./routes/service-warranty";
+import { skuDemandRouter } from "./routes/sku-demand";
 import { systemRouter } from "./routes/system";
 import { taxChargesRouter } from "./routes/tax-charges";
 import { orgBillingProfileRouter } from "./routes/org-billing-profile";
@@ -35,6 +40,7 @@ import { usersRouter } from "./routes/users";
 import { warehousesRouter } from "./routes/warehouses";
 
 export const appRouter = createTRPCRouter({
+  accounts: accountsRouter,
   system: systemRouter,
   attachments: attachmentsRouter,
   auth: authRouter,
@@ -55,6 +61,7 @@ export const appRouter = createTRPCRouter({
   warehouses: warehousesRouter,
   orders: ordersRouter,
   outletPortal: outletPortalRouter,
+  fieldAnalytics: fieldAnalyticsRouter,
   fieldShifts: fieldShiftsRouter,
   fieldLocation: fieldLocationRouter,
   fieldVisits: fieldVisitsRouter,
@@ -69,6 +76,9 @@ export const appRouter = createTRPCRouter({
   serviceSerials: serviceSerialsRouter,
   serviceWarranty: serviceWarrantyRouter,
   serviceIntegrations: serviceIntegrationsRouter,
+  servicePortal: servicePortalRouter,
+  serviceAnalytics: serviceAnalyticsRouter,
+  skuDemand: skuDemandRouter,
 });
 
 export type AppRouter = typeof appRouter;

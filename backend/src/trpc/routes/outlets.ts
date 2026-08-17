@@ -4,13 +4,14 @@ import { createTRPCRouter, perm } from "../trpc";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
-import { actorHasInternalSalesOutletAccess, findActorLinkedOutletId } from "./outlet-access";
+import { actorHasInternalSalesOutletAccess, findActorLinkedOutletId, resolveFinancialScope } from "./outlet-access";
 
 const outletSchema = z.object({
   id: z.string(),
   outletCode: z.string(),
   userId: z.string(),
   warehouseId: z.string().nullable(),
+  billingProfileId: z.string().nullable(),
   name: z.string(),
   ownerName: z.string(),
   phone: z.string(),
@@ -28,17 +29,23 @@ const outletSchema = z.object({
   billingState: z.string().nullable(),
   billingPincode: z.string().nullable(),
   billingCountry: z.string(),
+  billingProfile: z.object({
+    id: z.string(),
+    legalName: z.string(),
+    gstin: z.string(),
+    addressLine1: z.string(),
+    addressLine2: z.string().nullable(),
+    city: z.string(),
+    state: z.string(),
+    stateCode: z.string(),
+    pincode: z.string(),
+    country: z.string(),
+    isActive: z.boolean(),
+  }).nullable(),
 });
 
 const billingFieldsSchema = z.object({
-  legalName: z.string().optional().nullable(),
-  gstin: z.string().optional().nullable(),
-  billingAddress1: z.string().optional().nullable(),
-  billingAddress2: z.string().optional().nullable(),
-  billingCity: z.string().optional().nullable(),
-  billingState: z.string().optional().nullable(),
-  billingPincode: z.string().optional().nullable(),
-  billingCountry: z.string().optional(),
+  billingProfileId: z.string().uuid().optional().nullable(),
 });
 
 const createOutletSchema = z.object({
@@ -80,6 +87,7 @@ function toOutlet(outlet: {
   outletCode: string;
   userId: string;
   warehouseId: string | null;
+  billingProfileId: string | null;
   name: string;
   ownerName: string;
   phone: string;
@@ -88,20 +96,26 @@ function toOutlet(outlet: {
   outstandingBalance: { toString(): string };
   isActive: boolean;
   createdAt: Date;
-  legalName?: string | null;
-  gstin?: string | null;
-  billingAddress1?: string | null;
-  billingAddress2?: string | null;
-  billingCity?: string | null;
-  billingState?: string | null;
-  billingPincode?: string | null;
-  billingCountry?: string;
+  billingProfile?: {
+    id: string;
+    legalName: string;
+    gstin: string;
+    addressLine1: string;
+    addressLine2: string | null;
+    city: string;
+    state: string;
+    stateCode: string;
+    pincode: string;
+    country: string;
+    isActive: boolean;
+  } | null;
 }) {
   return {
     id: outlet.id,
     outletCode: outlet.outletCode,
     userId: outlet.userId,
     warehouseId: outlet.warehouseId,
+    billingProfileId: outlet.billingProfileId,
     name: outlet.name,
     ownerName: outlet.ownerName,
     phone: outlet.phone,
@@ -110,15 +124,45 @@ function toOutlet(outlet: {
     outstandingBalance: outlet.outstandingBalance.toString(),
     isActive: outlet.isActive,
     createdAt: outlet.createdAt.toISOString(),
-    legalName: outlet.legalName ?? null,
-    gstin: outlet.gstin ?? null,
-    billingAddress1: outlet.billingAddress1 ?? null,
-    billingAddress2: outlet.billingAddress2 ?? null,
-    billingCity: outlet.billingCity ?? null,
-    billingState: outlet.billingState ?? null,
-    billingPincode: outlet.billingPincode ?? null,
-    billingCountry: outlet.billingCountry ?? "India",
+    legalName: outlet.billingProfile?.legalName ?? null,
+    gstin: outlet.billingProfile?.gstin ?? null,
+    billingAddress1: outlet.billingProfile?.addressLine1 ?? null,
+    billingAddress2: outlet.billingProfile?.addressLine2 ?? null,
+    billingCity: outlet.billingProfile?.city ?? null,
+    billingState: outlet.billingProfile?.state ?? null,
+    billingPincode: outlet.billingProfile?.pincode ?? null,
+    billingCountry: outlet.billingProfile?.country ?? "India",
+    billingProfile: outlet.billingProfile ?? null,
   };
+}
+
+const billingProfileInclude = {
+  billingProfile: {
+    select: {
+      id: true,
+      legalName: true,
+      gstin: true,
+      addressLine1: true,
+      addressLine2: true,
+      city: true,
+      state: true,
+      stateCode: true,
+      pincode: true,
+      country: true,
+      isActive: true,
+    },
+  },
+} as const;
+
+async function assertOutletBillingProfile(
+  prisma: typeof import("../../infra/db/prisma").prisma,
+  billingProfileId: string | null | undefined,
+) {
+  if (!billingProfileId) return;
+  const profile = await prisma.billingProfile.findUnique({ where: { id: billingProfileId } });
+  if (!profile || profile.profileType !== "outlet" || !profile.isActive) {
+    throw apiError("BAD_REQUEST", "Outlet billing profile must be active and have type outlet");
+  }
 }
 
 export const outletsRouter = createTRPCRouter({
@@ -126,34 +170,22 @@ export const outletsRouter = createTRPCRouter({
     .input(listOutletsInputSchema)
     .output(z.object({ items: z.array(outletSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
-      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
-      const hasGlobalOutletAccess = isSuperAdmin || hasInternalSalesAccess;
-      const isWarehouseScoped = !hasGlobalOutletAccess && !linkedOutletId && !!ctx.managedWarehouseId;
-      if (!hasGlobalOutletAccess && !linkedOutletId && !isWarehouseScoped) {
-        throw apiError("FORBIDDEN", "No safe outlet scope available");
-      }
+      const cursor = decodeCursor(input.cursor);
+      const { linkedOutletId, hasGlobalAccess: hasGlobalOutletAccess, isWarehouseScoped } =
+        resolveFinancialScope(ctx, { includeInternalSales: true, errorMessage: "No safe outlet scope available" });
 
-      const where: Prisma.OutletWhereInput = {
-        warehouseId: input.warehouseId,
-        isActive: input.isActive,
-        OR: input.q
-          ? [
-              { outletCode: { contains: input.q, mode: "insensitive" } },
-              { name: { contains: input.q, mode: "insensitive" } },
-              { ownerName: { contains: input.q, mode: "insensitive" } }
-            ]
-          : undefined,
-        ...(linkedOutletId && !hasGlobalOutletAccess ? { id: linkedOutletId } : {}),
-        ...(isWarehouseScoped ? { warehouseId: ctx.managedWarehouseId } : {}),
-        // TODO(batch-08): switch to outlet.orgId/warehouse.orgId once org columns land.
-      };
       const outlets = await ctx.prisma.outlet.findMany({
-        where,
+        where: {
+          isActive: input.isActive,
+          ...(linkedOutletId && !hasGlobalOutletAccess ? { id: linkedOutletId } : {}),
+          ...(isWarehouseScoped ? { warehouseId: ctx.managedWarehouseId } : input.warehouseId ? { warehouseId: input.warehouseId } : {}),
+          AND: [
+            ...(input.q ? [{ OR: [{ outletCode: { contains: input.q, mode: "insensitive" as const } }, { name: { contains: input.q, mode: "insensitive" as const } }, { ownerName: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+          ],
+        },
+        include: billingProfileInclude,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
         take: input.limit + 1
       });
       const outletIds = outlets.map((o) => o.id);
@@ -176,7 +208,7 @@ export const outletsRouter = createTRPCRouter({
             outstandingBalance: outstandingByOutletId.get(outlet.id) ?? new Prisma.Decimal(0),
           }),
         ),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 
@@ -184,9 +216,9 @@ export const outletsRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(outletSchema)
     .query(async ({ ctx, input }) => {
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const linkedOutletId = findActorLinkedOutletId(ctx);
       const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasInternalSalesAccess = actorHasInternalSalesOutletAccess(ctx);
       const hasGlobalOutletAccess = isSuperAdmin || hasInternalSalesAccess;
 
       if (linkedOutletId && !hasGlobalOutletAccess && linkedOutletId !== input.id) {
@@ -204,6 +236,7 @@ export const outletsRouter = createTRPCRouter({
           ...(isWarehouseScoped ? { warehouseId: ctx.managedWarehouseId } : {}),
           // TODO(batch-08): replace warehouse fallback with outlet.orgId/warehouse.orgId.
         },
+        include: billingProfileInclude,
       });
       if (!outlet) {
         throw apiError("NOT_FOUND", "Outlet not found");
@@ -229,27 +262,22 @@ export const outletsRouter = createTRPCRouter({
         throw apiError("BAD_REQUEST", "Invalid warehouseId");
       }
     }
+    await assertOutletBillingProfile(ctx.prisma, input.billingProfileId);
 
     const outlet = await ctx.prisma.outlet.create({
       data: {
         outletCode: input.outletCode,
         userId: input.userId,
         warehouseId: input.warehouseId,
+        billingProfileId: input.billingProfileId,
         name: input.name,
         ownerName: input.ownerName,
         phone: input.phone,
         address: input.address,
         creditLimit: input.creditLimit,
         isActive: input.isActive,
-        legalName: input.legalName,
-        gstin: input.gstin,
-        billingAddress1: input.billingAddress1,
-        billingAddress2: input.billingAddress2,
-        billingCity: input.billingCity,
-        billingState: input.billingState,
-        billingPincode: input.billingPincode,
-        billingCountry: input.billingCountry,
-      }
+      },
+      include: billingProfileInclude,
     });
     return toOutlet(outlet);
   }),
@@ -265,27 +293,22 @@ export const outletsRouter = createTRPCRouter({
         throw apiError("BAD_REQUEST", "Invalid warehouseId");
       }
     }
+    await assertOutletBillingProfile(ctx.prisma, input.billingProfileId);
 
     const outlet = await ctx.prisma.outlet.update({
       where: { id: input.id },
       data: {
         userId: input.userId,
         warehouseId: input.warehouseId,
+        billingProfileId: input.billingProfileId,
         name: input.name,
         ownerName: input.ownerName,
         phone: input.phone,
         address: input.address,
         creditLimit: input.creditLimit,
         isActive: input.isActive,
-        legalName: input.legalName,
-        gstin: input.gstin,
-        billingAddress1: input.billingAddress1,
-        billingAddress2: input.billingAddress2,
-        billingCity: input.billingCity,
-        billingState: input.billingState,
-        billingPincode: input.billingPincode,
-        billingCountry: input.billingCountry,
-      }
+      },
+      include: billingProfileInclude,
     });
     return toOutlet(outlet);
   }),
@@ -298,18 +321,13 @@ export const outletsRouter = createTRPCRouter({
       if (!existing) {
         throw apiError("NOT_FOUND", "Outlet not found");
       }
+      await assertOutletBillingProfile(ctx.prisma, input.billingProfileId);
       const outlet = await ctx.prisma.outlet.update({
         where: { id: input.id },
         data: {
-          legalName: input.legalName,
-          gstin: input.gstin,
-          billingAddress1: input.billingAddress1,
-          billingAddress2: input.billingAddress2,
-          billingCity: input.billingCity,
-          billingState: input.billingState,
-          billingPincode: input.billingPincode,
-          billingCountry: input.billingCountry,
-        }
+          billingProfileId: input.billingProfileId,
+        },
+        include: billingProfileInclude,
       });
       return toOutlet(outlet);
     }),

@@ -60,22 +60,24 @@ export const categoriesRouter = createTRPCRouter({
     .input(listCategoriesInputSchema)
     .output(z.object({ items: z.array(categorySchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const categories = await ctx.prisma.category.findMany({
         where: {
           brandId: input.brandId,
           isActive: input.isActive,
-          OR: input.q ? [{ name: { contains: input.q, mode: "insensitive" } }] : undefined
+          AND: [
+            ...(input.q ? [{ OR: [{ name: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+          ],
         },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1
       });
       const hasMore = categories.length > input.limit;
       const pageItems = hasMore ? categories.slice(0, input.limit) : categories;
       return {
         items: pageItems.map(toCategory),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 

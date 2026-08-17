@@ -1,0 +1,19 @@
+import { useEffect, useState } from 'react'
+
+export function OfflineNotice() {
+  const [online, setOnline] = useState(navigator.onLine)
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+  return online ? null : (
+    <div className="offline-notice" role="status">
+      You are offline. This portal needs a connection to save or refresh complaints.
+    </div>
+  )
+}

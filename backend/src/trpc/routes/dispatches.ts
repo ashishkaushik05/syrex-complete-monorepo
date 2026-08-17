@@ -193,16 +193,16 @@ export const dispatchesRouter = createTRPCRouter({
     )
     .output(z.object({ items: z.array(dispatchSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const linkedOutletId = findActorLinkedOutletId(ctx);
       const admin = isAdmin(ctx);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasInternalSalesAccess = actorHasInternalSalesOutletAccess(ctx);
       const hasGlobalDispatchAccess = admin || hasInternalSalesAccess;
       const warehouseScoped = !hasGlobalDispatchAccess && !linkedOutletId && !!ctx.managedWarehouseId;
       if (!hasGlobalDispatchAccess && !linkedOutletId && !warehouseScoped) {
         throw apiError("FORBIDDEN", "No safe dispatch scope available");
       }
 
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const dispatchAndClauses: Prisma.DispatchWhereInput[] = [];
       if (input.orderId) {
         dispatchAndClauses.push({
@@ -212,6 +212,11 @@ export const dispatchesRouter = createTRPCRouter({
       if (linkedOutletId && !hasGlobalDispatchAccess) {
         dispatchAndClauses.push({
           lines: { some: { orderLine: { order: { outletId: linkedOutletId } } } },
+        });
+      }
+      if (cursor) {
+        dispatchAndClauses.push({
+          OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }],
         });
       }
       const rows = await ctx.prisma.dispatch.findMany({
@@ -238,7 +243,6 @@ export const dispatchesRouter = createTRPCRouter({
           }
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
         take: input.limit + 1
       });
 
@@ -247,7 +251,7 @@ export const dispatchesRouter = createTRPCRouter({
 
       return {
         items: pageItems.map(toDispatchItem),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 
@@ -255,9 +259,9 @@ export const dispatchesRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(dispatchSchema)
     .query(async ({ ctx, input }) => {
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const linkedOutletId = findActorLinkedOutletId(ctx);
       const admin = isAdmin(ctx);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasInternalSalesAccess = actorHasInternalSalesOutletAccess(ctx);
       const hasGlobalDispatchAccess = admin || hasInternalSalesAccess;
       const warehouseScoped = !hasGlobalDispatchAccess && !linkedOutletId && !!ctx.managedWarehouseId;
       if (!hasGlobalDispatchAccess && !linkedOutletId && !warehouseScoped) {
@@ -302,9 +306,9 @@ export const dispatchesRouter = createTRPCRouter({
     .input(z.object({ dispatchId: z.string().uuid() }))
     .output(z.array(timelineEventSchema))
     .query(async ({ ctx, input }) => {
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const linkedOutletId = findActorLinkedOutletId(ctx);
       const admin = isAdmin(ctx);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+      const hasInternalSalesAccess = actorHasInternalSalesOutletAccess(ctx);
       const hasGlobalDispatchAccess = admin || hasInternalSalesAccess;
       const warehouseScoped = !hasGlobalDispatchAccess && !linkedOutletId && !!ctx.managedWarehouseId;
       if (!hasGlobalDispatchAccess && !linkedOutletId && !warehouseScoped) {
@@ -579,7 +583,7 @@ export const dispatchesRouter = createTRPCRouter({
         throw apiError("CONFLICT", "Dispatch is already delivered");
       }
 
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
+      const linkedOutletId = findActorLinkedOutletId(ctx);
 
       if (linkedOutletId) {
         // Outlet user — must own at least one order in this dispatch

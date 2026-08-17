@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { createTRPCRouter, perm } from "../trpc";
+import { createTRPCRouter, internalPerm } from "../trpc";
 import { P } from "../../rbac/catalog";
-import { ensureSerialIndex, findSerialLegacyDispatchRows, normalizeSerial } from "./service-shared";
+import { FINAL_STATUSES, findSerialLegacyDispatchRows, normalizeSerial } from "./service-shared";
 
 const serialChainSchema = z.object({
   orderId: z.string(),
@@ -64,7 +64,7 @@ const serialResolveSchema = z.object({
 });
 
 export const serviceSerialsRouter = createTRPCRouter({
-  resolve: perm(P.service.read)
+  resolve: internalPerm(P.service.read)
     .input(
       z.object({
         serial: z.string().min(2),
@@ -73,7 +73,6 @@ export const serviceSerialsRouter = createTRPCRouter({
     .output(serialResolveSchema)
     .query(async ({ ctx, input }) => {
       const normalizedSerial = normalizeSerial(input.serial);
-      const serialIndex = await ensureSerialIndex(ctx, input.serial);
 
       const [legacyRows, complaintLinks, events, resolvedIndex] = await Promise.all([
         findSerialLegacyDispatchRows(ctx, normalizedSerial),
@@ -149,7 +148,11 @@ export const serviceSerialsRouter = createTRPCRouter({
       const replacementConflictIds = Array.from(
         new Set(
           complaintLinks
-            .filter((line) => line.normalizedReplacementSerial === normalizedSerial)
+            .filter(
+              (line) =>
+                line.normalizedReplacementSerial === normalizedSerial &&
+                !FINAL_STATUSES.has(line.complaint.status),
+            )
             .map((line) => line.complaintId),
         ),
       );
@@ -203,7 +206,7 @@ export const serviceSerialsRouter = createTRPCRouter({
       };
     }),
 
-  replacementEligibility: perm(P.service.read)
+  replacementEligibility: internalPerm(P.service.read)
     .input(
       z.object({
         serial: z.string().min(2),
@@ -220,7 +223,10 @@ export const serviceSerialsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const normalizedSerial = normalizeSerial(input.serial);
       const linked = await ctx.prisma.serviceComplaintLine.findMany({
-        where: { normalizedReplacementSerial: normalizedSerial },
+        where: {
+          normalizedReplacementSerial: normalizedSerial,
+          complaint: { status: { notIn: [...FINAL_STATUSES] } },
+        },
         include: {
           complaint: {
             select: {
@@ -233,7 +239,7 @@ export const serviceSerialsRouter = createTRPCRouter({
 
       const reasons: string[] = [];
       if (linked.length > 0) {
-        reasons.push("Serial already assigned as replacement in service complaint flow");
+        reasons.push("Serial already assigned as replacement in an open service complaint");
       }
 
       return {

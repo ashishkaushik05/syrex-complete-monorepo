@@ -5,6 +5,322 @@ import { apiError } from "../error";
 import { SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import { actorHasInternalSalesOutletAccess } from "./outlet-access";
+import { postInvoiceCreated } from "../../accounts/posting";
+
+// ---------------------------------------------------------------------------
+// Charge / discount helpers (shared by order creation and auto-invoice)
+// ---------------------------------------------------------------------------
+
+export type ChargeType = "percentage" | "fixed";
+
+export type ChargeDefinition = {
+  taxChargeId: string | null;
+  name: string;
+  type: ChargeType;
+  rate: Prisma.Decimal;
+  displayOrder: number;
+};
+
+export function parseDecimal(value: unknown): Prisma.Decimal | null {
+  try {
+    if (typeof value === "string" || typeof value === "number") {
+      return new Prisma.Decimal(value);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function computeDiscountAmount(
+  subtotal: Prisma.Decimal,
+  discountType: ChargeType | null,
+  discountRate: Prisma.Decimal,
+) {
+  if (subtotal.lte(0) || discountRate.lte(0) || !discountType) {
+    return new Prisma.Decimal(0);
+  }
+  if (discountType === "percentage") {
+    const rate = Prisma.Decimal.min(discountRate, new Prisma.Decimal(100));
+    return subtotal.mul(rate).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  }
+  return Prisma.Decimal.min(subtotal, discountRate).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+}
+
+export function computeChargeRows(
+  taxableSubtotal: Prisma.Decimal,
+  charges: ChargeDefinition[],
+) {
+  return charges.map((c) => {
+    const amount =
+      c.type === "percentage"
+        ? taxableSubtotal.mul(c.rate).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+        : c.rate.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+    return {
+      taxChargeId: c.taxChargeId,
+      name: c.name,
+      type: c.type,
+      rate: c.rate,
+      amount,
+      displayOrder: c.displayOrder,
+    };
+  });
+}
+
+export function parseChargeSnapshot(snapshot: Prisma.JsonValue | null): ChargeDefinition[] {
+  if (!snapshot || !Array.isArray(snapshot)) return [];
+  const rows: ChargeDefinition[] = [];
+  for (const item of snapshot) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    const type = row.type === "percentage" || row.type === "fixed" ? row.type : null;
+    const name = typeof row.name === "string" ? row.name : null;
+    const displayOrder =
+      typeof row.displayOrder === "number" && Number.isInteger(row.displayOrder)
+        ? row.displayOrder
+        : null;
+    const rate = parseDecimal(row.rate);
+    if (!type || !name || displayOrder === null || !rate) continue;
+    const taxChargeId = typeof row.taxChargeId === "string" ? row.taxChargeId : null;
+    rows.push({ taxChargeId, name, type, rate, displayOrder });
+  }
+  return rows.sort((a, b) => a.displayOrder - b.displayOrder);
+}
+
+// ---------------------------------------------------------------------------
+// Generic document sequence number allocator (orders + invoices)
+// ---------------------------------------------------------------------------
+
+type SequenceSpec = {
+  prefix: string;
+  upsertSequence: () => Promise<{ lastSequence: number }>;
+  findByNumber: (number: string) => Promise<{ id: string } | null>;
+  findLastByPrefix: () => Promise<{ seq: number } | null>;
+  updateSequence: (seq: number) => Promise<void>;
+};
+
+async function nextDocumentNumber(spec: SequenceSpec): Promise<string> {
+  const row = await spec.upsertSequence();
+  let sequence = row.lastSequence;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const number = `${spec.prefix}${String(sequence).padStart(6, "0")}`;
+    const existing = await spec.findByNumber(number);
+    if (!existing) return number;
+
+    const last = await spec.findLastByPrefix();
+    const maxSeq = last ? last.seq : sequence;
+    sequence = maxSeq + 1;
+    await spec.updateSequence(sequence);
+  }
+
+  throw apiError("CONFLICT", "Could not allocate a unique document number");
+}
+
+export async function nextOrderNumber(tx: Prisma.TransactionClient, now: Date): Promise<string> {
+  const year = now.getUTCFullYear();
+  const prefix = `SO-${year}-`;
+  return nextDocumentNumber({
+    prefix,
+    upsertSequence: () =>
+      tx.orderSequence.upsert({
+        where: { year },
+        create: { year, lastSequence: 1 },
+        update: { lastSequence: { increment: 1 } },
+        select: { lastSequence: true },
+      }),
+    findByNumber: (n) =>
+      tx.saleOrder.findUnique({ where: { orderNumber: n }, select: { id: true } }),
+    findLastByPrefix: async () => {
+      const row = await tx.saleOrder.findFirst({
+        where: { orderNumber: { startsWith: prefix } },
+        orderBy: { orderNumber: "desc" },
+        select: { orderNumber: true },
+      });
+      if (!row) return null;
+      const seq = Number.parseInt(row.orderNumber.slice(prefix.length), 10);
+      return Number.isNaN(seq) ? null : { seq };
+    },
+    updateSequence: async (seq) => {
+      await tx.orderSequence.update({ where: { year }, data: { lastSequence: seq } });
+    },
+  });
+}
+
+export async function nextInvoiceNumber(tx: Prisma.TransactionClient, now: Date): Promise<string> {
+  const year = now.getUTCFullYear();
+  const prefix = `INV-${year}-`;
+  return nextDocumentNumber({
+    prefix,
+    upsertSequence: () =>
+      tx.invoiceSequence.upsert({
+        where: { year },
+        create: { year, lastSequence: 1 },
+        update: { lastSequence: { increment: 1 } },
+        select: { lastSequence: true },
+      }),
+    findByNumber: (n) =>
+      tx.invoice.findUnique({ where: { invoiceNumber: n }, select: { id: true } }),
+    findLastByPrefix: async () => {
+      const row = await tx.invoice.findFirst({
+        where: { invoiceNumber: { startsWith: prefix } },
+        orderBy: { invoiceNumber: "desc" },
+        select: { invoiceNumber: true },
+      });
+      if (!row) return null;
+      const seq = Number.parseInt(row.invoiceNumber.slice(prefix.length), 10);
+      return Number.isNaN(seq) ? null : { seq };
+    },
+    updateSequence: async (seq) => {
+      await tx.invoiceSequence.update({ where: { year }, data: { lastSequence: seq } });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Auto-invoice creation on order approval
+// ---------------------------------------------------------------------------
+
+export async function createAutoInvoice(
+  tx: Prisma.TransactionClient,
+  order: {
+    id: string;
+    outletId: string;
+    suppressAutoInvoice: boolean;
+    orderType: string;
+    lines: Array<{
+      productId: string;
+      sku: string;
+      qtyOrdered: number;
+      unitPrice: Prisma.Decimal;
+      lineTotal: Prisma.Decimal;
+    }>;
+    subtotalValue: Prisma.Decimal;
+    discountType: "percentage" | "fixed" | null;
+    discountRate: Prisma.Decimal;
+    taxSnapshot: Prisma.JsonValue | null;
+    paymentTermsDays: number;
+  },
+  now: Date,
+): Promise<void> {
+  if (order.suppressAutoInvoice || order.orderType === "warranty_replacement") {
+    return;
+  }
+
+  const existingInvoice = await tx.invoice.findUnique({
+    where: { orderId: order.id },
+  });
+  if (existingInvoice) {
+    return;
+  }
+
+  const invoiceNumber = await nextInvoiceNumber(tx, now);
+
+  const lineSubtotal = order.lines.reduce(
+    (sum, line) => sum.add(line.lineTotal),
+    new Prisma.Decimal(0),
+  );
+  const subtotal =
+    order.subtotalValue.gt(0) || lineSubtotal.eq(0)
+      ? order.subtotalValue
+      : lineSubtotal;
+
+  const discountAmount = computeDiscountAmount(subtotal, order.discountType, order.discountRate);
+  const taxableSubtotal = Prisma.Decimal.max(new Prisma.Decimal(0), subtotal.sub(discountAmount));
+
+  // Use the snapshot captured at order-creation time so that tax-rate changes
+  // after the order was placed don't silently alter the invoice amount.
+  // taxSnapshot === null means a legacy order created before snapshots were
+  // introduced — fall back to live charges for those only.
+  const rawSnapshot = order.taxSnapshot;
+  let chargeDefs = parseChargeSnapshot(rawSnapshot);
+  if (rawSnapshot === null) {
+    const activeCharges = await tx.taxCharge.findMany({
+      where: { isActive: true },
+      orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+    });
+    chargeDefs = activeCharges.map((c) => ({
+      taxChargeId: c.id,
+      name: c.name,
+      type: c.type as ChargeType,
+      rate: c.rate,
+      displayOrder: c.displayOrder,
+    }));
+  }
+
+  const chargesData = computeChargeRows(taxableSubtotal, chargeDefs);
+  const chargesTotal = chargesData.reduce(
+    (sum, c) => sum.add(c.amount),
+    new Prisma.Decimal(0),
+  );
+  const total = taxableSubtotal.add(chargesTotal);
+
+  const dueDate = new Date(now);
+  dueDate.setUTCDate(dueDate.getUTCDate() + order.paymentTermsDays);
+
+  const taxSnapshot = chargeDefs.map((c) => ({
+    taxChargeId: c.taxChargeId,
+    name: c.name,
+    type: c.type,
+    rate: c.rate.toFixed(2),
+    displayOrder: c.displayOrder,
+  }));
+
+  const invoice = await tx.invoice.create({
+    data: {
+      invoiceNumber,
+      orderId: order.id,
+      outletId: order.outletId,
+      invoiceDate: now,
+      dueDate,
+      subtotal,
+      discountType: order.discountType,
+      discountRate: order.discountRate,
+      discountAmount,
+      taxSnapshot,
+      total,
+      amountPaid: new Prisma.Decimal(0),
+      amountDue: total,
+      lines: {
+        create: order.lines.map((line) => ({
+          productId: line.productId,
+          sku: line.sku,
+          qty: line.qtyOrdered,
+          unitPrice: line.unitPrice,
+          lineTotal: line.lineTotal,
+        })),
+      },
+      charges: {
+        create: chargesData,
+      },
+    },
+    select: { id: true },
+  });
+
+  // Post the double-entry journal for this invoice:
+  //   Dr Debtors (outlet) · Cr Sales (taxable subtotal) · Cr GST Output (charges, split by place-of-supply)
+  await postInvoiceCreated(tx, {
+    invoiceId: invoice.id,
+    invoiceNumber,
+    outletId: order.outletId,
+    invoiceDate: now,
+    sales: taxableSubtotal,
+    gstTotal: chargesTotal,
+    total,
+  });
+
+  const outstanding = await tx.invoice.aggregate({
+    where: { outletId: order.outletId },
+    _sum: { amountDue: true },
+  });
+
+  await tx.outlet.update({
+    where: { id: order.outletId },
+    data: {
+      outstandingBalance: outstanding._sum.amountDue ?? new Prisma.Decimal(0),
+    },
+  });
+}
 
 export const orderLineSchema = z.object({
   id: z.string(),
@@ -243,10 +559,10 @@ export async function queryOrderList(
   items: Array<z.infer<typeof orderSchema>>;
   nextCursor: string | null;
 }> {
-  const offset = decodeCursor(input.cursor) ?? 0;
+  const cursor = decodeCursor(input.cursor);
   const effectiveOutletId = options?.forcedOutletId ?? input.outletId;
   const isAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-  const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
+  const hasInternalSalesAccess = actorHasInternalSalesOutletAccess(ctx);
   // Outlet-scoped calls have already passed assertOutletAccess; skip warehouse filter.
   const warehouseFilter = isAdmin || hasInternalSalesAccess || effectiveOutletId
     ? {}
@@ -262,19 +578,15 @@ export async function queryOrderList(
       status: input.status,
       orderType: input.orderType,
       sourceComplaintId: input.sourceComplaintId,
-      OR: input.q
-        ? [
-            { orderNumber: { contains: input.q, mode: "insensitive" } },
-            { notes: { contains: input.q, mode: "insensitive" } },
-            { deliveryAddress: { contains: input.q, mode: "insensitive" } },
-          ]
-        : undefined,
+      AND: [
+        ...(input.q ? [{ OR: [{ orderNumber: { contains: input.q, mode: "insensitive" as const } }, { notes: { contains: input.q, mode: "insensitive" as const } }, { deliveryAddress: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+        ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+      ],
     },
     include: {
       lines: true,
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    skip: offset,
     take: input.limit + 1,
   });
 
@@ -283,7 +595,7 @@ export async function queryOrderList(
 
   return {
     items: pageItems.map((item) => serializeOrder(item)),
-    nextCursor: hasMore ? encodeCursor(offset + input.limit) : null,
+    nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null,
   };
 }
 

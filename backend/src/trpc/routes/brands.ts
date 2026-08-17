@@ -51,21 +51,23 @@ export const brandsRouter = createTRPCRouter({
     .input(listBrandsInputSchema)
     .output(z.object({ items: z.array(brandSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const brands = await ctx.prisma.brand.findMany({
         where: {
           isActive: input.isActive,
-          OR: input.q ? [{ name: { contains: input.q, mode: "insensitive" } }] : undefined
+          AND: [
+            ...(input.q ? [{ OR: [{ name: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+          ],
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
         take: input.limit + 1
       });
       const hasMore = brands.length > input.limit;
       const pageItems = hasMore ? brands.slice(0, input.limit) : brands;
       return {
         items: pageItems.map(toBrand),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 

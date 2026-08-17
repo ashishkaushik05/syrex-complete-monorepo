@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet'
 import L from 'leaflet'
-import { ArrowLeft, MapPin, Navigation, Radio, Route, Timer } from 'lucide-react'
+import { ArrowLeft, MapPin, Navigation, Pause, Play, Radio, Route, Timer } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -148,14 +148,40 @@ export function FieldSenseShiftDetailPage() {
     enabled: !!shiftId,
   })
 
+  const [replayIndex, setReplayIndex] = useState<number | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+
   const trail = trailQuery.data
   const visits = visitsQuery.data ?? []
   const stops = stopsQuery.data ?? []
 
-  const mapPoints = trail?.points ?? []
+  const allPoints = trail?.points ?? []
+  const mapPoints = replayIndex !== null ? allPoints.slice(0, replayIndex + 1) : allPoints
   const defaultCenter: [number, number] = [20.5937, 78.9629]
 
   const isLoading = trailQuery.isLoading || visitsQuery.isLoading || stopsQuery.isLoading
+
+  // Auto-play effect
+  useEffect(() => {
+    if (!isPlaying) return
+    const points = trail?.points ?? []
+    if (points.length === 0) { setIsPlaying(false); return }
+    const current = replayIndex ?? points.length - 1
+    if (current >= points.length - 1) { setIsPlaying(false); setReplayIndex(null); return }
+    const timer = setTimeout(() => setReplayIndex((i) => Math.min((i ?? 0) + 1, points.length - 1)), 100)
+    return () => clearTimeout(timer)
+  }, [isPlaying, replayIndex, trail])
+
+  function togglePlay() {
+    if (!isPlaying) {
+      // If at end or no index, restart from beginning
+      const points = trail?.points ?? []
+      if (replayIndex === null || replayIndex >= points.length - 1) {
+        setReplayIndex(0)
+      }
+    }
+    setIsPlaying((p) => !p)
+  }
 
   return (
     <div className="space-y-5">
@@ -330,10 +356,56 @@ export function FieldSenseShiftDetailPage() {
                   </Popup>
                 </CircleMarker>
               ))}
+              {/* Playhead marker */}
+              {replayIndex !== null && allPoints[replayIndex] && (
+                <CircleMarker
+                  center={[allPoints[replayIndex].lat, allPoints[replayIndex].lng]}
+                  radius={10}
+                  pathOptions={{ fillColor: '#f97316', fillOpacity: 1, color: 'white', weight: 3 }}
+                />
+              )}
             </MapContainer>
           )}
         </div>
       </Card>
+
+      {/* Replay controls */}
+      {trail && trail.points.length > 0 && (
+        <Card>
+          <CardContent className="flex items-center gap-3 p-3">
+            <button
+              onClick={togglePlay}
+              className="rounded p-1 text-slate-600 hover:bg-slate-100"
+            >
+              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={trail.points.length - 1}
+              value={replayIndex ?? trail.points.length - 1}
+              onChange={(e) => {
+                setIsPlaying(false)
+                setReplayIndex(Number(e.target.value))
+              }}
+              className="flex-1"
+            />
+            <span className="w-20 text-right text-xs tabular-nums text-slate-500">
+              {replayIndex !== null
+                ? fmtTime(trail.points[replayIndex].recordedAt)
+                : (trail.startedAt ? fmtTime(trail.startedAt) : '—')}
+            </span>
+            {replayIndex !== null && (
+              <button
+                onClick={() => { setReplayIndex(null); setIsPlaying(false) }}
+                className="text-xs text-slate-500 hover:text-slate-800"
+              >
+                Reset
+              </button>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Visits table */}
       <Card>

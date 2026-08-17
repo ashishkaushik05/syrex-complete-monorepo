@@ -9,14 +9,21 @@ export function apiErrorMessage(error: unknown, fallback: string) {
     return error
   }
 
-  if (!axios.isAxiosError(error)) {
-    return fallback
+  const responseError = error as {
+    response?: { status?: number; data?: { error?: { message?: string } } }
   }
-
-  const message = error.response?.data?.error?.message
+  const message = responseError?.response?.data?.error?.message
   if (typeof message === 'string' && message.trim().length > 0) {
     return message
   }
 
+  const status = responseError?.response?.status
+  if (status === 401) return 'Your session expired. Sign in again to continue.'
+  if (status === 403) return 'You do not have permission to perform this action.'
+  if (status === 404) return 'This record is unavailable or is no longer assigned to you.'
+  if (status === 409) return 'This record changed. Refresh it and try the action again.'
+  if (typeof status === 'number' && status >= 500) return 'The service is temporarily unavailable. Please retry.'
+
+  if (!axios.isAxiosError(error)) return fallback
   return fallback
 }

@@ -54,7 +54,7 @@ function createCaller(options: {
       orgId: null
     },
     prisma,
-    permissions: [],
+    permissions: options.actorPermissions,
     managedWarehouseId: null,
     serviceClientId: null,
     serviceClientSecret: null,

@@ -149,7 +149,7 @@ async function inferOrgIdForShiftStart(
     throw apiError("BAD_REQUEST", "orgId required: multiple organizations detected");
   }
   if (process.env.DEFAULT_ORG_ID) return process.env.DEFAULT_ORG_ID;
-  throw apiError("BAD_REQUEST", "orgId required: send x-org-id or orgId");
+  throw apiError("BAD_REQUEST", "orgId required: provide orgId in request input");
 }
 
 function parseClientDate(value: string, fieldName: string) {
@@ -170,7 +170,7 @@ export const fieldShiftsRouter = createTRPCRouter({
       if (!orgId) {
         throw apiError(
           "BAD_REQUEST",
-          "orgId required: provide x-org-id or orgId in request input"
+          "orgId required: provide orgId in request input"
         );
       }
 
@@ -214,6 +214,7 @@ export const fieldShiftsRouter = createTRPCRouter({
     .output(syncShiftSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      const t0 = Date.now();
       const orgId =
         input.orgId ??
         ctx.actor.orgId ??
@@ -289,6 +290,18 @@ export const fieldShiftsRouter = createTRPCRouter({
         return { shift, syncStatus: "created" as const };
       });
 
+      const status = syncStatus;
+      console.log(JSON.stringify({
+        event: 'field.syncStart',
+        orgId: syncedShift.orgId,
+        agentId,
+        shiftId: syncedShift.id,
+        clientShiftId: input.clientShiftId,
+        deviceId: input.deviceId ?? null,
+        status,
+        durationMs: Date.now() - t0,
+      }));
+
       return {
         shift: toShift(syncedShift),
         serverShiftId: syncedShift.id,
@@ -333,6 +346,7 @@ export const fieldShiftsRouter = createTRPCRouter({
     .output(syncShiftSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      const t0 = Date.now();
       const orgId =
         input.orgId ??
         ctx.actor.orgId ??
@@ -376,6 +390,15 @@ export const fieldShiftsRouter = createTRPCRouter({
       });
       // Batch 06: release the in-memory ingest rate-limit bucket.
       resetIngestBucket(agentId, shift.id);
+      console.log(JSON.stringify({
+        event: 'field.syncEnd',
+        orgId: updated.orgId,
+        agentId,
+        shiftId: updated.id,
+        clientShiftId: input.clientShiftId,
+        deviceId: input.deviceId ?? null,
+        durationMs: Date.now() - t0,
+      }));
       return {
         shift: toShift(updated),
         serverShiftId: updated.id,

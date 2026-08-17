@@ -347,6 +347,7 @@ export function RolesPage() {
   const [createSelectedPermissions, setCreateSelectedPermissions] = useState<Set<string>>(new Set())
   const [createPermissionSearch, setCreatePermissionSearch] = useState('')
   const [message, setMessage] = useState<string | null>(null)
+  const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null)
 
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null)
@@ -444,6 +445,22 @@ export function RolesPage() {
       await queryClient.invalidateQueries({ queryKey: ['roles-page', 'roles'] })
       await queryClient.invalidateQueries({ queryKey: ['roles-page', 'permissions-catalog'] })
       await queryClient.invalidateQueries({ queryKey: ['roles-list'] })
+    },
+  })
+
+  const deleteRoleMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/roles/${id}`)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['roles-page', 'roles'] })
+      await queryClient.invalidateQueries({ queryKey: ['roles-list'] })
+      setDeletingRoleId(null)
+      setMessage('Role deleted.')
+    },
+    onError: (error: any) => {
+      setDeletingRoleId(null)
+      setMessage(error?.response?.data?.error?.message ?? 'Unable to delete role.')
     },
   })
 
@@ -597,9 +614,30 @@ export function RolesPage() {
                             Edit
                           </Button>
                           {!role.isSystem ? (
-                            <Button size="sm" variant="destructive" disabled title="Not available in Phase 1 backend">
-                              Delete
-                            </Button>
+                            deletingRoleId === role.id ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => deleteRoleMutation.mutate(role.id)}
+                                  disabled={deleteRoleMutation.isPending}
+                                >
+                                  {deleteRoleMutation.isPending ? 'Deleting...' : 'Confirm'}
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => setDeletingRoleId(null)}>
+                                  Cancel
+                                </Button>
+                              </span>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-red-200 text-red-600 hover:bg-red-50"
+                                onClick={() => setDeletingRoleId(role.id)}
+                              >
+                                Delete
+                              </Button>
+                            )
                           ) : null}
                         </TableCell>
                       ) : null}

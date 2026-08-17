@@ -93,22 +93,22 @@ export const imagesRouter = createTRPCRouter({
     .input(listImagesInputSchema)
     .output(z.object({ items: z.array(imageSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const images = await ctx.prisma.image.findMany({
         where: {
           brandId: input.brandId,
           categoryId: input.categoryId,
-          productId: input.productId
+          productId: input.productId,
+          ...(cursor ? { OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] } : {}),
         },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1
       });
       const hasMore = images.length > input.limit;
       const pageItems = hasMore ? images.slice(0, input.limit) : images;
       return {
         items: pageItems.map(toImage),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 

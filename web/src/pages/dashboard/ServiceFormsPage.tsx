@@ -63,10 +63,18 @@ export function ServiceFormsPage() {
   const [newField, setNewField] = useState<NewField>(DEFAULT_FIELD)
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
-  // FP-022: state-controlled confirmation for disable
   const [confirmDisableId, setConfirmDisableId] = useState<string | null>(null)
-  // FP-021: error state for disable mutation
   const [disableError, setDisableError] = useState<string | null>(null)
+  // Edit template state
+  const [editTemplateOpen, setEditTemplateOpen] = useState(false)
+  const [editTemplateName, setEditTemplateName] = useState('')
+  const [editTemplateDesc, setEditTemplateDesc] = useState('')
+  const [editTemplateError, setEditTemplateError] = useState<string | null>(null)
+  // Edit field state
+  const [editingField, setEditingField] = useState<{ id: string; label: string; isRequired: boolean } | null>(null)
+  const [editFieldError, setEditFieldError] = useState<string | null>(null)
+  // Disable field confirm
+  const [confirmDisableFieldId, setConfirmDisableFieldId] = useState<string | null>(null)
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['service-form-templates-mgmt'] })
 
@@ -150,6 +158,42 @@ export function ServiceFormsPage() {
     onError: (err) => {
       setConfirmDisableId(null)
       setDisableError(apiErrorMessage(err, 'Failed to disable template'))
+    },
+  })
+
+  const updateTemplateMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedId) throw new Error('No template selected')
+      return api.patch(`/service/forms/templates/${selectedId}`, {
+        name: editTemplateName.trim() || undefined,
+        description: editTemplateDesc.trim() || null,
+      })
+    },
+    onSuccess: () => { invalidate(); setEditTemplateOpen(false); setEditTemplateError(null) },
+    onError: (err) => setEditTemplateError(apiErrorMessage(err, 'Failed to update template')),
+  })
+
+  const updateFieldMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedId || !editingField) throw new Error('No field selected')
+      return api.patch(`/service/forms/templates/${selectedId}/fields/${editingField.id}`, {
+        label: editingField.label.trim() || undefined,
+        isRequired: editingField.isRequired,
+      })
+    },
+    onSuccess: () => { invalidate(); setEditingField(null); setEditFieldError(null) },
+    onError: (err) => setEditFieldError(apiErrorMessage(err, 'Failed to update field')),
+  })
+
+  const disableFieldMutation = useMutation({
+    mutationFn: async (fieldId: string) => {
+      if (!selectedId) throw new Error('No template selected')
+      return api.post(`/service/forms/templates/${selectedId}/fields/${fieldId}/disable`, {})
+    },
+    onSuccess: () => { invalidate(); setConfirmDisableFieldId(null) },
+    onError: (err) => {
+      setConfirmDisableFieldId(null)
+      setDisableError(apiErrorMessage(err, 'Failed to disable field'))
     },
   })
 
@@ -249,23 +293,35 @@ export function ServiceFormsPage() {
                     <>
                       <Button type="button" size="sm" variant="outline" onClick={() => setPreviewOpen(true)} className="text-xs">Preview</Button>
                       {canManageTemplates && (
-                        <Button
-                          type="button" size="sm"
-                          onClick={() => { setNewField(DEFAULT_FIELD); setFieldError(null); setFieldOpen(true) }}
-                          className="bg-teal-600 hover:bg-teal-700 text-white text-xs"
-                        >
-                          + Field
-                        </Button>
-                      )}
-                      {canManageTemplates && (
-                        <Button
-                          type="button" size="sm" variant="outline"
-                          className="border-rose-300 text-rose-600 hover:bg-rose-50 text-xs"
-                          onClick={() => { setDisableError(null); setConfirmDisableId(selectedTemplate.id) }}
-                          disabled={disableMutation.isPending}
-                        >
-                          Disable
-                        </Button>
+                        <>
+                          <Button
+                            type="button" size="sm" variant="outline"
+                            className="text-xs"
+                            onClick={() => {
+                              setEditTemplateName(selectedTemplate.name)
+                              setEditTemplateDesc(selectedTemplate.description ?? '')
+                              setEditTemplateError(null)
+                              setEditTemplateOpen(true)
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            type="button" size="sm"
+                            onClick={() => { setNewField(DEFAULT_FIELD); setFieldError(null); setFieldOpen(true) }}
+                            className="bg-teal-600 hover:bg-teal-700 text-white text-xs"
+                          >
+                            + Field
+                          </Button>
+                          <Button
+                            type="button" size="sm" variant="outline"
+                            className="border-rose-300 text-rose-600 hover:bg-rose-50 text-xs"
+                            onClick={() => { setDisableError(null); setConfirmDisableId(selectedTemplate.id) }}
+                            disabled={disableMutation.isPending}
+                          >
+                            Disable
+                          </Button>
+                        </>
                       )}
                     </>
                   ) : (
@@ -319,6 +375,27 @@ export function ServiceFormsPage() {
                                 {ruleItems.map((r) => (
                                   <span key={r} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{r}</span>
                                 ))}
+                              </div>
+                            ) : null}
+                            {field.isActive && canManageTemplates ? (
+                              <div className="mt-2 flex gap-1.5">
+                                <Button
+                                  type="button" size="sm" variant="outline"
+                                  className="h-6 px-2 text-[11px]"
+                                  onClick={() => {
+                                    setEditingField({ id: field.id, label: field.label, isRequired: field.isRequired })
+                                    setEditFieldError(null)
+                                  }}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  type="button" size="sm" variant="outline"
+                                  className="h-6 px-2 text-[11px] border-rose-200 text-rose-600 hover:bg-rose-50"
+                                  onClick={() => { setDisableError(null); setConfirmDisableFieldId(field.id) }}
+                                >
+                                  Disable
+                                </Button>
                               </div>
                             ) : null}
                           </div>
@@ -504,7 +581,7 @@ export function ServiceFormsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* FP-022: React-controlled disable confirmation */}
+      {/* Disable template confirmation */}
       <ConfirmDialog
         open={Boolean(confirmDisableId)}
         onOpenChange={(open) => { if (!open) setConfirmDisableId(null) }}
@@ -514,6 +591,104 @@ export function ServiceFormsPage() {
         variant="destructive"
         onConfirm={() => { if (confirmDisableId) disableMutation.mutate(confirmDisableId) }}
         loading={disableMutation.isPending}
+      />
+
+      {/* Edit template dialog */}
+      <Dialog
+        open={editTemplateOpen}
+        onOpenChange={(o) => { setEditTemplateOpen(o); if (!o) setEditTemplateError(null) }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Edit Template — {selectedTemplate?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-3 pt-1">
+            <div className="space-y-1.5">
+              <Label>Template Name <span className="text-rose-500">*</span></Label>
+              <Input
+                value={editTemplateName}
+                onChange={(e) => setEditTemplateName(e.target.value)}
+                maxLength={200}
+                placeholder="Template name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Description <span className="text-slate-400 text-xs font-normal">(optional)</span></Label>
+              <textarea
+                className="min-h-[72px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 resize-y"
+                value={editTemplateDesc}
+                onChange={(e) => setEditTemplateDesc(e.target.value)}
+                maxLength={1000}
+                placeholder="What this form is used for…"
+              />
+            </div>
+            {editTemplateError ? <p className="text-sm text-rose-600">{editTemplateError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEditTemplateOpen(false)} disabled={updateTemplateMutation.isPending}>Cancel</Button>
+            <Button
+              type="button"
+              onClick={() => updateTemplateMutation.mutate()}
+              disabled={updateTemplateMutation.isPending || !editTemplateName.trim()}
+              className="bg-teal-600 hover:bg-teal-700 text-white"
+            >
+              {updateTemplateMutation.isPending ? 'Saving…' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit field dialog */}
+      <Dialog
+        open={Boolean(editingField)}
+        onOpenChange={(o) => { if (!o) { setEditingField(null); setEditFieldError(null) } }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Edit Field</DialogTitle></DialogHeader>
+          {editingField ? (
+            <div className="space-y-3 pt-1">
+              <div className="space-y-1.5">
+                <Label>Label <span className="text-rose-500">*</span></Label>
+                <Input
+                  value={editingField.label}
+                  onChange={(e) => setEditingField((f) => f && { ...f, label: e.target.value })}
+                  placeholder="Field label"
+                />
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editingField.isRequired}
+                  onChange={(e) => setEditingField((f) => f && { ...f, isRequired: e.target.checked })}
+                  className="h-4 w-4 rounded accent-teal-600"
+                />
+                <span className="text-sm text-slate-700">Required</span>
+              </label>
+              {editFieldError ? <p className="text-sm text-rose-600">{editFieldError}</p> : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEditingField(null)} disabled={updateFieldMutation.isPending}>Cancel</Button>
+            <Button
+              type="button"
+              onClick={() => updateFieldMutation.mutate()}
+              disabled={updateFieldMutation.isPending || !editingField?.label.trim()}
+              className="bg-teal-600 hover:bg-teal-700 text-white"
+            >
+              {updateFieldMutation.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disable field confirmation */}
+      <ConfirmDialog
+        open={Boolean(confirmDisableFieldId)}
+        onOpenChange={(open) => { if (!open) setConfirmDisableFieldId(null) }}
+        title="Disable Field"
+        description="This field will be hidden from new form submissions. Existing responses are preserved."
+        confirmLabel="Disable Field"
+        variant="destructive"
+        onConfirm={() => { if (confirmDisableFieldId) disableFieldMutation.mutate(confirmDisableFieldId) }}
+        loading={disableFieldMutation.isPending}
       />
     </>
   )

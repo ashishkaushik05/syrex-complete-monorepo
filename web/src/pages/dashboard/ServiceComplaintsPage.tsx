@@ -46,7 +46,7 @@ type SkuOption = {
   sku?: string | null
   isActive?: boolean
 }
-type SerialLine = { productId: string; serialNumber: string; notes: string }
+type SerialLine = { productId: string; sku: string; serialNumber: string; notes: string }
 
 const STATUS_TABS: Array<{ key: 'all' | ComplaintStatus; label: string }> = [
   { key: 'all',                  label: 'All'              },
@@ -96,12 +96,13 @@ export function ServiceComplaintsPage() {
     const timer = setTimeout(() => setQ(searchInput), 300)
     return () => clearTimeout(timer)
   }, [searchInput])
+  const [createIssueCategory, setCreateIssueCategory] = useState('')
   const [createTitle, setCreateTitle] = useState('')
   const [createDescription, setCreateDescription] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
   const [createOutletId, setCreateOutletId] = useState('')
-  const [serialLines, setSerialLines] = useState<SerialLine[]>([{ productId: '', serialNumber: '', notes: '' }])
+  const [serialLines, setSerialLines] = useState<SerialLine[]>([{ productId: '', sku: '', serialNumber: '', notes: '' }])
   const [createError, setCreateError] = useState<string | null>(null)
 
   const query = useQuery({
@@ -144,18 +145,20 @@ export function ServiceComplaintsPage() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const validLines = serialLines.filter((l) => l.productId)
+      const validLines = serialLines.filter((l) => l.sku)
+      if (!createIssueCategory.trim()) throw new Error('Issue category is required')
       if (!customerName.trim()) throw new Error('Customer name is required')
       if (!customerPhone.trim()) throw new Error('Customer phone number is required')
       if (validLines.length === 0) throw new Error('At least one catalog SKU is required')
       const response = await api.post('/tickets', {
+        issueCategory: createIssueCategory.trim(),
         title: createTitle.trim() || undefined,
         description: createDescription.trim() || undefined,
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         outletId: createOutletId || undefined,
         lines: validLines.map((l) => ({
-          productId: l.productId,
+          sku: l.sku,
           serialNumber: l.serialNumber.trim() || undefined,
           notes: l.notes.trim() || undefined,
         })),
@@ -172,12 +175,13 @@ export function ServiceComplaintsPage() {
   })
 
   function resetCreateForm() {
+    setCreateIssueCategory('')
     setCreateTitle('')
     setCreateDescription('')
     setCustomerName('')
     setCustomerPhone('')
     setCreateOutletId('')
-    setSerialLines([{ productId: '', serialNumber: '', notes: '' }])
+    setSerialLines([{ productId: '', sku: '', serialNumber: '', notes: '' }])
     setCreateError(null)
   }
 
@@ -290,7 +294,13 @@ export function ServiceComplaintsPage() {
             </div>
           ) : null}
           {query.isError ? (
-            <p className="text-sm text-rose-600">{apiErrorMessage(query.error, 'Unable to load complaints.')}</p>
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              <p className="font-semibold">Unable to load complaints</p>
+              <p className="mt-1">{apiErrorMessage(query.error, 'Check your connection and try again.')}</p>
+              <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>
+                Retry
+              </Button>
+            </div>
           ) : null}
 
           {/* Table */}
@@ -380,6 +390,16 @@ export function ServiceComplaintsPage() {
 
           <div className="space-y-4 pt-1">
             <div className="space-y-1.5">
+              <Label>Issue Category <span className="text-rose-500">*</span></Label>
+              <Input
+                value={createIssueCategory}
+                onChange={(e) => setCreateIssueCategory(e.target.value)}
+                placeholder="e.g. Not Working, Low Backup, Physical Damage"
+                maxLength={200}
+              />
+            </div>
+
+            <div className="space-y-1.5">
               <Label>Outlet</Label>
               <select
                 className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
@@ -448,7 +468,7 @@ export function ServiceComplaintsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setSerialLines((prev) => [...prev, { productId: '', serialNumber: '', notes: '' }])}
+                  onClick={() => setSerialLines((prev) => [...prev, { productId: '', sku: '', serialNumber: '', notes: '' }])}
                   className="text-xs"
                 >
                   + Add Battery
@@ -463,7 +483,16 @@ export function ServiceComplaintsPage() {
                     <select
                       className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
                       value={line.productId}
-                      onChange={(e) => updateSerialLine(i, 'productId', e.target.value)}
+                      onChange={(e) => {
+                        const selected = (skusQuery.data ?? []).find((s) => s.id === e.target.value)
+                        setSerialLines((prev) =>
+                          prev.map((l, idx) =>
+                            idx === i
+                              ? { ...l, productId: e.target.value, sku: selected?.sku ?? selected?.skuCode ?? '' }
+                              : l,
+                          ),
+                        )
+                      }}
                     >
                       <option value="">{skusQuery.isLoading ? 'Loading SKUs…' : `Select battery SKU ${i + 1}`}</option>
                       {(skusQuery.data ?? []).map((sku) => (

@@ -1,11 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
-import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
-import { assertOutletWarehouseScope, findActorLinkedOutletId } from "./outlet-access";
+import { assertOutletWarehouseScope, resolveFinancialScope } from "./outlet-access";
 import type { TrpcContext } from "../context";
+import { postPaymentReceived, postPaymentReversed } from "../../accounts/posting";
 
 const allocationSchema = z.object({
   id: z.string(),
@@ -21,8 +22,18 @@ const paymentSchema = z.object({
   paymentDate: z.string(),
   reference: z.string().nullable(),
   description: z.string().nullable(),
+  voidedAt: z.string().nullable(),
+  voidedById: z.string().nullable(),
+  voidReason: z.string().nullable(),
   createdAt: z.string(),
-  allocations: z.array(allocationSchema)
+  allocations: z.array(allocationSchema),
+  reversal: z.object({
+    id: z.string(),
+    amount: z.string(),
+    reason: z.string(),
+    reversedById: z.string().nullable(),
+    reversedAt: z.string(),
+  }).nullable(),
 });
 
 const createPaymentSchema = z.object({
@@ -37,6 +48,11 @@ const createPaymentSchema = z.object({
   idempotencyKey: z.string().uuid().optional()
 });
 
+const voidPaymentSchema = z.object({
+  id: z.string().uuid(),
+  reason: z.string().trim().min(3).max(500),
+});
+
 function toPaymentItem(payment: {
   id: string;
   outletId: string;
@@ -44,6 +60,9 @@ function toPaymentItem(payment: {
   paymentDate: Date;
   reference: string | null;
   description: string | null;
+  voidedAt?: Date | null;
+  voidedById?: string | null;
+  voidReason?: string | null;
   createdAt: Date;
   allocations: Array<{
     id: string;
@@ -51,6 +70,13 @@ function toPaymentItem(payment: {
     amount: Prisma.Decimal;
     allocatedAt: Date;
   }>;
+  reversal?: {
+    id: string;
+    amount: Prisma.Decimal;
+    reason: string;
+    reversedById: string | null;
+    reversedAt: Date;
+  } | null;
 }) {
   return {
     id: payment.id,
@@ -59,24 +85,33 @@ function toPaymentItem(payment: {
     paymentDate: payment.paymentDate.toISOString(),
     reference: payment.reference,
     description: payment.description,
+    voidedAt: payment.voidedAt?.toISOString() ?? null,
+    voidedById: payment.voidedById ?? null,
+    voidReason: payment.voidReason ?? null,
     createdAt: payment.createdAt.toISOString(),
     allocations: payment.allocations.map((allocation) => ({
       id: allocation.id,
       invoiceId: allocation.invoiceId,
       amount: allocation.amount.toString(),
       allocatedAt: allocation.allocatedAt.toISOString()
-    }))
+    })),
+    reversal: payment.reversal
+      ? {
+          id: payment.reversal.id,
+          amount: payment.reversal.amount.toString(),
+          reason: payment.reversal.reason,
+          reversedById: payment.reversal.reversedById,
+          reversedAt: payment.reversal.reversedAt.toISOString(),
+        }
+      : null,
   };
 }
 
 async function resolvePaymentScope(ctx: TrpcContext) {
-  const linkedOutletId = await findActorLinkedOutletId(ctx);
-  const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-  const isWarehouseScoped = !isSuperAdmin && !linkedOutletId && !!ctx.managedWarehouseId;
-  if (!isSuperAdmin && !linkedOutletId && !isWarehouseScoped) {
-    throw apiError("FORBIDDEN", "No safe payment scope available");
-  }
-  return { linkedOutletId, isSuperAdmin, isWarehouseScoped };
+  const { linkedOutletId, hasGlobalAccess, isWarehouseScoped } = resolveFinancialScope(ctx, {
+    errorMessage: "No safe payment scope available",
+  });
+  return { linkedOutletId, isSuperAdmin: hasGlobalAccess, isWarehouseScoped };
 }
 
 export const paymentsRouter = createTRPCRouter({
@@ -90,7 +125,7 @@ export const paymentsRouter = createTRPCRouter({
     .output(z.object({ items: z.array(paymentSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const { linkedOutletId, isSuperAdmin, isWarehouseScoped } = await resolvePaymentScope(ctx);
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const rows = await ctx.prisma.outletPayment.findMany({
         where: {
           AND: [
@@ -99,17 +134,12 @@ export const paymentsRouter = createTRPCRouter({
             ...(!isSuperAdmin && !linkedOutletId && isWarehouseScoped
               ? [{ outlet: { warehouseId: ctx.managedWarehouseId } }]
               : []),
+            ...(input.q ? [{ OR: [{ reference: { contains: input.q, mode: "insensitive" as const } }, { description: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
           ],
-          OR: input.q
-            ? [
-                { reference: { contains: input.q, mode: "insensitive" } },
-                { description: { contains: input.q, mode: "insensitive" } }
-              ]
-            : undefined
         },
-        include: { allocations: true },
-        orderBy: [{ paymentDate: "desc" }, { id: "desc" }],
-        skip: offset,
+        include: { allocations: true, reversal: true },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1
       });
 
@@ -117,7 +147,7 @@ export const paymentsRouter = createTRPCRouter({
       const pageItems = hasMore ? rows.slice(0, input.limit) : rows;
       return {
         items: pageItems.map(toPaymentItem),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 
@@ -136,7 +166,7 @@ export const paymentsRouter = createTRPCRouter({
               : []),
           ],
         },
-        include: { allocations: true }
+        include: { allocations: true, reversal: true }
       });
       if (!payment) {
         throw apiError("NOT_FOUND", "Payment not found");
@@ -159,7 +189,7 @@ export const paymentsRouter = createTRPCRouter({
       if (input.idempotencyKey) {
         const existing = await ctx.prisma.outletPayment.findUnique({
           where: { idempotencyKey: input.idempotencyKey },
-          include: { allocations: true }
+          include: { allocations: true, reversal: true }
         });
         if (existing) {
           if (linkedOutletId && existing.outletId !== linkedOutletId) {
@@ -257,12 +287,135 @@ export const paymentsRouter = createTRPCRouter({
           }
         });
 
+        // Post the double-entry journal: Dr Bank · Cr Debtors (outlet)
+        await postPaymentReceived(tx, {
+          paymentId: payment.id,
+          reference: payment.reference ?? payment.id,
+          outletId: input.outletId,
+          paymentDate: payment.paymentDate,
+          amount,
+          postedById: ctx.actor.id,
+        });
+
         return tx.outletPayment.findUniqueOrThrow({
           where: { id: payment.id },
-          include: { allocations: true }
+          include: { allocations: true, reversal: true }
         });
       });
 
       return toPaymentItem(created);
-    })
+    }),
+
+  void: perm(P.payments.void)
+    .input(voidPaymentSchema)
+    .output(paymentSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { linkedOutletId, isSuperAdmin } = await resolvePaymentScope(ctx);
+
+      const existing = await ctx.prisma.outletPayment.findUnique({
+        where: { id: input.id },
+        select: { outletId: true },
+      });
+      if (!existing) {
+        throw apiError("NOT_FOUND", "Payment not found");
+      }
+      if (linkedOutletId && linkedOutletId !== existing.outletId) {
+        throw apiError("FORBIDDEN", "Access denied to this outlet");
+      }
+      if (!isSuperAdmin && !linkedOutletId && ctx.managedWarehouseId) {
+        await assertOutletWarehouseScope(ctx, existing.outletId);
+      }
+
+      const voided = await ctx.prisma.$transaction(async (tx) => {
+        const payment = await tx.outletPayment.findUnique({
+          where: { id: input.id },
+          include: { allocations: true, reversal: true },
+        });
+        if (!payment) {
+          throw apiError("NOT_FOUND", "Payment not found");
+        }
+        if (payment.voidedAt || payment.reversal) {
+          throw apiError("CONFLICT", "Payment is already voided");
+        }
+
+        for (const allocation of payment.allocations) {
+          const invoice = await tx.invoice.findUnique({
+            where: { id: allocation.invoiceId },
+          });
+          if (!invoice) {
+            throw apiError("CONFLICT", "Allocated invoice no longer exists");
+          }
+
+          const nextAmountPaid = Prisma.Decimal.max(
+            new Prisma.Decimal(0),
+            invoice.amountPaid.sub(allocation.amount),
+          );
+          const nextAmountDue = invoice.total.sub(nextAmountPaid);
+          const invoiceUpdate = await tx.invoice.updateMany({
+            where: {
+              id: invoice.id,
+              amountPaid: invoice.amountPaid,
+              amountDue: invoice.amountDue,
+            },
+            data: {
+              amountPaid: nextAmountPaid,
+              amountDue: nextAmountDue,
+            },
+          });
+          if (invoiceUpdate.count !== 1) {
+            throw apiError("CONFLICT", "Invoice was modified by another request. Retry void.");
+          }
+        }
+
+        const now = new Date();
+        await tx.outletPaymentReversal.create({
+          data: {
+            paymentId: payment.id,
+            outletId: payment.outletId,
+            amount: payment.amount,
+            reason: input.reason,
+            reversedById: ctx.actor.id,
+            reversedAt: now,
+          },
+        });
+
+        await tx.outletPayment.update({
+          where: { id: payment.id },
+          data: {
+            voidedAt: now,
+            voidedById: ctx.actor.id,
+            voidReason: input.reason,
+          },
+        });
+
+        // Post the reversing journal: Dr Debtors (outlet) · Cr Bank
+        await postPaymentReversed(tx, {
+          paymentId: payment.id,
+          reference: payment.reference ?? payment.id,
+          outletId: payment.outletId,
+          reversedAt: now,
+          amount: payment.amount,
+          postedById: ctx.actor.id,
+        });
+
+        const aggregate = await tx.invoice.aggregate({
+          where: { outletId: payment.outletId },
+          _sum: { amountDue: true },
+        });
+
+        await tx.outlet.update({
+          where: { id: payment.outletId },
+          data: {
+            outstandingBalance: aggregate._sum.amountDue ?? new Prisma.Decimal(0),
+          },
+        });
+
+        return tx.outletPayment.findUniqueOrThrow({
+          where: { id: payment.id },
+          include: { allocations: true, reversal: true },
+        });
+      });
+
+      return toPaymentItem(voided);
+    }),
 });

@@ -45,6 +45,7 @@ export function UsersPage() {
   const [newPassword, setNewPassword] = useState('')
   const [manageError, setManageError] = useState<string | null>(null)
   const [manageSuccess, setManageSuccess] = useState<string | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
 
   const usersQuery = useQuery({
     queryKey: ['users-page-lite'],
@@ -123,6 +124,21 @@ export function UsersPage() {
     },
   })
 
+  const deleteUserMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedUser) throw new Error('No user selected')
+      await api.delete(`/users/${selectedUser.id}`)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['users-page-lite'] })
+      handleManageDialogChange(false)
+    },
+    onError: (error) => {
+      setManageError(apiErrorMessage(error, 'Unable to delete user.'))
+      setManageSuccess(null)
+    },
+  })
+
   const toggleFieldSenseMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
       if (!selectedUser) throw new Error('No user selected')
@@ -171,6 +187,7 @@ export function UsersPage() {
       setNewPassword('')
       setManageError(null)
       setManageSuccess(null)
+      setDeleteConfirm(false)
     }
   }
 
@@ -389,6 +406,40 @@ export function UsersPage() {
                 </div>
               </div>
             ) : null}
+            {canWriteUsers && (
+              <div className="space-y-2 border-t border-slate-200 pt-3">
+                <p className="text-sm font-medium text-red-700">Danger Zone</p>
+                {deleteConfirm ? (
+                  <div className="space-y-2">
+                    <p className="text-sm text-slate-600">
+                      This will permanently remove <strong>{selectedUser?.name}</strong>. This cannot be undone.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => deleteUserMutation.mutate()}
+                        disabled={deleteUserMutation.isPending}
+                      >
+                        {deleteUserMutation.isPending ? 'Deleting...' : 'Confirm Delete'}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setDeleteConfirm(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-red-200 text-red-600 hover:bg-red-50"
+                    onClick={() => setDeleteConfirm(true)}
+                  >
+                    Delete User
+                  </Button>
+                )}
+              </div>
+            )}
             {manageError ? <p className="text-sm text-red-600">{manageError}</p> : null}
             {manageSuccess ? <p className="text-sm text-emerald-700">{manageSuccess}</p> : null}
           </div>

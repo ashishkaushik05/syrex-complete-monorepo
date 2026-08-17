@@ -4,6 +4,7 @@ import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { assertFieldEnabled, resolveReadOrgId } from "./field-helpers";
+import { getSseConnectionStats } from "../../infra/sse";
 
 const syncStatusSchema = z.object({
   id: z.string(),
@@ -165,6 +166,19 @@ export const fieldSyncStatusRouter = createTRPCRouter({
         select: SYNC_STATUS_SELECT
       });
       return toSyncStatus(row);
+    }),
+
+  sseStats: perm(P.field.read)
+    .output(
+      z.object({
+        orgCount: z.number(),
+        totalConnections: z.number(),
+        broadcastCount: z.number(),
+        lastBroadcastAt: z.string().nullable()
+      })
+    )
+    .query(() => {
+      return getSseConnectionStats();
     }),
 
   list: perm(P.field.read)

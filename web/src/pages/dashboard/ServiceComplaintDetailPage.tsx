@@ -1,203 +1,55 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ServiceStatusBadge,
-  StatusPipeline,
   WarrantyStatusBadge,
   FINAL_STATUSES,
 } from '@/components/service/ServiceStatusBadge'
-import type { ComplaintStatus } from '@/components/service/ServiceStatusBadge'
 import { DynamicServiceForm } from '@/components/service/DynamicServiceForm'
 import type { FormTemplate, FieldValue } from '@/components/service/DynamicServiceForm'
 import { usePermission } from '@/context/PermissionContext'
-import { api } from '@/lib/api'
-import { timeAgo } from '@/lib/format'
+import { useAuth } from '@/hooks/useAuth'
+import { api, trpcMutation } from '@/lib/api'
 import { apiErrorMessage } from '@/lib/http'
+import { InfoPanel } from './service-complaint/InfoPanel'
+import { EvidencePanel } from './service-complaint/EvidencePanel'
+import type { AttachmentSummary } from './service-complaint/EvidencePanel'
+import { LinesPanel } from './service-complaint/LinesPanel'
+import { SerialIntelPanel } from './service-complaint/SerialIntelPanel'
+import { TimelinePanel } from './service-complaint/TimelinePanel'
+import { ServiceHistoryPanel } from './service-complaint/ServiceHistoryPanel'
+import { CurrentServiceTask } from './service-complaint/CurrentServiceTask'
+import { ServiceProgressHeader } from './service-complaint/ServiceProgressHeader'
+import {
+  deriveServiceWorkspace,
+  resolveServiceActorRole,
+} from './service-complaint/deriveServiceWorkspace'
+import { SectionCard, VerdictBadge } from './service-complaint/shared'
+import type {
+  ComplaintDetail, FormSubmission, ServiceAssignmentCandidates,
+  SkuOption, LineDraft, WarehouseOption,
+} from './service-complaint/types'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-type ComplaintLine = {
-  id: string
-  batterySku: string | null
-  serialNumber: string | null
-  normalizedSerial: string | null
-  replacementSerialNumber: string | null
-  productId: string | null
-  notes: string | null
-}
-
-type SerialInsight = {
-  lineId: string
-  role: 'old' | 'replacement'
-  serial: string
-  resolved: {
-    product: { id: string; name: string; sku: string } | null
-    soldToOutlet: { id: string; name: string; outletCode: string | null } | null
-    salesChain: Array<{
-      orderId: string
-      orderNumber: string
-      dispatchId: string
-      dispatchDate: string
-      deliveryStatus: string
-      invoiceNumber: string | null
-      outletName: string | null
-    }>
-    replacementConflict: { hasConflict: boolean; usedInComplaintIds: string[] }
+function unwrapData<T>(payload: unknown): T {
+  let current = payload
+  while (current && typeof current === 'object' && 'data' in current) {
+    current = (current as { data: unknown }).data
   }
+  return current as T
 }
-
-type ComplaintDetail = {
-  id: string
-  complaintNumber: string
-  status: ComplaintStatus
-  title: string | null
-  description: string | null
-  customerName: string | null
-  customerPhone: string | null
-  outletId: string | null
-  outletName: string | null
-  raisedById: string
-  resolutionNote: string | null
-  telephonicReason: string | null
-  closedAt: string | null
-  cancelledAt: string | null
-  createdAt: string
-  updatedAt: string
-  lines: ComplaintLine[]
-  assignments: Array<{
-    id: string
-    action: string
-    asiUserId: string | null
-    seUserId: string | null
-    assignedById: string
-    note: string | null
-    createdAt: string
-  }>
-  tests: Array<{
-    id: string
-    verdict: string
-    summary: string | null
-    createdAt: string
-  }>
-  activities: Array<{
-    id: string
-    action: string
-    note: string | null
-    createdAt: string
-    fromStatus: string | null
-    toStatus: string | null
-    meta?: unknown
-  }>
-  warrantyDecision: {
-    id: string
-    status: 'pending' | 'approved' | 'rejected'
-    sourceWarehouseId: string | null
-    approvedReplacementSerial: string | null
-    replacementOrderId: string | null
-    rejectionReason: string | null
-    decidedAt: string | null
-  } | null
-  serialInsights: SerialInsight[]
-}
-
-type WarehouseOption = { id: string; name: string; location: string }
-type FormSubmission = {
-  id: string
-  templateId: string
-  templateName: string
-  submittedAt: string
-  isDisabled: boolean
-  values: Array<{ id: string; fieldKey: string; rawValue: string; isValid: boolean; validationError: string | null }>
-}
-type ServiceStaffUser = { id: string; name: string; email: string; roleName: string }
-type ServiceAssignmentCandidates = {
-  asiUsers: ServiceStaffUser[]
-  serviceEngineers: ServiceStaffUser[]
-  actor: { id: string | null; roleName: string | null; isAsi: boolean }
-}
-type SkuOption = {
-  id: string
-  name: string
-  displayName?: string | null
-  skuCode?: string | null
-  sku?: string | null
-  isActive?: boolean
-}
-type LineDraft = { productId: string; serialNumber: string; notes: string }
-
-// ── Action config ─────────────────────────────────────────────────────────────
-
-const ACTION_LABELS: Record<string, string> = {
-  visit_logged:     'Log Site Visit',
-  tested_ok_close:  'Mark Tested OK',
-  retest_requested: 'Request Retest',
-  telephonic_close: 'Telephonic Close',
-  cancel:           'Cancel Complaint',
-}
-
-function getActions(status: ComplaintStatus): string[] {
-  if (FINAL_STATUSES.has(status)) return []
-  const actions: string[] = []
-  if (status === 'assigned' || status === 'retest_requested') actions.push('visit_logged')
-  if (status === 'visit' || status === 'retest_requested') actions.push('tested_ok_close')
-  if (status === 'test_result_submitted') actions.push('retest_requested', 'tested_ok_close')
-  actions.push('telephonic_close', 'cancel')
-  return actions
-}
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function SectionCard({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
-  return (
-    <Card className={`border-slate-200 bg-white shadow-sm ${className}`}>
-      <CardHeader className="pb-3 pt-4 px-5">
-        <CardTitle className="text-sm font-semibold text-slate-700 uppercase tracking-wide">{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="px-5 pb-5">{children}</CardContent>
-    </Card>
-  )
-}
-
-function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</span>
-      <span className="text-sm text-slate-800">{value}</span>
-    </div>
-  )
-}
-
-function VerdictBadge({ verdict }: { verdict: string }) {
-  const map: Record<string, string> = {
-    tested_ok:          'bg-emerald-100 text-emerald-700',
-    warranty_candidate: 'bg-amber-100 text-amber-700',
-    failed:             'bg-rose-100 text-rose-700',
-    needs_retest:       'bg-indigo-100 text-indigo-700',
-  }
-  return (
-    <Badge className={`${map[verdict] ?? 'bg-slate-100 text-slate-700'} border-0 text-xs`}>
-      {verdict.replace(/_/g, ' ')}
-    </Badge>
-  )
-}
-
-// ── Main page ─────────────────────────────────────────────────────────────────
 
 export function ServiceComplaintDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { can } = usePermission()
+  const { user, permissions, authQuery } = useAuth()
 
-  // Local UI state
   const [asiUserId, setAsiUserId] = useState('')
   const [seUserId, setSeUserId] = useState('')
   const [assignNote, setAssignNote] = useState('')
@@ -210,9 +62,12 @@ export function ServiceComplaintDetailPage() {
   const [replacementSerial, setReplacementSerial] = useState('')
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [actionNote, setActionNote] = useState('')
-  const [expandedSerials, setExpandedSerials] = useState<Set<string>>(new Set())
   const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({})
+  const [savingLineId, setSavingLineId] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
+  const [stagedEvidence, setStagedEvidence] = useState<AttachmentSummary[]>([])
+  const [showAdminActions, setShowAdminActions] = useState(false)
+  const [inlineEvidenceError, setInlineEvidenceError] = useState<string | null>(null)
 
   const invalidate = async () => {
     await Promise.all([
@@ -227,23 +82,23 @@ export function ServiceComplaintDetailPage() {
     setMutationError(apiErrorMessage(err, 'Action failed'))
   }
 
-  // ── Queries ──
+  // ── Queries ──────────────────────────────────────────────────────────────────
+
   const detailQuery = useQuery<ComplaintDetail>({
     queryKey: ['service', 'complaint', id],
     enabled: Boolean(id),
     queryFn: async () => {
       const r = await api.get(`/tickets/${id}`)
-      const p = r.data as any
-      return p?.data ?? p
+      return unwrapData<ComplaintDetail>(r.data)
     },
   })
 
   const assignmentCandidatesQuery = useQuery<ServiceAssignmentCandidates>({
     queryKey: ['service-assignment-candidates'],
+    enabled: can('service:assign'),
     queryFn: async () => {
       const r = await api.get('/service/assignments/candidates')
-      const p = r.data as any
-      return (p?.data?.data ?? p?.data ?? p) as ServiceAssignmentCandidates
+      return unwrapData<ServiceAssignmentCandidates>(r.data)
     },
   })
 
@@ -251,10 +106,8 @@ export function ServiceComplaintDetailPage() {
     queryKey: ['warehouses-active'],
     queryFn: async () => {
       const r = await api.get('/warehouses', { params: { limit: 100, isActive: true } })
-      const p = r.data as any
-      if (Array.isArray(p?.data?.data)) return p.data.data
-      if (Array.isArray(p?.data)) return p.data
-      return []
+      const rows = unwrapData<unknown>(r.data)
+      return Array.isArray(rows) ? rows as WarehouseOption[] : []
     },
   })
 
@@ -262,8 +115,8 @@ export function ServiceComplaintDetailPage() {
     queryKey: ['service-form-templates-with-fields'],
     queryFn: async () => {
       const r = await api.get('/service/forms/templates', { params: { withFields: true } })
-      const p = r.data as any
-      return Array.isArray(p?.data) ? p.data : []
+      const rows = unwrapData<unknown>(r.data)
+      return Array.isArray(rows) ? rows as FormTemplate[] : []
     },
   })
 
@@ -271,8 +124,8 @@ export function ServiceComplaintDetailPage() {
     queryKey: ['service-complaint-detail-sku-options'],
     queryFn: async () => {
       const r = await api.get('/catalog/skus', { params: { limit: 500 } })
-      const p = r.data as any
-      const rows = Array.isArray(p?.data) ? p.data : Array.isArray(p) ? p : []
+      const payload = unwrapData<unknown>(r.data)
+      const rows = Array.isArray(payload) ? payload as SkuOption[] : []
       return rows.filter((row: SkuOption) => row.isActive !== false)
     },
   })
@@ -282,12 +135,13 @@ export function ServiceComplaintDetailPage() {
     enabled: Boolean(id),
     queryFn: async () => {
       const r = await api.get(`/tickets/${id}/submissions`)
-      const p = r.data as any
-      return Array.isArray(p?.data) ? p.data : []
+      const rows = unwrapData<unknown>(r.data)
+      return Array.isArray(rows) ? rows as FormSubmission[] : []
     },
   })
 
-  // ── Mutations ──
+  // ── Mutations ─────────────────────────────────────────────────────────────────
+
   const transitionMutation = useMutation({
     mutationFn: async (payload: { action: string; note?: string }) =>
       api.post(`/tickets/${id}/transition`, payload),
@@ -300,8 +154,8 @@ export function ServiceComplaintDetailPage() {
       const hasAssignedAsi = Boolean(detail?.assignments?.[0]?.asiUserId)
       return api.post(`/tickets/${id}/assign`, {
         reassign: hasAssignedAsi,
-        asiUserId: asiUserId || null,
-        seUserId: seUserId || null,
+        asiUserId: asiUserId || currentAsiUserId || null,
+        seUserId: seUserId || currentSeUserId || null,
         note: assignNote.trim() || null,
       })
     },
@@ -313,35 +167,48 @@ export function ServiceComplaintDetailPage() {
     mutationFn: async (lineId: string) => {
       const draft = lineDrafts[lineId]
       if (!draft) throw new Error('No line changes found')
+      setSavingLineId(lineId)
       return api.post(`/tickets/${id}/lines/${lineId}`, {
         productId: draft.productId,
         serialNumber: draft.serialNumber.trim() || undefined,
         notes: draft.notes.trim() || null,
       })
     },
-    onSuccess: invalidate,
-    onError: onMutErr,
+    onSuccess: () => { setSavingLineId(null); invalidate() },
+    onError: (err) => { setSavingLineId(null); onMutErr(err) },
   })
 
   const testMutation = useMutation({
     mutationFn: async () =>
-      api.post(`/tickets/${id}/test-submit`, {
-        verdict: testVerdict,
-        summary: testSummary.trim() || undefined,
-      }),
+      api.post(`/tickets/${id}/test-submit`, { verdict: testVerdict, summary: testSummary.trim() || undefined }),
     onSuccess: () => { invalidate(); setTestSummary('') },
+    onError: onMutErr,
+  })
+
+  const retestMutation = useMutation({
+    mutationFn: async () =>
+      api.post(`/tickets/${id}/retest`, { note: actionNote.trim() }),
+    onSuccess: () => { invalidate(); setActionNote('') },
     onError: onMutErr,
   })
 
   const formSubmitMutation = useMutation({
     mutationFn: async (values: FieldValue[]) => {
       if (!selectedTemplateId) throw new Error('Select a form template')
-      return api.post(`/tickets/${id}/forms`, { templateId: selectedTemplateId, values })
+      const attachmentIds = stagedEvidence
+        .filter((attachment) =>
+          attachment.uploadedById === user?.id &&
+          attachment.isConfirmed &&
+          attachment.mimeType.startsWith('image/'),
+        )
+        .slice(0, 5)
+        .map((attachment) => attachment.id)
+      if (actorRole === 'service_engineer' && attachmentIds.length === 0) {
+        throw new Error('Add at least one confirmed image before submitting the diagnostic.')
+      }
+      return api.post(`/tickets/${id}/forms`, { templateId: selectedTemplateId, values, attachmentIds })
     },
-    onSuccess: () => {
-      invalidate()
-      setSelectedTemplateId('')
-    },
+    onSuccess: () => { invalidate(); setSelectedTemplateId('') },
     onError: onMutErr,
   })
 
@@ -357,9 +224,7 @@ export function ServiceComplaintDetailPage() {
 
   const warrantyRejectMutation = useMutation({
     mutationFn: async () =>
-      api.post(`/tickets/${id}/warranty/reject`, {
-        reason: warrantyRejectReason.trim() || 'Warranty rejected',
-      }),
+      api.post(`/tickets/${id}/warranty/reject`, { reason: warrantyRejectReason.trim() || 'Warranty rejected' }),
     onSuccess: () => { invalidate(); setWarrantyRejectReason('') },
     onError: onMutErr,
   })
@@ -391,55 +256,83 @@ export function ServiceComplaintDetailPage() {
     onError: onMutErr,
   })
 
-  // ── Derived data ──
+  const reopenMutation = useMutation({
+    mutationFn: async () =>
+      api.post(`/tickets/${id}/reopen`, { reason: actionNote.trim() }),
+    onSuccess: () => { invalidate(); setActionNote('') },
+    onError: onMutErr,
+  })
+
+  const evidenceQueryKey = ['service', 'evidence', id]
+
+  const inlineEvidenceUploadMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (file.size <= 0) throw new Error('Choose a non-empty file.')
+      if (file.size > 25 * 1024 * 1024) throw new Error('File must be 25 MiB or smaller.')
+      if (!file.type.startsWith('image/')) throw new Error('Only image files are accepted.')
+      const pending = await trpcMutation<{ attachment: { id: string }; upload: { uploadUrl: string } }>(
+        'attachments.createPending',
+        { entityType: 'service_complaint', entityId: id!, fileName: file.name, mimeType: file.type, fileSize: file.size, expiresInMinutes: 15 },
+      )
+      const res = await fetch(pending.upload.uploadUrl, { method: 'PUT', headers: { 'content-type': file.type }, body: file })
+      if (!res.ok) throw new Error(`${file.name} could not be uploaded. Please retry.`)
+      await trpcMutation('attachments.confirm', { attachmentId: pending.attachment.id })
+    },
+    onMutate: () => setInlineEvidenceError(null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: evidenceQueryKey }),
+    onError: (err) => setInlineEvidenceError(apiErrorMessage(err, 'Upload failed. Please retry.')),
+  })
+
+  const inlineEvidenceRemoveMutation = useMutation({
+    mutationFn: (attachmentId: string) => trpcMutation('attachments.remove', { id: attachmentId }),
+    onMutate: () => setInlineEvidenceError(null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: evidenceQueryKey }),
+    onError: (err) => setInlineEvidenceError(apiErrorMessage(err, 'Could not remove image.')),
+  })
+
+  // ── Derived ───────────────────────────────────────────────────────────────────
+
   const detail = detailQuery.data
   const isFinal = detail ? FINAL_STATUSES.has(detail.status) : false
-  const allowedActions = detail ? getActions(detail.status) : []
   const assignmentCandidates = assignmentCandidatesQuery.data
   const latestAssignment = detail?.assignments?.[0] ?? null
   const currentAsiUserId = latestAssignment?.asiUserId ?? null
   const currentSeUserId = latestAssignment?.seUserId ?? null
   const actorIsCurrentAsi = Boolean(
-    assignmentCandidates?.actor.isAsi &&
-    assignmentCandidates.actor.id &&
-    currentAsiUserId === assignmentCandidates.actor.id,
+    user?.id && currentAsiUserId === user.id,
   )
+  const actorIsCurrentSe = Boolean(user?.id && currentSeUserId === user.id)
   const asiUsers = assignmentCandidates?.asiUsers ?? []
   const seUsers = assignmentCandidates?.serviceEngineers ?? []
   const warehouses = warehousesQuery.data ?? []
   const templates = templatesQuery.data ?? []
   const submissions = submissionsQuery.data ?? []
   const activeSubmissions = submissions.filter((s) => !s.isDisabled)
-  const formReady = activeSubmissions.some((s) => s.values.every((v) => v.isValid))
   const serialsReady = detail?.lines.every((line) => Boolean(line.serialNumber?.trim())) ?? false
   const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null
+  const actorRole = resolveServiceActorRole(
+    assignmentCandidates?.actor.roleName ?? authQuery.data?.role,
+  )
+  const workspace = detail
+    ? deriveServiceWorkspace({
+        complaint: detail,
+        submissions,
+        actorRole,
+        permissions,
+        isActorCurrentAsi: actorIsCurrentAsi,
+        isActorCurrentSe: actorIsCurrentSe,
+      })
+    : null
 
   const isPending =
-    transitionMutation.isPending || assignMutation.isPending || lineUpdateMutation.isPending || testMutation.isPending ||
-    formSubmitMutation.isPending || warrantyApproveMutation.isPending || warrantyRejectMutation.isPending ||
-    replacementAssignMutation.isPending || fulfillmentMutation.isPending
+    transitionMutation.isPending || assignMutation.isPending || lineUpdateMutation.isPending ||
+    testMutation.isPending || retestMutation.isPending || formSubmitMutation.isPending || warrantyApproveMutation.isPending ||
+    warrantyRejectMutation.isPending || replacementAssignMutation.isPending || fulfillmentMutation.isPending
+    || reopenMutation.isPending
 
-  useEffect(() => {
-    if (!detail) return
-    setAsiUserId(currentAsiUserId ?? '')
-    setSeUserId(currentSeUserId ?? '')
-  }, [detail?.id, currentAsiUserId, currentSeUserId])
-
-  useEffect(() => {
-    if (!detail) return
-    setLineDrafts(
-      Object.fromEntries(
-        detail.lines.map((line) => [
-          line.id,
-          {
-            productId: line.productId ?? '',
-            serialNumber: line.serialNumber ?? '',
-            notes: line.notes ?? '',
-          },
-        ]),
-      ),
-    )
-  }, [detail?.id, detail?.updatedAt])
+  const handleStagedEvidenceChange = useCallback((attachments: AttachmentSummary[]) => {
+    setStagedEvidence(attachments)
+  }, [])
 
   if (!id) return <p className="text-sm text-rose-600">Missing complaint ID.</p>
 
@@ -458,14 +351,18 @@ export function ServiceComplaintDetailPage() {
   if (detailQuery.isError || !detail) {
     return (
       <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
-        {apiErrorMessage(detailQuery.error, 'Unable to load complaint.')}
+        <p className="font-semibold">Complaint unavailable</p>
+        <p className="mt-1">{apiErrorMessage(detailQuery.error, 'Unable to load complaint.')}</p>
+        <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => detailQuery.refetch()}>
+          Retry
+        </Button>
       </div>
     )
   }
 
   return (
     <div className="space-y-4">
-      {/* ── Header bar ── */}
+      {/* Header bar */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm px-6 py-4 space-y-4">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
@@ -480,792 +377,414 @@ export function ServiceComplaintDetailPage() {
             </button>
             <div>
               <h1 className="text-xl font-bold font-mono text-slate-900">{detail.complaintNumber}</h1>
-              <p className="text-sm text-slate-500 mt-0.5">{detail.title ?? 'Untitled complaint'}</p>
+              <p className="text-sm text-slate-500 mt-0.5">
+                {detail.title?.trim() || detail.issueCategory}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <ServiceStatusBadge status={detail.status} />
-            {detail.warrantyDecision ? (
-              <WarrantyStatusBadge status={detail.warrantyDecision.status} />
-            ) : null}
+            {detail.warrantyDecision ? <WarrantyStatusBadge status={detail.warrantyDecision.status} /> : null}
           </div>
         </div>
-
-        {/* Status pipeline */}
         <div className="overflow-x-auto">
-          <StatusPipeline current={detail.status} />
+          {workspace ? <ServiceProgressHeader workspace={workspace} /> : null}
         </div>
-
-        {/* Global mutation error */}
+        {latestAssignment ? (
+          <p className="text-xs text-slate-500">
+            Current owner: ASI {latestAssignment.asiUserName ?? 'not assigned'}
+            {' · '}
+            SE {latestAssignment.seUserName ?? 'not assigned'}
+          </p>
+        ) : null}
         {mutationError ? (
           <div className="rounded-lg bg-rose-50 border border-rose-200 px-4 py-2 text-sm text-rose-700 flex items-center gap-2">
-            <span>⚠</span> {mutationError}
-            <button type="button" onClick={() => setMutationError(null)} className="ml-auto text-rose-400 hover:text-rose-700">✕</button>
+            <span>!</span> {mutationError}
+            <button type="button" onClick={() => setMutationError(null)} className="ml-auto text-rose-400 hover:text-rose-700">Close</button>
           </div>
         ) : null}
       </div>
 
-      {/* ── Two-column body ── */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-
-        {/* ── Left column: workflow panels (3/5) ── */}
-        <div className="lg:col-span-3 space-y-4">
-
-          {/* A. Assignment panel */}
-          {!isFinal && can('service:assign') ? (
-            <SectionCard title={currentAsiUserId ? 'Manage Service Assignment' : 'Appoint ASI'}>
-              {assignmentCandidatesQuery.isError ? (
-                <div className="mb-3 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-700">
-                  {apiErrorMessage(assignmentCandidatesQuery.error, 'Unable to load service staff.')}
-                </div>
-              ) : null}
-              {detail.assignments.length > 0 ? (
-                <div className="mb-3 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-500">
-                  Last assigned {timeAgo(detail.assignments[0].createdAt)}
-                  {detail.assignments[0].asiUserId ? ` · ASI: ${detail.assignments[0].asiUserId.slice(0, 8)}…` : ''}
-                  {detail.assignments[0].seUserId ? ` · SE: ${detail.assignments[0].seUserId.slice(0, 8)}…` : ''}
-                </div>
-              ) : null}
-              {assignmentCandidates?.actor.isAsi && currentAsiUserId && !actorIsCurrentAsi ? (
-                <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
-                  This complaint is assigned to another ASI. You cannot assign engineers for it.
-                </div>
-              ) : null}
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">{currentAsiUserId ? 'Assigned ASI' : 'ASI User'}</Label>
-                  <select
-                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    value={asiUserId}
-                    onChange={(e) => setAsiUserId(e.target.value)}
-                    disabled={assignmentCandidatesQuery.isLoading || (assignmentCandidates?.actor.isAsi && Boolean(currentAsiUserId))}
-                  >
-                    <option value="">{assignmentCandidatesQuery.isLoading ? 'Loading ASIs…' : '— Select ASI —'}</option>
-                    {asiUsers.map((u) => (
-                      <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-                    ))}
-                  </select>
-                </div>
-                {currentAsiUserId ? (
+        <div className="space-y-4 lg:col-span-3">
+          {workspace ? (
+            <CurrentServiceTask workspace={workspace}>
+              {workspace.task === 'appoint_asi' ? (
+                <div className="space-y-3">
+                  {assignmentCandidatesQuery.isError ? (
+                    <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      {apiErrorMessage(assignmentCandidatesQuery.error, 'Unable to load service staff.')}
+                    </p>
+                  ) : null}
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Service Engineer</Label>
-                    <select
-                      className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                      value={seUserId}
-                      onChange={(e) => setSeUserId(e.target.value)}
-                      disabled={assignmentCandidatesQuery.isLoading || (assignmentCandidates?.actor.isAsi && !actorIsCurrentAsi)}
-                    >
-                      <option value="">{assignmentCandidatesQuery.isLoading ? 'Loading engineers…' : '— Select engineer —'}</option>
-                      {seUsers.map((u) => (
-                        <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-                      ))}
+                    <Label className="text-xs">Area Service Inspector</Label>
+                    <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={asiUserId} onChange={(event) => setAsiUserId(event.target.value)}>
+                      <option value="">Select ASI...</option>
+                      {asiUsers.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} ({candidate.email})</option>)}
                     </select>
                   </div>
-                ) : (
-                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                    Service engineers become assignable after an ASI owns this complaint.
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Assignment note (optional)</Label>
+                    <Input value={assignNote} onChange={(event) => setAssignNote(event.target.value)} />
                   </div>
-                )}
-              </div>
-              <div className="mt-3 space-y-1.5">
-                <Label className="text-xs">Note (optional)</Label>
-                <Input
-                  value={assignNote}
-                  onChange={(e) => setAssignNote(e.target.value)}
-                  placeholder="Reason or context for this assignment"
-                  className="text-sm"
-                />
-              </div>
-              {!currentAsiUserId && !asiUserId ? (
-                <p className="mt-2 text-xs text-amber-600">
-                  Every service request must be appointed to an ASI before engineers can be assigned.
-                </p>
+                  <Button type="button" onClick={() => assignMutation.mutate()} disabled={isPending || !asiUserId} className="bg-teal-600 text-white hover:bg-teal-700">
+                    {assignMutation.isPending ? 'Appointing...' : 'Appoint ASI'}
+                  </Button>
+                </div>
               ) : null}
-              <div className="mt-3">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => assignMutation.mutate()}
-                  disabled={
-                    isPending ||
-                    assignmentCandidatesQuery.isLoading ||
-                    !asiUserId ||
-                    Boolean(assignmentCandidates?.actor.isAsi && currentAsiUserId && !actorIsCurrentAsi)
-                  }
-                  className="bg-teal-600 hover:bg-teal-700 text-white"
-                >
-                  {assignMutation.isPending
-                    ? 'Assigning…'
-                    : currentAsiUserId ? 'Update Assignment' : 'Appoint ASI'}
-                </Button>
-              </div>
-            </SectionCard>
+
+              {workspace.task === 'assign_se' ? (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    ASI: <span className="font-medium text-slate-800">{latestAssignment?.asiUserName ?? 'Assigned ASI'}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Service Engineer</Label>
+                    <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={seUserId} onChange={(event) => setSeUserId(event.target.value)}>
+                      <option value="">Select engineer...</option>
+                      {seUsers.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} ({candidate.email})</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Dispatch note (optional)</Label>
+                    <Input value={assignNote} onChange={(event) => setAssignNote(event.target.value)} />
+                  </div>
+                  <Button type="button" onClick={() => assignMutation.mutate()} disabled={isPending || !seUserId} className="bg-teal-600 text-white hover:bg-teal-700">
+                    {assignMutation.isPending ? 'Assigning...' : 'Assign Engineer'}
+                  </Button>
+                </div>
+              ) : null}
+
+              {workspace.task === 'log_visit' ? (
+                <div className="space-y-3">
+                  <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
+                    <p><span className="text-slate-400">Customer:</span> {detail.customerName ?? 'Not recorded'}</p>
+                    <p><span className="text-slate-400">Phone:</span> {detail.customerPhone ?? 'Not recorded'}</p>
+                    <p><span className="text-slate-400">Product:</span> {detail.lines[0]?.sku ?? 'Not set'}</p>
+                    <p><span className="text-slate-400">Serial:</span> {detail.lines[0]?.serialNumber ?? 'Not set'}</p>
+                  </div>
+                  <Button type="button" onClick={() => transitionMutation.mutate({ action: 'visit_logged' })} disabled={isPending} className="bg-blue-600 text-white hover:bg-blue-700">
+                    {transitionMutation.isPending ? 'Logging...' : workspace.title}
+                  </Button>
+                </div>
+              ) : null}
+
+              {workspace.task === 'diagnostic' ? (
+                <div className="space-y-4">
+                  <div className="grid gap-2 sm:grid-cols-5">
+                    {['Confirm serial', 'Select template', 'Complete fields', 'Add evidence', 'Submit'].map((step, index) => (
+                      <div key={step} className="rounded-lg bg-slate-50 px-2 py-2 text-center text-xs text-slate-600">
+                        <span className="font-semibold text-teal-700">{index + 1}.</span> {step}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Inline evidence upload — step 4 in the diagnostic flow */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-xs">
+                        Evidence photos
+                        <span className="ml-1 font-normal text-slate-400">(1–5 images required)</span>
+                      </Label>
+                      {can('attachments:write') ? (
+                        <label className={[
+                          'inline-flex cursor-pointer items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors',
+                          inlineEvidenceUploadMutation.isPending
+                            ? 'bg-slate-400 cursor-not-allowed'
+                            : 'bg-teal-600 hover:bg-teal-700',
+                        ].join(' ')}>
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          {inlineEvidenceUploadMutation.isPending ? 'Uploading…' : 'Add photo'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="sr-only"
+                            disabled={inlineEvidenceUploadMutation.isPending}
+                            onChange={(e) => {
+                              const file = e.currentTarget.files?.[0]
+                              if (file) inlineEvidenceUploadMutation.mutate(file)
+                              e.currentTarget.value = ''
+                            }}
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                    {inlineEvidenceError ? (
+                      <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-2 py-1.5">{inlineEvidenceError}</p>
+                    ) : null}
+                    {(() => {
+                      const myImages = stagedEvidence.filter(
+                        (a) => a.uploadedById === user?.id && a.mimeType.startsWith('image/'),
+                      )
+                      return myImages.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-center text-xs text-slate-400">
+                          No photos yet — tap <strong>Add photo</strong> to attach battery images before submitting.
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {myImages.map((img) => (
+                            <div key={img.id} className="relative">
+                              <div className="h-16 w-20 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+                                <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400 text-center px-1">{img.fileName}</div>
+                              </div>
+                              {can('attachments:write') ? (
+                                <button
+                                  type="button"
+                                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-rose-600 text-white hover:bg-rose-700"
+                                  disabled={inlineEvidenceRemoveMutation.isPending}
+                                  onClick={() => inlineEvidenceRemoveMutation.mutate(img.id)}
+                                  aria-label={`Remove ${img.fileName}`}
+                                >
+                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Diagnostic template</Label>
+                    <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)}>
+                      <option value="">Select template...</option>
+                      {templates.filter((template) => template.isActive).map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                    </select>
+                  </div>
+                  {selectedTemplate ? (
+                    <DynamicServiceForm
+                      template={selectedTemplate}
+                      onSubmit={(values) => formSubmitMutation.mutate(values)}
+                      isPending={formSubmitMutation.isPending}
+                      submitLabel="Submit Diagnostic"
+                      disabled={isPending}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+
+              {workspace.task === 'submit_test' ? (
+                <div className="space-y-3">
+                  {activeSubmissions[0] ? (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                      Diagnostic ready: {activeSubmissions[0].templateName} · {activeSubmissions[0].attachments.length} evidence image{activeSubmissions[0].attachments.length === 1 ? '' : 's'}
+                    </div>
+                  ) : null}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Verdict</Label>
+                    <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={testVerdict} onChange={(event) => setTestVerdict(event.target.value)} disabled={!serialsReady || isPending}>
+                      <option value="tested_ok">Tested OK - no fault found</option>
+                      <option value="warranty_candidate">Warranty candidate - replacement needed</option>
+                      <option value="failed">Failed - out-of-warranty fault</option>
+                      <option value="needs_retest">Needs retest - inconclusive</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Technical summary (optional)</Label>
+                    <textarea className="min-h-24 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" value={testSummary} onChange={(event) => setTestSummary(event.target.value)} maxLength={2000} disabled={!serialsReady || isPending} />
+                  </div>
+                  <Button type="button" onClick={() => testMutation.mutate()} disabled={!serialsReady || isPending} className="bg-indigo-600 text-white hover:bg-indigo-700">
+                    {testMutation.isPending ? 'Submitting...' : 'Submit Test Result'}
+                  </Button>
+                </div>
+              ) : null}
+
+              {workspace.task === 'close_tested_ok' ? (
+                <div className="space-y-3">
+                  {detail.tests[0] ? (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                      <VerdictBadge verdict={detail.tests[0].verdict} />
+                      <p className="mt-2 text-sm text-slate-700">{detail.tests[0].summary || 'No test summary recorded.'}</p>
+                    </div>
+                  ) : null}
+                  <Button type="button" onClick={() => transitionMutation.mutate({ action: 'tested_ok_close', note: 'Closed after tested-ok result' })} disabled={isPending} className="bg-emerald-600 text-white hover:bg-emerald-700">
+                    {transitionMutation.isPending ? 'Closing...' : 'Close Complaint'}
+                  </Button>
+                </div>
+              ) : null}
+
+              {workspace.task === 'request_retest' ? (
+                <div className="space-y-3">
+                  {detail.tests[0] ? <VerdictBadge verdict={detail.tests[0].verdict} /> : null}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Retest reason</Label>
+                    <textarea className="min-h-20 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" value={actionNote} onChange={(event) => setActionNote(event.target.value)} />
+                  </div>
+                  <Button type="button" onClick={() => retestMutation.mutate()} disabled={isPending || actionNote.trim().length < 2} className="bg-amber-500 text-white hover:bg-amber-600">
+                    {retestMutation.isPending ? 'Requesting...' : 'Request Retest'}
+                  </Button>
+                </div>
+              ) : null}
+
+              {workspace.task === 'warranty_decision' || workspace.task === 'handle_failed' ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {can('service:approve') && workspace.task === 'warranty_decision' ? (
+                    <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                      <p className="font-semibold text-emerald-800">Approve replacement</p>
+                      <select className="h-9 w-full rounded-md border border-emerald-300 bg-white px-3 text-sm" value={warrantyWarehouseId} onChange={(event) => setWarrantyWarehouseId(event.target.value)}>
+                        <option value="">Select warehouse...</option>
+                        {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name} - {warehouse.location}</option>)}
+                      </select>
+                      <Input value={warrantyNote} onChange={(event) => setWarrantyNote(event.target.value)} placeholder="Approval note (optional)" />
+                      <Button type="button" onClick={() => warrantyApproveMutation.mutate()} disabled={isPending || !warrantyWarehouseId} className="w-full bg-emerald-600 text-white hover:bg-emerald-700">
+                        {warrantyApproveMutation.isPending ? 'Approving...' : 'Approve Warranty'}
+                      </Button>
+                    </div>
+                  ) : null}
+                  {can('service:approve') ? (
+                    <div className="space-y-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
+                      <p className="font-semibold text-rose-800">Reject warranty and close</p>
+                      <textarea className="min-h-20 w-full rounded-md border border-rose-300 bg-white px-3 py-2 text-sm" value={warrantyRejectReason} onChange={(event) => setWarrantyRejectReason(event.target.value)} placeholder="Rejection reason" />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          if (window.confirm('Rejecting warranty will close this complaint. Continue?')) warrantyRejectMutation.mutate()
+                        }}
+                        disabled={isPending || warrantyRejectReason.trim().length < 2}
+                        className="w-full border-rose-400 text-rose-700 hover:bg-rose-100"
+                      >
+                        {warrantyRejectMutation.isPending ? 'Rejecting...' : 'Reject and Close'}
+                      </Button>
+                    </div>
+                  ) : null}
+                  {can('service:retest') && workspace.task === 'handle_failed' ? (
+                    <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                      <p className="font-semibold text-amber-800">Request another test</p>
+                      <textarea className="min-h-20 w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm" value={actionNote} onChange={(event) => setActionNote(event.target.value)} placeholder="Retest reason" />
+                      <Button type="button" onClick={() => retestMutation.mutate()} disabled={isPending || actionNote.trim().length < 2} className="w-full bg-amber-500 text-white hover:bg-amber-600">
+                        {retestMutation.isPending ? 'Requesting...' : 'Request Retest'}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {workspace.task === 'fulfillment' ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Complaint line</Label>
+                      <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={replacementLineId} onChange={(event) => setReplacementLineId(event.target.value)}>
+                        <option value="">Select line...</option>
+                        {detail.lines.map((line) => <option key={line.id} value={line.id}>{line.serialNumber ?? line.sku}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Replacement serial</Label>
+                      <Input value={replacementSerial} onChange={(event) => setReplacementSerial(event.target.value)} />
+                    </div>
+                  </div>
+                  <Button type="button" variant="outline" onClick={() => replacementAssignMutation.mutate()} disabled={isPending || !replacementLineId || !replacementSerial.trim()}>
+                    {replacementAssignMutation.isPending ? 'Assigning...' : 'Assign Replacement Serial'}
+                  </Button>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Source warehouse</Label>
+                    <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={warrantyWarehouseId || detail.warrantyDecision?.sourceWarehouseId || ''} onChange={(event) => setWarrantyWarehouseId(event.target.value)}>
+                      <option value="">Select warehouse...</option>
+                      {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name} - {warehouse.location}</option>)}
+                    </select>
+                  </div>
+                  <Button type="button" onClick={() => fulfillmentMutation.mutate()} disabled={isPending || workspace.blockers.length > 0 || !(warrantyWarehouseId || detail.warrantyDecision?.sourceWarehouseId)} className="bg-teal-600 text-white hover:bg-teal-700">
+                    {fulfillmentMutation.isPending ? 'Creating...' : 'Create Replacement and Close'}
+                  </Button>
+                </div>
+              ) : null}
+            </CurrentServiceTask>
           ) : null}
 
-          {/* B. Form Evidence */}
-          {!isFinal && can('service:form') ? (
-            <SectionCard title="Form Evidence">
-              {/* Evidence status summary */}
-              <div className="mb-4">
-                {submissions.length === 0 ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700">
-                    <span>⚠</span> No form submission yet — required before test report can be submitted.
-                  </div>
-                ) : formReady ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-sm text-emerald-700">
-                    <span>✓</span> Form evidence ready.
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-sm text-rose-700">
-                    <span>⚠</span> Form submissions have validation errors.
-                  </div>
-                )}
-              </div>
-
-              {/* Existing submissions */}
-              {submissions.length > 0 ? (
-                <div className="mb-4 space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Previous Submissions</p>
-                  {submissions.map((sub) => {
-                    const allValid = sub.values.every((v) => v.isValid)
-                    return (
-                      <div key={sub.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-slate-800">{sub.templateName}</span>
-                          <div className="flex items-center gap-1.5">
-                            <Badge className={`border-0 text-xs ${sub.isDisabled ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
-                              {sub.isDisabled ? 'Disabled' : 'Active'}
-                            </Badge>
-                            <Badge className={`border-0 text-xs ${allValid ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                              {allValid ? 'Valid' : 'Has errors'}
-                            </Badge>
-                          </div>
-                          <span className="text-xs text-slate-400">{timeAgo(sub.submittedAt)}</span>
-                        </div>
-                        {/* Show invalid fields */}
-                        {!allValid ? (
-                          <div className="mt-2 space-y-1">
-                            {sub.values.filter((v) => !v.isValid).map((v) => (
-                              <p key={v.id} className="text-xs text-rose-600">
-                                <code className="font-mono">{v.fieldKey}</code>: {v.validationError}
-                              </p>
-                            ))}
-                          </div>
+          {workspace && workspace.adminActions.length > 0 ? (
+            <SectionCard title="More Actions">
+              <button type="button" className="text-sm font-medium text-slate-600 underline" onClick={() => setShowAdminActions((value) => !value)}>
+                {showAdminActions ? 'Hide administrative actions' : 'Show administrative actions'}
+              </button>
+              {showAdminActions ? (
+                <div className="mt-4 space-y-4 border-t border-slate-200 pt-4">
+                  {workspace.adminActions.includes('reassign') ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <select className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm" value={asiUserId || currentAsiUserId || ''} onChange={(event) => setAsiUserId(event.target.value)}>
+                        <option value="">Select ASI...</option>
+                        {asiUsers.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+                      </select>
+                      <select className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm" value={seUserId || currentSeUserId || ''} onChange={(event) => setSeUserId(event.target.value)}>
+                        <option value="">Select engineer...</option>
+                        {seUsers.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+                      </select>
+                      <Input value={assignNote} onChange={(event) => setAssignNote(event.target.value)} placeholder="Reassignment reason" className="sm:col-span-2" />
+                      <Button type="button" variant="outline" onClick={() => assignMutation.mutate()} disabled={isPending || !(asiUserId || currentAsiUserId)}>Update Assignment</Button>
+                    </div>
+                  ) : null}
+                  {workspace.adminActions.some((action) => action !== 'reassign') ? (
+                    <div className="space-y-3">
+                      <Label className="text-xs">Reason</Label>
+                      <Input value={actionNote} onChange={(event) => setActionNote(event.target.value)} placeholder="Required for closure, cancellation, or reopen" />
+                      <div className="flex flex-wrap gap-2">
+                        {workspace.adminActions.includes('telephonic_close') ? (
+                          <Button type="button" variant="outline" disabled={isPending || actionNote.trim().length < 2} onClick={() => {
+                            if (window.confirm('Close this complaint telephonically?')) transitionMutation.mutate({ action: 'telephonic_close', note: actionNote.trim() })
+                          }}>Telephonic Close</Button>
+                        ) : null}
+                        {workspace.adminActions.includes('cancel') ? (
+                          <Button type="button" variant="outline" className="border-rose-300 text-rose-700" disabled={isPending || actionNote.trim().length < 2} onClick={() => {
+                            if (window.confirm('Cancel this complaint?')) transitionMutation.mutate({ action: 'cancel', note: actionNote.trim() })
+                          }}>Cancel Complaint</Button>
+                        ) : null}
+                        {workspace.adminActions.includes('reopen') ? (
+                          <Button type="button" variant="outline" disabled={isPending || actionNote.trim().length < 2} onClick={() => {
+                            if (window.confirm('Reopen this complaint at the Raised stage?')) reopenMutation.mutate()
+                          }}>Reopen Complaint</Button>
                         ) : null}
                       </div>
-                    )
-                  })}
-                </div>
-              ) : null}
-
-              {/* Submit new form */}
-              <div className="border-t border-slate-200 pt-4 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Submit New Form</p>
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Form Template</Label>
-                  <select
-                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    value={selectedTemplateId}
-                    onChange={(e) => { setSelectedTemplateId(e.target.value) }}
-                  >
-                    <option value="">— Select template —</option>
-                    {templates.filter((t) => t.isActive).map((t) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {selectedTemplate ? (
-                  <DynamicServiceForm
-                    template={selectedTemplate}
-                    onSubmit={(values) => formSubmitMutation.mutate(values)}
-                    isPending={formSubmitMutation.isPending}
-                    submitLabel="Submit Form Evidence"
-                    disabled={isPending}
-                  />
-                ) : null}
-              </div>
-            </SectionCard>
-          ) : null}
-
-          {/* C. Test Report */}
-          {(detail.status === 'visit' || detail.status === 'retest_requested') ? (
-            <SectionCard title="Submit Test Report">
-              {!formReady ? (
-                <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700 mb-4">
-                  <span>⚠</span> Complete a valid form submission above before submitting the test report.
-                </div>
-              ) : null}
-              {!serialsReady ? (
-                <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700 mb-4">
-                  <span>⚠</span> Add serial ID on every battery line before submitting the test report.
-                </div>
-              ) : null}
-
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Verdict</Label>
-                  <select
-                    className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                    value={testVerdict}
-                    onChange={(e) => setTestVerdict(e.target.value)}
-                    disabled={!formReady || !serialsReady || isPending}
-                  >
-                    <option value="tested_ok">Tested OK — No fault found</option>
-                    <option value="warranty_candidate">Warranty Candidate — Replacement needed</option>
-                    <option value="failed">Failed — Out-of-warranty fault</option>
-                    <option value="needs_retest">Needs Retest — Inconclusive</option>
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Summary <span className="text-slate-400 font-normal">(optional)</span></Label>
-                  <textarea
-                    className="min-h-[72px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 resize-y disabled:opacity-50"
-                    value={testSummary}
-                    onChange={(e) => setTestSummary(e.target.value)}
-                    placeholder="Technical findings, observations…"
-                    maxLength={2000}
-                    disabled={!formReady || !serialsReady || isPending}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => testMutation.mutate()}
-                  disabled={!formReady || !serialsReady || isPending}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                >
-                  {testMutation.isPending ? 'Submitting…' : 'Submit Test Report'}
-                </Button>
-              </div>
-
-              {/* Previous test reports */}
-              {detail.tests.length > 0 ? (
-                <div className="mt-4 border-t border-slate-200 pt-4 space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Test History</p>
-                  {detail.tests.map((test) => (
-                    <div key={test.id} className="flex items-start gap-3 rounded-lg bg-slate-50 border border-slate-200 p-3">
-                      <VerdictBadge verdict={test.verdict} />
-                      <div className="flex-1 min-w-0">
-                        {test.summary ? <p className="text-sm text-slate-700">{test.summary}</p> : null}
-                        <p className="text-xs text-slate-400 mt-0.5">{timeAgo(test.createdAt)}</p>
-                      </div>
                     </div>
-                  ))}
-                </div>
-              ) : null}
-            </SectionCard>
-          ) : null}
-
-          {/* D. Warranty Decision */}
-          {detail.status === 'test_result_submitted' && can('service:approve') ? (
-            <SectionCard title="Warranty Decision">
-              {detail.warrantyDecision ? (
-                <div className="mb-4 flex items-center gap-3">
-                  <WarrantyStatusBadge status={detail.warrantyDecision.status} />
-                  {detail.warrantyDecision.decidedAt ? (
-                    <span className="text-xs text-slate-500">{timeAgo(detail.warrantyDecision.decidedAt)}</span>
-                  ) : null}
-                  {detail.warrantyDecision.rejectionReason ? (
-                    <span className="text-sm text-slate-700">{detail.warrantyDecision.rejectionReason}</span>
                   ) : null}
                 </div>
               ) : null}
-
-              {!detail.warrantyDecision || detail.warrantyDecision.status === 'pending' ? (
-                <div className="grid sm:grid-cols-2 gap-4">
-                  {/* Approve */}
-                  <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4 space-y-3">
-                    <p className="text-sm font-semibold text-emerald-800">Approve Warranty</p>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Source Warehouse <span className="text-rose-500">*</span></Label>
-                      <select
-                        className="h-9 w-full rounded-md border border-emerald-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                        value={warrantyWarehouseId}
-                        onChange={(e) => setWarrantyWarehouseId(e.target.value)}
-                        disabled={isPending}
-                      >
-                        <option value="">Select warehouse…</option>
-                        {warehouses.map((w) => (
-                          <option key={w.id} value={w.id}>{w.name} — {w.location}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Note (optional)</Label>
-                      <Input
-                        value={warrantyNote}
-                        onChange={(e) => setWarrantyNote(e.target.value)}
-                        placeholder="Approval note…"
-                        disabled={isPending}
-                        className="text-sm bg-white"
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => warrantyApproveMutation.mutate()}
-                      disabled={isPending || !warrantyWarehouseId}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
-                    >
-                      {warrantyApproveMutation.isPending ? 'Approving…' : 'Approve'}
-                    </Button>
-                  </div>
-
-                  {/* Reject */}
-                  <div className="rounded-xl border-2 border-rose-200 bg-rose-50 p-4 space-y-3">
-                    <p className="text-sm font-semibold text-rose-800">Reject Warranty</p>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Rejection Reason <span className="text-rose-500">*</span></Label>
-                      <textarea
-                        className="min-h-[72px] w-full rounded-md border border-rose-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-400 resize-none disabled:opacity-50"
-                        value={warrantyRejectReason}
-                        onChange={(e) => setWarrantyRejectReason(e.target.value)}
-                        placeholder="Why warranty is being rejected…"
-                        disabled={isPending}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => warrantyRejectMutation.mutate()}
-                      disabled={isPending || !warrantyRejectReason.trim()}
-                      className="w-full border-rose-400 text-rose-700 hover:bg-rose-100"
-                    >
-                      {warrantyRejectMutation.isPending ? 'Rejecting…' : 'Reject'}
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
             </SectionCard>
           ) : null}
 
-          {/* E. Replacement Fulfillment */}
-          {detail.warrantyDecision?.status === 'approved' ? (
-            <SectionCard title="Replacement Fulfillment">
-              {detail.warrantyDecision.replacementOrderId ? (
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-2 text-sm text-emerald-700">
-                    <span>✓</span> Replacement order created.
-                    <button
-                      type="button"
-                      className="underline font-medium"
-                      onClick={() => navigate(`/dashboard/sales/orders/${detail.warrantyDecision!.replacementOrderId}`)}
-                    >
-                      View Order →
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Complaint Line</Label>
-                      <select
-                        className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                        value={replacementLineId}
-                        onChange={(e) => setReplacementLineId(e.target.value)}
-                        disabled={isPending}
-                      >
-                        <option value="">Select line…</option>
-                        {detail.lines.map((line) => (
-                          <option key={line.id} value={line.id}>{line.serialNumber ?? line.batterySku ?? line.id.slice(0, 8)}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Replacement Serial</Label>
-                      <Input
-                        value={replacementSerial}
-                        onChange={(e) => setReplacementSerial(e.target.value)}
-                        placeholder="New serial number"
-                        className="font-mono text-sm"
-                        disabled={isPending}
-                      />
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => replacementAssignMutation.mutate()}
-                    disabled={isPending || !replacementLineId || !replacementSerial.trim()}
-                  >
-                    {replacementAssignMutation.isPending ? 'Assigning…' : 'Assign Replacement Serial'}
-                  </Button>
-
-                  <div className="border-t border-slate-200 pt-4">
-                    {!warrantyWarehouseId ? (
-                      <div className="space-y-1.5 mb-3">
-                        <Label className="text-xs">Source Warehouse</Label>
-                        <select
-                          className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-                          value={warrantyWarehouseId}
-                          onChange={(e) => setWarrantyWarehouseId(e.target.value)}
-                          disabled={isPending}
-                        >
-                          <option value="">Select warehouse…</option>
-                          {warehouses.map((w) => (
-                            <option key={w.id} value={w.id}>{w.name} — {w.location}</option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : null}
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => fulfillmentMutation.mutate()}
-                      disabled={isPending}
-                      className="bg-teal-600 hover:bg-teal-700 text-white"
-                    >
-                      {fulfillmentMutation.isPending ? 'Creating…' : 'Create Fulfillment Order'}
-                    </Button>
-                    <p className="mt-1.5 text-xs text-slate-500">
-                      Requires product ID on complaint lines. Lines without a product ID are skipped.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </SectionCard>
-          ) : null}
-
-          {/* F. Lifecycle actions */}
-          {allowedActions.length > 0 ? (
-            <SectionCard title="Lifecycle Actions">
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Action Note / Reason</Label>
-                  <Input
-                    value={actionNote}
-                    onChange={(e) => setActionNote(e.target.value)}
-                    placeholder="Required for telephonic close and cancel"
-                    className="text-sm"
-                  />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {allowedActions.map((action) => (
-                    <Button
-                      key={action}
-                      type="button"
-                      size="sm"
-                      variant={action === 'cancel' ? 'outline' : action === 'telephonic_close' ? 'outline' : 'default'}
-                      className={
-                        action === 'cancel'
-                          ? 'border-rose-300 text-rose-700 hover:bg-rose-50'
-                          : action === 'telephonic_close'
-                            ? 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'
-                            : action === 'visit_logged'
-                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                              : action === 'retest_requested'
-                                ? 'bg-amber-500 hover:bg-amber-600 text-white'
-                                : 'bg-teal-600 hover:bg-teal-700 text-white'
-                      }
-                      disabled={
-                        isPending ||
-                        ((action === 'telephonic_close' || action === 'cancel') && !actionNote.trim())
-                      }
-                      onClick={() =>
-                        transitionMutation.mutate({ action, note: actionNote.trim() || undefined })
-                      }
-                    >
-                      {transitionMutation.isPending ? '…' : ACTION_LABELS[action] ?? action}
-                    </Button>
-                  ))}
-                </div>
-                {(allowedActions.includes('telephonic_close') || allowedActions.includes('cancel')) ? (
-                  <p className="text-xs text-slate-400">Note is required for telephonic close and cancel actions.</p>
-                ) : null}
-              </div>
-            </SectionCard>
-          ) : null}
-
-          {/* Closed resolution note */}
-          {isFinal && (detail.resolutionNote || detail.telephonicReason) ? (
-            <SectionCard title="Resolution">
-              <p className="text-sm text-slate-700">{detail.resolutionNote ?? detail.telephonicReason}</p>
-              {detail.closedAt ? (
-                <p className="mt-1 text-xs text-slate-400">Closed {timeAgo(detail.closedAt)}</p>
-              ) : null}
-            </SectionCard>
+          {(isFinal || detail.assignments.length > 0 || submissions.length > 0 || detail.tests.length > 0) ? (
+            <ServiceHistoryPanel
+              detail={detail}
+              submissions={submissions}
+              warehouses={warehouses}
+              showResolution={isFinal}
+              onViewReplacementOrder={(orderId) => navigate(`/dashboard/sales/orders/${orderId}`)}
+            />
           ) : null}
         </div>
 
-        {/* ── Right column: info + serial intelligence + timeline (2/5) ── */}
-        <div className="lg:col-span-2 space-y-4">
-
-          {/* Complaint metadata */}
-          <SectionCard title="Complaint Details">
-            <div className="space-y-3">
-              <InfoRow label="Customer" value={detail.customerName ?? <span className="text-slate-400">Not captured</span>} />
-              <InfoRow label="Phone" value={detail.customerPhone ?? <span className="text-slate-400">Not captured</span>} />
-              <InfoRow label="Outlet" value={detail.outletName ?? <span className="text-slate-400">No outlet</span>} />
-              <InfoRow label="Created" value={timeAgo(detail.createdAt)} />
-              <InfoRow label="Last updated" value={timeAgo(detail.updatedAt)} />
-              {detail.description ? (
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Description</span>
-                  <p className="text-sm text-slate-700 leading-relaxed">{detail.description}</p>
-                </div>
-              ) : null}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Battery Lines">
-            <div className="space-y-3">
-              {!serialsReady ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                  Serial ID is optional at creation, but every line needs one before test report submission.
-                </div>
-              ) : null}
-              {detail.lines.map((line, index) => {
-                const draft = lineDrafts[line.id] ?? {
-                  productId: line.productId ?? '',
-                  serialNumber: line.serialNumber ?? '',
-                  notes: line.notes ?? '',
-                }
-                const canEditLine = !isFinal && (can('service:write') || can('service:workflow'))
-                const hasChanges =
-                  draft.productId !== (line.productId ?? '') ||
-                  draft.serialNumber !== (line.serialNumber ?? '') ||
-                  draft.notes !== (line.notes ?? '')
-                return (
-                  <div key={line.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Line {index + 1}</span>
-                      {!line.serialNumber ? <Badge className="border-0 bg-amber-100 text-amber-700 text-xs">Serial Pending</Badge> : null}
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Battery SKU</Label>
-                      <select
-                        className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 disabled:opacity-50"
-                        value={draft.productId}
-                        onChange={(e) =>
-                          setLineDrafts((prev) => ({
-                            ...prev,
-                            [line.id]: { ...draft, productId: e.target.value },
-                          }))
-                        }
-                        disabled={!canEditLine || isPending}
-                      >
-                        <option value="">{skusQuery.isLoading ? 'Loading SKUs…' : 'Select catalog SKU'}</option>
-                        {(skusQuery.data ?? []).map((sku) => (
-                          <option key={sku.id} value={sku.id}>
-                            {(sku.displayName || sku.name)} ({sku.skuCode || sku.sku || 'SKU'})
-                          </option>
-                        ))}
-                      </select>
-                      {line.batterySku ? <p className="text-xs text-slate-500">Current SKU: {line.batterySku}</p> : null}
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Serial ID</Label>
-                      <Input
-                        value={draft.serialNumber}
-                        onChange={(e) =>
-                          setLineDrafts((prev) => ({
-                            ...prev,
-                            [line.id]: { ...draft, serialNumber: e.target.value },
-                          }))
-                        }
-                        placeholder="Required before test report"
-                        className="bg-white font-mono text-sm"
-                        disabled={!canEditLine || isPending}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Notes</Label>
-                      <Input
-                        value={draft.notes}
-                        onChange={(e) =>
-                          setLineDrafts((prev) => ({
-                            ...prev,
-                            [line.id]: { ...draft, notes: e.target.value },
-                          }))
-                        }
-                        placeholder="Line notes"
-                        className="bg-white text-sm"
-                        disabled={!canEditLine || isPending}
-                      />
-                    </div>
-                    {canEditLine ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => lineUpdateMutation.mutate(line.id)}
-                        disabled={isPending || !hasChanges || !draft.productId}
-                      >
-                        {lineUpdateMutation.isPending ? 'Saving…' : 'Save Line'}
-                      </Button>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </div>
-          </SectionCard>
-
-          {/* Serial intelligence */}
-          <SectionCard title="Serial Intelligence">
-            <div className="space-y-3">
-              {detail.lines.map((line) => {
-                const insight = detail.serialInsights?.find(
-                  (s) => s.lineId === line.id && s.role === 'old',
-                )
-                const replacementInsight = detail.serialInsights?.find(
-                  (s) => s.lineId === line.id && s.role === 'replacement',
-                )
-                const expanded = expandedSerials.has(line.id)
-
-                return (
-                  <div key={line.id} className="rounded-lg border border-slate-200 overflow-hidden">
-                    <button
-                      type="button"
-                      className="w-full flex items-start justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 transition-colors"
-                      onClick={() =>
-                        setExpandedSerials((prev) => {
-                          const next = new Set(prev)
-                          if (next.has(line.id)) next.delete(line.id)
-                          else next.add(line.id)
-                          return next
-                        })
-                      }
-                    >
-	                      <div className="min-w-0">
-	                        <code className="text-sm font-mono font-semibold text-slate-900">
-	                          {line.serialNumber ?? 'Serial pending'}
-	                        </code>
-	                        <p className="text-xs text-slate-500 truncate">SKU: {line.batterySku ?? 'Not captured'}</p>
-	                        {line.serialNumber && insight?.resolved?.product ? (
-	                          <p className="text-xs text-slate-500 truncate">{insight.resolved.product.name}</p>
-	                        ) : (
-	                          <p className="text-xs text-slate-400 italic">
-	                            {line.serialNumber ? 'No product match' : 'Add serial to resolve product history'}
-	                          </p>
-	                        )}
-	                      </div>
-                      <svg
-                        className={`h-4 w-4 text-slate-400 shrink-0 mt-0.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
-                        fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-
-                    {expanded ? (
-                      <div className="border-t border-slate-100 px-3 py-3 space-y-3 bg-slate-50">
-                        {insight?.resolved?.product ? (
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div>
-                              <p className="text-slate-400 font-medium">SKU</p>
-                              <code className="font-mono text-slate-700">{insight.resolved.product.sku}</code>
-                            </div>
-                            {insight.resolved.soldToOutlet ? (
-                              <div>
-                                <p className="text-slate-400 font-medium">Sold To</p>
-                                <p className="text-slate-700">{insight.resolved.soldToOutlet.name}</p>
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-
-                        {insight?.resolved?.salesChain?.length ? (
-                          <div>
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Sales Chain</p>
-                            <div className="overflow-x-auto">
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead className="text-xs">Order</TableHead>
-                                    <TableHead className="text-xs">Dispatched</TableHead>
-                                    <TableHead className="text-xs">Status</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {insight.resolved.salesChain.map((chain) => (
-                                    <TableRow key={chain.dispatchId}>
-                                      <TableCell className="text-xs font-mono">{chain.orderNumber}</TableCell>
-                                      <TableCell className="text-xs">
-                                        {new Date(chain.dispatchDate).toLocaleDateString()}
-                                      </TableCell>
-                                      <TableCell>
-                                        <Badge className={`border-0 text-xs ${
-                                          chain.deliveryStatus === 'delivered'
-                                            ? 'bg-emerald-100 text-emerald-700'
-                                            : chain.deliveryStatus === 'in_transit'
-                                              ? 'bg-blue-100 text-blue-700'
-                                              : 'bg-slate-100 text-slate-600'
-                                        }`}>
-                                          {chain.deliveryStatus}
-                                        </Badge>
-                                      </TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {/* Replacement serial */}
-                        {line.replacementSerialNumber ? (
-                          <div>
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Replacement Serial</p>
-                            <div className="flex items-center gap-2">
-                              <code className="text-sm font-mono text-slate-700">{line.replacementSerialNumber}</code>
-                              {replacementInsight?.resolved?.replacementConflict?.hasConflict ? (
-                                <Badge className="bg-rose-100 text-rose-700 border-0 text-xs">Conflict</Badge>
-                              ) : (
-                                <Badge className="bg-emerald-100 text-emerald-700 border-0 text-xs">OK</Badge>
-                              )}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </div>
-          </SectionCard>
-
-          {/* Activity timeline */}
-          <SectionCard title="Activity Timeline">
-            {detail.activities.length === 0 ? (
-              <p className="text-sm text-slate-400 italic">No activities recorded yet.</p>
-            ) : (
-              <div className="relative space-y-0">
-                {detail.activities.map((activity, idx) => (
-                  <div key={activity.id} className="flex gap-3">
-                    <div className="flex flex-col items-center">
-                      <div className="h-2.5 w-2.5 rounded-full bg-teal-500 ring-2 ring-white shrink-0 mt-1" />
-                      {idx < detail.activities.length - 1 ? (
-                        <div className="w-px flex-1 bg-slate-200 min-h-[1.5rem]" />
-                      ) : null}
-                    </div>
-                    <div className="pb-4 flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2 flex-wrap">
-                        <span className="text-xs font-semibold text-slate-800">
-                          {activity.action.replace(/_/g, ' ')}
-                        </span>
-                        <span className="text-[10px] text-slate-400 whitespace-nowrap">
-                          {timeAgo(activity.createdAt)}
-                        </span>
-                      </div>
-                      {activity.fromStatus !== activity.toStatus && activity.toStatus ? (
-                        <p className="text-[10px] text-slate-500 mt-0.5">
-                          {activity.fromStatus ?? '—'} → {activity.toStatus}
-                        </p>
-                      ) : null}
-                      {activity.note ? (
-                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{activity.note}</p>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </SectionCard>
+        <div className="space-y-4 lg:col-span-2">
+          <InfoPanel detail={detail} />
+          {can('attachments:read') ? (
+            <EvidencePanel
+              complaintId={detail.id}
+              canWrite={workspace?.task === 'diagnostic' && can('attachments:write')}
+              committedEvidence={submissions.flatMap((submission) =>
+                (submission.attachments ?? []).map((attachment) => ({
+                  ...attachment,
+                  formName: submission.templateName,
+                })),
+              )}
+              onStagedEvidenceChange={handleStagedEvidenceChange}
+            />
+          ) : null}
+          <LinesPanel
+            detail={detail}
+            isFinal={isFinal}
+            isPending={isPending}
+            lineDrafts={lineDrafts}
+            skus={skusQuery.data ?? []}
+            skusLoading={skusQuery.isLoading}
+            canEdit={can('service:write') || can('service:workflow')}
+            onDraftChange={(lineId, draft) => setLineDrafts((prev) => ({ ...prev, [lineId]: draft }))}
+            onSaveLine={(lineId) => lineUpdateMutation.mutate(lineId)}
+            savingLineId={savingLineId}
+          />
+          <SerialIntelPanel detail={detail} />
+          <TimelinePanel detail={detail} />
         </div>
       </div>
     </div>

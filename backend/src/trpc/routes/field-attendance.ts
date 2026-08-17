@@ -15,6 +15,7 @@ const attendanceSchema = z.object({
   markedBy: z.string().nullable(),
   note: z.string().nullable(),
   markedAt: z.string(),
+  updatedAt: z.string(),
   userName: z.string().nullable()
 });
 
@@ -27,6 +28,7 @@ const ATTENDANCE_SELECT = {
   markedBy: true,
   note: true,
   markedAt: true,
+  updatedAt: true,
   user: { select: { name: true } }
 } as const;
 
@@ -39,7 +41,8 @@ function toAttendance(row: {
   markedBy: string | null;
   note: string | null;
   markedAt: Date;
-    user?: { name: string } | null;
+  updatedAt: Date;
+  user?: { name: string } | null;
 }) {
   return {
     id: row.id,
@@ -50,6 +53,7 @@ function toAttendance(row: {
     markedBy: row.markedBy,
     note: row.note,
     markedAt: row.markedAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
     userName: row.user?.name ?? null
   };
 }

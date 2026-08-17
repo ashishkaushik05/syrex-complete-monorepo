@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { Prisma } from "@prisma/client";
 import { P } from "../../rbac/catalog";
 import { dispatchesRouter } from "./dispatches";
+import { ACTOR_ID, makeCtx, OUTLET_A, OUTLET_B, WAREHOUSE_A, WAREHOUSE_B } from "./__testkit__";
 
 type DispatchRow = {
   id: string;
@@ -27,11 +28,6 @@ type DispatchRow = {
   }>;
 };
 
-const ACTOR_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const OUTLET_A = "11111111-1111-4111-8111-111111111111";
-const OUTLET_B = "22222222-2222-4222-8222-222222222222";
-const WAREHOUSE_A = "33333333-3333-4333-8333-333333333333";
-const WAREHOUSE_B = "44444444-4444-4444-8444-444444444444";
 const DISPATCH_A = "77777777-7777-4777-8777-777777777777";
 const DISPATCH_B = "88888888-8888-4888-8888-888888888888";
 
@@ -129,6 +125,32 @@ function createCaller(opts: {
       findUnique: async (args: any) => {
         return opts.dispatches.find((dispatch) => dispatch.id === args.where?.id) ?? null;
       },
+      update: async (args: any) => {
+        const d = opts.dispatches.find((dispatch) => dispatch.id === args.where?.id)!;
+        return {
+          ...d,
+          deliveryStatus: args.data.deliveryStatus ?? d.deliveryStatus,
+          deliveredAt: args.data.deliveredAt ?? d.deliveredAt,
+          // markDelivered's include reaches orderLine.order; markInTransit only orderLine.orderId.
+          // Provide both so toDispatchItem and the complaint-resolution scan both resolve.
+          lines: d.lines.map((line) => ({
+            ...line,
+            orderLine: {
+              orderId: line.orderLine.orderId,
+              order: { id: line.orderLine.orderId, orderType: "sale", sourceComplaintId: null },
+            },
+          })),
+        };
+      },
+    },
+    dispatchLine: {
+      findFirst: async (args: any) => {
+        const outletId = args.where?.orderLine?.order?.outletId;
+        const dispatchId = args.where?.dispatchId;
+        const d = opts.dispatches.find((dispatch) => dispatch.id === dispatchId);
+        if (d && (!outletId || d.outletId === outletId)) return { id: `line-${dispatchId}` };
+        return null;
+      },
     },
     dispatchTimeline: {
       findMany: async (args: any) => [
@@ -142,20 +164,22 @@ function createCaller(opts: {
           happenedAt: new Date("2026-05-20T10:05:00.000Z"),
         },
       ],
+      create: async () => ({ id: "timeline-new" }),
     },
   };
 
-  return dispatchesRouter.createCaller({
-    requestId: "test",
-    actor: { id: ACTOR_ID, orgId: opts.actorOrgId ?? null, sessionId: null },
-    prisma: prisma as any,
-    permissions: [],
-    managedWarehouseId: null,
-    serviceClientId: null,
-    serviceClientSecret: null,
-    serviceScopes: [],
-    sourceIp: "203.0.113.10",
-  } as any);
+  (prisma as any).$transaction = async (fn: any) => fn(prisma);
+
+  return dispatchesRouter.createCaller(
+    makeCtx({
+      actorId: ACTOR_ID,
+      actorOrgId: opts.actorOrgId ?? null,
+      prisma,
+      permissions: opts.permissions,
+      managedWarehouseId: opts.managedWarehouseId,
+      linkedOutletId: opts.linkedOutletId,
+    }),
+  );
 }
 
 describe("dispatches route scoping", () => {
@@ -201,5 +225,142 @@ describe("dispatches route scoping", () => {
     await expect(caller.list({ limit: 25 })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+});
+
+// ── Phase 3 ASVF hardening (DEC-20260613-010) ────────────────────────────────
+
+const ADMIN = ["*"];
+
+describe("dispatches auth gates (DEC-20260613-010)", () => {
+  const base = { permissions: [] as string[], linkedOutletId: null, managedWarehouseId: null, dispatches: [] as DispatchRow[] };
+
+  it("list requires dispatches:read", async () => {
+    await expect(createCaller(base).list({ limit: 25 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("markInTransit requires dispatches:write", async () => {
+    await expect(createCaller(base).markInTransit({ id: DISPATCH_A })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("markDelivered requires dispatches:deliver", async () => {
+    await expect(createCaller(base).markDelivered({ id: DISPATCH_A })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("dispatches.markInTransit state machine (DEC-20260613-010)", () => {
+  it("moves a created dispatch to in_transit (Happy)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "created")],
+    });
+    const out = await caller.markInTransit({ id: DISPATCH_A, note: "left depot" });
+    expect(out.deliveryStatus).toBe("in_transit");
+  });
+
+  it("rejects the in_transit→in_transit transition (Failure)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "in_transit")],
+    });
+    await expect(caller.markInTransit({ id: DISPATCH_A })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("rejects the delivered→in_transit backward transition (Failure)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "delivered")],
+    });
+    await expect(caller.markInTransit({ id: DISPATCH_A })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("returns NOT_FOUND for an unknown dispatch (Failure)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [],
+    });
+    await expect(caller.markInTransit({ id: DISPATCH_A })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("forbids a warehouse manager updating another warehouse's dispatch (Scope)", async () => {
+    const caller = createCaller({
+      permissions: [P.dispatches.write],
+      linkedOutletId: null,
+      managedWarehouseId: WAREHOUSE_B,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "created")],
+    });
+    await expect(caller.markInTransit({ id: DISPATCH_A })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects a non-uuid id (Validation)", async () => {
+    const caller = createCaller({ permissions: ADMIN, linkedOutletId: null, managedWarehouseId: null, dispatches: [] });
+    await expect(caller.markInTransit({ id: "not-a-uuid" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+describe("dispatches.markDelivered state machine (DEC-20260613-010)", () => {
+  it("delivers an in_transit dispatch and stamps deliveredAt (Happy)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "in_transit")],
+    });
+    const out = await caller.markDelivered({ id: DISPATCH_A, deliveredAt: "2026-05-21T12:00:00.000Z" });
+    expect(out.deliveryStatus).toBe("delivered");
+    expect(out.deliveredAt).toBe("2026-05-21T12:00:00.000Z");
+  });
+
+  it("allows delivering straight from created (Happy)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "created")],
+    });
+    const out = await caller.markDelivered({ id: DISPATCH_A });
+    expect(out.deliveryStatus).toBe("delivered");
+  });
+
+  it("rejects re-delivering an already-delivered dispatch (Failure)", async () => {
+    const caller = createCaller({
+      permissions: ADMIN,
+      linkedOutletId: null,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "delivered")],
+    });
+    await expect(caller.markDelivered({ id: DISPATCH_A })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("lets the receiving outlet user confirm delivery of its own dispatch (Scope happy)", async () => {
+    const caller = createCaller({
+      permissions: [P.dispatches.deliver],
+      linkedOutletId: OUTLET_A,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "in_transit")],
+    });
+    const out = await caller.markDelivered({ id: DISPATCH_A });
+    expect(out.deliveryStatus).toBe("delivered");
+  });
+
+  it("forbids an outlet user confirming a dispatch that is not theirs (Scope)", async () => {
+    const caller = createCaller({
+      permissions: [P.dispatches.deliver],
+      linkedOutletId: OUTLET_B,
+      managedWarehouseId: null,
+      dispatches: [makeDispatch(DISPATCH_A, OUTLET_A, WAREHOUSE_A, "in_transit")],
+    });
+    await expect(caller.markDelivered({ id: DISPATCH_A })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("returns NOT_FOUND for an unknown dispatch (Failure)", async () => {
+    const caller = createCaller({ permissions: ADMIN, linkedOutletId: null, managedWarehouseId: null, dispatches: [] });
+    await expect(caller.markDelivered({ id: DISPATCH_A })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

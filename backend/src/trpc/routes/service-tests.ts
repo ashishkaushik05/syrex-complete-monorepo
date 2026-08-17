@@ -1,9 +1,14 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { createTRPCRouter, perm, permAny } from "../trpc";
+import { createTRPCRouter, internalPerm, internalPermAny } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { recordComplaintActivity, resolveTransition } from "./service-shared";
+import {
+  assertServiceComplaintAccess,
+  resolveServiceActorRole,
+  serviceComplaintAccessWhere,
+} from "./service-access";
 
 // Batch 04: refuse null actor orgId rather than silently widening filters.
 function requireOrgId(actorOrgId: string | null): string {
@@ -20,18 +25,20 @@ const testOutputSchema = z.object({
   submittedById: z.string(),
   verdict: z.string(),
   summary: z.string().nullable(),
+  causeOfFailure: z.string().nullable(),
   structuredData: z.unknown().nullable(),
   createdAt: z.date(),
 });
 
 export const serviceTestsRouter = createTRPCRouter({
-  submit: permAny(P.service.workflow, P.service.manage)
+  submit: internalPermAny(P.service.workflow, P.service.manage)
     .input(
       z.object({
         complaintId: z.string().uuid(),
         complaintLineId: z.string().uuid().nullable().optional(),
         verdict: z.enum(["tested_ok", "warranty_candidate", "failed", "needs_retest"]),
         summary: z.string().max(2000).optional(),
+        causeOfFailure: z.string().trim().max(200).optional(),
         structuredData: z.record(z.string(), z.unknown()).optional(),
       }),
     )
@@ -40,9 +47,15 @@ export const serviceTestsRouter = createTRPCRouter({
       const actorId = ctx.actor.id!;
 
       const orgId = requireOrgId(ctx.actor.orgId);
+      await assertServiceComplaintAccess(ctx, input.complaintId, orgId);
+      const actorRole = await resolveServiceActorRole(ctx);
+      if (actorRole === "asi") {
+        throw apiError("FORBIDDEN", "ASI users cannot submit service test reports");
+      }
+      const accessWhere = await serviceComplaintAccessWhere(ctx, orgId);
       const created = await ctx.prisma.$transaction(async (tx) => {
 	        const complaint = await tx.serviceComplaint.findFirst({
-	          where: { id: input.complaintId, orgId },
+	          where: { AND: [accessWhere, { id: input.complaintId }] },
 	          select: {
 	            id: true,
 	            orgId: true,
@@ -92,13 +105,14 @@ export const serviceTestsRouter = createTRPCRouter({
             submittedById: actorId,
             verdict: input.verdict,
             summary: input.summary ?? null,
+            causeOfFailure: input.causeOfFailure ?? null,
             structuredData: (input.structuredData as Prisma.InputJsonValue | undefined) ?? undefined,
           },
         });
 
         await tx.serviceComplaint.update({
           where: { id: input.complaintId },
-          data: { status: transition.nextStatus },
+          data: { status: transition.nextStatus, testedAt: new Date() },
         });
 
         // Link unlinked submissions to this test report
@@ -133,12 +147,13 @@ export const serviceTestsRouter = createTRPCRouter({
         submittedById: created.submittedById,
         verdict: created.verdict,
         summary: created.summary,
+        causeOfFailure: created.causeOfFailure,
         structuredData: created.structuredData ?? null,
         createdAt: created.createdAt,
       };
     }),
 
-  requestRetest: perm(P.service.retest)
+  requestRetest: internalPerm(P.service.retest)
     .input(
       z.object({
         complaintId: z.string().uuid(),
@@ -155,9 +170,14 @@ export const serviceTestsRouter = createTRPCRouter({
       const actorId = ctx.actor.id!;
 
       const orgId = requireOrgId(ctx.actor.orgId);
+      await assertServiceComplaintAccess(ctx, input.complaintId, orgId);
+      if (await resolveServiceActorRole(ctx) === "service_engineer") {
+        throw apiError("FORBIDDEN", "Service Engineers cannot request retests");
+      }
+      const accessWhere = await serviceComplaintAccessWhere(ctx, orgId);
       const updated = await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findFirst({
-          where: { id: input.complaintId, orgId },
+          where: { AND: [accessWhere, { id: input.complaintId }] },
           select: { id: true, orgId: true, status: true },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");

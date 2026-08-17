@@ -1,10 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
-import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
+import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
-import { actorHasInternalSalesOutletAccess, assertOutletWarehouseScope, findActorLinkedOutletId } from "./outlet-access";
+import { assertOutletWarehouseScope, resolveFinancialScope } from "./outlet-access";
 
 type ChargeType = "percentage" | "fixed";
 type AgingBucket = "current" | "1_30" | "31_60" | "61_90" | "90_plus";
@@ -242,16 +242,11 @@ export const invoicesRouter = createTRPCRouter({
     .output(z.object({ items: z.array(invoiceSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const resolved = input ?? { limit: 25 };
-      const offset = decodeCursor(resolved.cursor) ?? 0;
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
-      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
-      const hasGlobalAccess = isSuperAdmin || hasInternalSalesAccess;
-      const isWarehouseScoped = !hasGlobalAccess && !linkedOutletId && !!ctx.managedWarehouseId;
-
-      if (!hasGlobalAccess && !linkedOutletId && !isWarehouseScoped) {
-        throw apiError("FORBIDDEN", "No safe invoice scope available");
-      }
+      const cursor = decodeCursor(resolved.cursor);
+      const { linkedOutletId, hasGlobalAccess, isWarehouseScoped } = resolveFinancialScope(ctx, {
+        includeInternalSales: true,
+        errorMessage: "No safe invoice scope available",
+      });
 
       if (resolved.outletId && resolved.orderId) {
         const matchingOrder = await ctx.prisma.saleOrder.findFirst({
@@ -272,20 +267,16 @@ export const invoicesRouter = createTRPCRouter({
         andClauses.push({ outlet: { warehouseId: ctx.managedWarehouseId } });
       }
 
+      if (resolved.q) andClauses.push({ OR: [{ invoiceNumber: { contains: resolved.q, mode: "insensitive" } }, { order: { orderNumber: { contains: resolved.q, mode: "insensitive" } } }] });
+      if (cursor) andClauses.push({ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] });
+
       const rows = await ctx.prisma.invoice.findMany({
         where: {
           AND: andClauses.length ? andClauses : undefined,
-          OR: resolved.q
-            ? [
-                { invoiceNumber: { contains: resolved.q, mode: "insensitive" } },
-                { order: { orderNumber: { contains: resolved.q, mode: "insensitive" } } }
-              ]
-            : undefined,
           // TODO(batch-08): replace warehouse fallback with outlet.orgId/warehouse.orgId.
         },
         include: { lines: true, charges: { orderBy: [{ displayOrder: "asc" }] } },
-        orderBy: [{ invoiceDate: "desc" }, { id: "desc" }],
-        skip: offset,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: resolved.limit + 1
       });
 
@@ -293,7 +284,7 @@ export const invoicesRouter = createTRPCRouter({
       const pageItems = hasMore ? rows.slice(0, resolved.limit) : rows;
       return {
         items: pageItems.map((row) => toInvoiceItem(row)),
-        nextCursor: hasMore ? encodeCursor(offset + resolved.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 
@@ -301,15 +292,10 @@ export const invoicesRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .output(invoiceSchema)
     .query(async ({ ctx, input }) => {
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
-      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
-      const hasGlobalAccess = isSuperAdmin || hasInternalSalesAccess;
-      const isWarehouseScoped = !hasGlobalAccess && !linkedOutletId && !!ctx.managedWarehouseId;
-
-      if (!hasGlobalAccess && !linkedOutletId && !isWarehouseScoped) {
-        throw apiError("FORBIDDEN", "No safe invoice scope available");
-      }
+      const { linkedOutletId, hasGlobalAccess, isWarehouseScoped } = resolveFinancialScope(ctx, {
+        includeInternalSales: true,
+        errorMessage: "No safe invoice scope available",
+      });
 
       const whereClauses: Prisma.InvoiceWhereInput[] = [{ id: input.id }];
       if (linkedOutletId && !hasGlobalAccess) {
@@ -633,17 +619,12 @@ export const invoicesRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       const resolved = input ?? { limit: 100 };
-      const offset = decodeCursor(resolved.cursor) ?? 0;
+      const cursor = decodeCursor(resolved.cursor);
       const asOf = resolved.asOf ? new Date(resolved.asOf) : new Date();
-      const linkedOutletId = await findActorLinkedOutletId(ctx);
-      const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
-      const hasInternalSalesAccess = await actorHasInternalSalesOutletAccess(ctx);
-      const hasGlobalAccess = isSuperAdmin || hasInternalSalesAccess;
-      const isWarehouseScoped = !hasGlobalAccess && !linkedOutletId && !!ctx.managedWarehouseId;
-
-      if (!hasGlobalAccess && !linkedOutletId && !isWarehouseScoped) {
-        throw apiError("FORBIDDEN", "No safe invoice scope available");
-      }
+      const { linkedOutletId, hasGlobalAccess, isWarehouseScoped } = resolveFinancialScope(ctx, {
+        includeInternalSales: true,
+        errorMessage: "No safe invoice scope available",
+      });
 
       const andClauses: Prisma.InvoiceWhereInput[] = [
         { amountDue: { gt: new Prisma.Decimal(0) } },
@@ -660,10 +641,12 @@ export const invoicesRouter = createTRPCRouter({
       const where: Prisma.InvoiceWhereInput = {
         AND: andClauses,
       };
+      const pageClauses: Prisma.InvoiceWhereInput[] = [...andClauses];
+      if (cursor) pageClauses.push({ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] });
 
       const [rows, allOpen] = await Promise.all([
         ctx.prisma.invoice.findMany({
-          where,
+          where: { AND: pageClauses },
           select: {
             id: true,
             invoiceNumber: true,
@@ -671,9 +654,9 @@ export const invoicesRouter = createTRPCRouter({
             invoiceDate: true,
             dueDate: true,
             amountDue: true,
+            createdAt: true,
           },
-          orderBy: [{ dueDate: "asc" }, { invoiceDate: "asc" }, { id: "asc" }],
-          skip: offset,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: resolved.limit + 1,
         }),
         ctx.prisma.invoice.findMany({
@@ -732,7 +715,7 @@ export const invoicesRouter = createTRPCRouter({
             agingBucket: aging.agingBucket ?? "current",
           };
         }),
-        nextCursor: hasMore ? encodeCursor(offset + resolved.limit) : null,
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null,
         summary: {
           current: summary.current.toString(),
           bucket1_30: summary.bucket1_30.toString(),

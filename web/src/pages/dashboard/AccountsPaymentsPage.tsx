@@ -66,6 +66,8 @@ type OutletPaymentHistoryItem = {
   paymentDate: string
   reference?: string | null
   description?: string | null
+  voidedAt?: string | null
+  voidReason?: string | null
   allocatedAmount: number
   allocatedInvoices: number
   allocations: Array<{
@@ -111,6 +113,7 @@ export function AccountsPaymentsPage() {
   const [description, setDescription] = useState('')
   const [toast, setToast] = useState<ToastState>(null)
   const [recordConfirmOpen, setRecordConfirmOpen] = useState(false)
+  const [voidReasons, setVoidReasons] = useState<Record<string, string>>({})
 
   const outstandingQuery = useQuery({
     queryKey: ['accounts-outstanding'],
@@ -218,6 +221,33 @@ export function AccountsPaymentsPage() {
       setToast({
         type: 'error',
         text: apiErrorMessage(error, 'Unable to record payment.'),
+      })
+    },
+  })
+
+  const voidPaymentMutation = useMutation({
+    mutationFn: async ({ paymentId, reason }: { paymentId: string; reason: string }) => {
+      const response = await api.patch<{ data: OutletPaymentHistoryItem }>(
+        `/accounts/payments/${paymentId}/void`,
+        { reason },
+      )
+      return response.data.data
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['accounts-outstanding'] }),
+        queryClient.invalidateQueries({ queryKey: ['accounts-ar-aging'] }),
+        queryClient.invalidateQueries({ queryKey: ['accounts-outlet-payment-history'] }),
+        queryClient.invalidateQueries({ queryKey: ['outlet-payments'] }),
+        queryClient.invalidateQueries({ queryKey: ['outlets-admin-list'] }),
+      ])
+      setVoidReasons({})
+      setToast({ type: 'success', text: 'Payment voided and balances restored.' })
+    },
+    onError: (error) => {
+      setToast({
+        type: 'error',
+        text: apiErrorMessage(error, 'Unable to void payment.'),
       })
     },
   })
@@ -418,7 +448,7 @@ export function AccountsPaymentsPage() {
                 open={recordConfirmOpen}
                 onOpenChange={setRecordConfirmOpen}
                 title="Record Payment"
-                description={`Record a payment of ${formatCurrencyINR(amount)} for ${selectedOutlet?.outletName ?? 'this outlet'}? This will allocate the amount against outstanding invoices and cannot be reversed.`}
+                description={`Record a payment of ${formatCurrencyINR(amount)} for ${selectedOutlet?.outletName ?? 'this outlet'}? This will allocate the amount against outstanding invoices.`}
                 confirmLabel="Record Payment"
                 onConfirm={() => { setRecordConfirmOpen(false); recordPaymentMutation.mutate() }}
                 loading={recordPaymentMutation.isPending}
@@ -446,11 +476,23 @@ export function AccountsPaymentsPage() {
           ) : (
             <div className="space-y-2">
               {(paymentHistoryQuery.data?.data ?? []).map((payment) => (
-                <div key={payment.id} className="rounded-md border border-slate-200 p-3">
+                <div
+                  key={payment.id}
+                  className={`rounded-md border p-3 ${
+                    payment.voidedAt ? 'border-red-200 bg-red-50/50' : 'border-slate-200'
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-slate-900">
-                      {formatCurrencyINR(payment.amount)}
-                    </p>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        {formatCurrencyINR(payment.amount)}
+                      </p>
+                      {payment.voidedAt ? (
+                        <p className="text-xs font-medium text-red-700">
+                          VOID · {new Date(payment.voidedAt).toLocaleDateString()}
+                        </p>
+                      ) : null}
+                    </div>
                     <p className="text-xs text-slate-500">
                       {new Date(payment.paymentDate).toLocaleDateString()}
                     </p>
@@ -461,6 +503,40 @@ export function AccountsPaymentsPage() {
                   <p className="mt-1 text-xs text-slate-500">
                     {payment.allocatedInvoices} invoice(s), {formatCurrencyINR(payment.allocatedAmount)} allocated
                   </p>
+                  {payment.voidedAt ? (
+                    <p className="mt-2 text-xs text-red-700">
+                      Reason: {payment.voidReason ?? 'No reason recorded'}
+                    </p>
+                  ) : (
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        value={voidReasons[payment.id] ?? ''}
+                        onChange={(event) =>
+                          setVoidReasons((current) => ({
+                            ...current,
+                            [payment.id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Void reason"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={
+                          voidPaymentMutation.isPending ||
+                          (voidReasons[payment.id] ?? '').trim().length < 3
+                        }
+                        onClick={() =>
+                          voidPaymentMutation.mutate({
+                            paymentId: payment.id,
+                            reason: (voidReasons[payment.id] ?? '').trim(),
+                          })
+                        }
+                      >
+                        Void
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

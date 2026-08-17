@@ -43,7 +43,88 @@ const summarySchema = z.object({
   ordersCount: z.number().int(),
 });
 
+const outletProfileSchema = z.object({
+  id: z.string(),
+  outletCode: z.string(),
+  name: z.string(),
+  ownerName: z.string(),
+  phone: z.string(),
+  address: z.string(),
+  creditLimit: z.string(),
+  outstandingBalance: z.string(),
+  isActive: z.boolean(),
+  legalName: z.string().nullable(),
+  gstin: z.string().nullable(),
+  billingAddress1: z.string().nullable(),
+  billingAddress2: z.string().nullable(),
+  billingCity: z.string().nullable(),
+  billingState: z.string().nullable(),
+  billingPincode: z.string().nullable(),
+  warehouseId: z.string().nullable(),
+});
+
+const updateBillingInputSchema = z.object({
+  billingProfileId: z.string().uuid().nullable(),
+});
+
 export const outletPortalRouter = createTRPCRouter({
+  myProfile: perm(P.outlets.read)
+    .output(outletProfileSchema)
+    .query(async ({ ctx }) => {
+      const actorId = ctx.actor.id!;
+      const outlet = await ctx.prisma.outlet.findUnique({
+        where: { userId: actorId },
+        select: {
+          id: true, outletCode: true, name: true, ownerName: true, phone: true,
+          address: true, creditLimit: true, outstandingBalance: true, isActive: true,
+          warehouseId: true,
+          billingProfile: {
+            select: {
+              legalName: true, gstin: true, addressLine1: true, addressLine2: true,
+              city: true, state: true, pincode: true,
+            },
+          },
+        },
+      });
+      if (!outlet) throw apiError("NOT_FOUND", "No outlet linked to this account");
+      return {
+        ...outlet,
+        creditLimit: outlet.creditLimit.toString(),
+        outstandingBalance: outlet.outstandingBalance.toString(),
+        warehouseId: outlet.warehouseId ?? null,
+        legalName: outlet.billingProfile?.legalName ?? null,
+        gstin: outlet.billingProfile?.gstin ?? null,
+        billingAddress1: outlet.billingProfile?.addressLine1 ?? null,
+        billingAddress2: outlet.billingProfile?.addressLine2 ?? null,
+        billingCity: outlet.billingProfile?.city ?? null,
+        billingState: outlet.billingProfile?.state ?? null,
+        billingPincode: outlet.billingProfile?.pincode ?? null,
+      };
+    }),
+
+  updateBilling: perm(P.outlets.write)
+    .input(updateBillingInputSchema)
+    .output(z.object({ ok: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id!;
+      const outlet = await ctx.prisma.outlet.findUnique({
+        where: { userId: actorId },
+        select: { id: true },
+      });
+      if (!outlet) throw apiError("NOT_FOUND", "No outlet linked to this account");
+      if (input.billingProfileId) {
+        const profile = await ctx.prisma.billingProfile.findUnique({ where: { id: input.billingProfileId } });
+        if (!profile || !profile.isActive || profile.profileType !== "outlet") {
+          throw apiError("BAD_REQUEST", "Outlet billing profile must be active and have type outlet");
+        }
+      }
+      await ctx.prisma.outlet.update({
+        where: { id: outlet.id },
+        data: { billingProfileId: input.billingProfileId },
+      });
+      return { ok: true };
+    }),
+
   summary: perm(P.outlets.read)
     .input(z.object({ outletId: z.string().uuid() }))
     .output(summarySchema)
@@ -60,7 +141,7 @@ export const outletPortalRouter = createTRPCRouter({
 
       const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
       if (!isSuperAdmin) {
-        const linkedOutletId = await findActorLinkedOutletId(ctx);
+        const linkedOutletId = findActorLinkedOutletId(ctx);
         if (linkedOutletId) {
           if (linkedOutletId !== input.outletId) {
             throw apiError("FORBIDDEN", "Access denied to this outlet");
@@ -285,19 +366,43 @@ export const outletPortalRouter = createTRPCRouter({
       };
     }),
 
+  cancel: perm(P.orders.write)
+    .input(z.object({ outletId: z.string().uuid(), orderId: z.string().uuid() }))
+    .output(z.object({ ok: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertOutletAccess(ctx, input.outletId);
+      const order = await ctx.prisma.saleOrder.findUnique({
+        where: { id: input.orderId },
+        select: { id: true, outletId: true, status: true },
+      });
+      if (!order || order.outletId !== input.outletId) {
+        throw apiError("NOT_FOUND", "Order not found");
+      }
+      if (order.status !== "pending_approval") {
+        throw apiError("CONFLICT", "Only pending_approval orders can be cancelled");
+      }
+      await ctx.prisma.saleOrder.update({
+        where: { id: input.orderId },
+        data: { status: "cancelled" },
+      });
+      return { ok: true };
+    }),
+
   dispatchHistory: perm(P.dispatches.read)
     .input(paginationInputSchema.extend({ outletId: z.string().uuid() }))
     .output(z.object({ items: z.array(dispatchListItemSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       await assertOutletAccess(ctx, input.outletId);
 
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const rows = await ctx.prisma.dispatch.findMany({
         where: {
           lines: { some: { orderLine: { order: { outletId: input.outletId } } } },
+          ...(cursor ? { OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] } : {}),
         },
         select: {
           id: true,
+          createdAt: true,
           dispatchDate: true,
           deliveryStatus: true,
           transporterName: true,
@@ -306,8 +411,7 @@ export const outletPortalRouter = createTRPCRouter({
           estimatedDelivery: true,
           deliveredAt: true,
         },
-        orderBy: [{ dispatchDate: "desc" }, { id: "desc" }],
-        skip: offset,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1,
       });
 
@@ -325,7 +429,7 @@ export const outletPortalRouter = createTRPCRouter({
           estimatedDelivery: d.estimatedDelivery?.toISOString() ?? null,
           deliveredAt: d.deliveredAt?.toISOString() ?? null,
         })),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null,
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null,
       };
     }),
 
@@ -345,20 +449,14 @@ export const outletPortalRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       await assertOutletAccess(ctx, input.outletId);
 
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const rows = await ctx.prisma.invoice.findMany({
         where: {
           outletId: input.outletId,
-          OR: input.q
-            ? [
-                { invoiceNumber: { contains: input.q, mode: "insensitive" } },
-                {
-                  order: {
-                    orderNumber: { contains: input.q, mode: "insensitive" },
-                  },
-                },
-              ]
-            : undefined,
+          AND: [
+            ...(input.q ? [{ OR: [{ invoiceNumber: { contains: input.q, mode: "insensitive" as const } }, { order: { orderNumber: { contains: input.q, mode: "insensitive" as const } } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+          ],
         },
         select: {
           id: true,
@@ -371,8 +469,7 @@ export const outletPortalRouter = createTRPCRouter({
           amountDue: true,
           createdAt: true,
         },
-        orderBy: [{ invoiceDate: "desc" }, { id: "desc" }],
-        skip: offset,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1,
       });
 
@@ -391,7 +488,7 @@ export const outletPortalRouter = createTRPCRouter({
           amountDue: r.amountDue.toString(),
           createdAt: r.createdAt.toISOString(),
         })),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null,
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null,
       };
     }),
 });

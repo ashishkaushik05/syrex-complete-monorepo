@@ -51,9 +51,27 @@ enum NotificationChannel {
   sms
 }
 
-enum GoodsReceiptSourceType {
-  manual
-  production_line_movement
+enum BillingProfileType {
+  company
+  warehouse
+  outlet
+}
+
+enum GoodsReceiptStatus {
+  active
+  reversed
+  replaced
+}
+
+enum GoodsReceiptInvoiceStatus {
+  issued
+  reversed
+  replaced
+}
+
+enum InventoryMovementType {
+  production_receipt
+  production_receipt_reversal
 }
 
 enum ServiceComplaintStatus {
@@ -81,6 +99,30 @@ enum ServiceWarrantyDecisionStatus {
   pending
   approved
   rejected
+}
+
+enum ServiceComplainantType {
+  self
+  on_behalf_of
+}
+
+enum ServiceResolutionReason {
+  tested_ok
+  warranty_approved
+  warranty_rejected
+  telephonic_closure
+  cancelled
+}
+
+enum ServiceHappyCallingStatus {
+  pending
+  completed
+  skipped
+}
+
+enum ServiceFulfillmentRoute {
+  warehouse
+  outlet
 }
 
 enum ServiceMachineClientStatus {
@@ -124,50 +166,58 @@ enum ServiceSerialEntityType {
 // =============================================================================
 
 model User {
-  id               String   @id @default(uuid())
-  email            String   @unique
-  phone            String?
-  name             String
-  passwordHash     String
-  userType         UserType
-  roleId           String
-  isActive         Boolean  @default(true)
-  isFieldEnabled   Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id             String   @id @default(uuid())
+  email          String   @unique
+  phone          String?
+  name           String
+  passwordHash   String
+  userType       UserType
+  roleId         String
+  isActive       Boolean  @default(true)
+  isFieldEnabled Boolean  @default(false)
+  managedByRsmId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  role                   Role               @relation(fields: [roleId], references: [id])
-  outlet                 Outlet?
-  notifications          Notification[]
-  auditLogs              AuditLog[]
-  invitationsSent        UserInvitation[]   @relation("InvitedBy")
-  invitationsAccepted    UserInvitation[]   @relation("AcceptedUser")
-  attachmentsUploaded    Attachment[]
-  ordersCreated          SaleOrder[]        @relation("OrderCreatedBy")
-  ordersApproved         SaleOrder[]        @relation("OrderApprovedBy")
-  ordersHeld             SaleOrder[]        @relation("OrderHeldBy")
-  dispatchesCreated      Dispatch[]
-  stockAdjustments       StockAdjustment[]  @relation("StockAdjustedBy")
-  managedWarehouse       Warehouse?         @relation("WarehouseManager")
-  authSessions           AuthSession[]
-  shifts                 Shift[]
-  fieldSyncStatuses      FieldSyncStatus[]
-  fieldVisits            FieldVisit[] @relation("FieldVisitAgent")
-  fieldVisitsAsCustomer  FieldVisit[] @relation("FieldVisitCustomer")
-  fieldStops             FieldStop[]
-  attendance             DailyAttendance[]
-  shiftSchedule          ShiftSchedule?
-  serviceComplaintsRaised ServiceComplaint[] @relation("ServiceComplaintRaisedBy")
-  serviceAssignmentsAsi  ServiceAssignmentHistory[] @relation("ServiceAssignmentAsi")
-  serviceAssignmentsSe   ServiceAssignmentHistory[] @relation("ServiceAssignmentSe")
-  serviceAssignmentsBy   ServiceAssignmentHistory[] @relation("ServiceAssignmentBy")
-  serviceTestsSubmitted  ServiceTestReport[] @relation("ServiceTestSubmittedBy")
-  serviceActivities      ServiceComplaintActivity[] @relation("ServiceActivityActor")
-  serviceWarrantyDecisions ServiceWarrantyDecision[] @relation("ServiceWarrantyDecidedBy")
-  serviceMachineClientsCreated ServiceMachineClient[] @relation("ServiceMachineClientCreatedBy")
-  serviceFormTemplatesCreated  ServiceFormTemplate[]  @relation("ServiceFormTemplateCreatedBy")
-  serviceFormSubmissions       ServiceFormSubmission[] @relation("ServiceFormSubmittedBy")
-  dispatchTimelineEvents       DispatchTimeline[]      @relation("DispatchTimelineActor")
+  role                         Role                       @relation(fields: [roleId], references: [id])
+  managedByRsm                 User?                      @relation("UserManagedByRsm", fields: [managedByRsmId], references: [id])
+  managedAsis                  User[]                     @relation("UserManagedByRsm")
+  serviceComplaintsAsRsm       ServiceComplaint[]         @relation("ServiceComplaintRsm")
+  outlet                       Outlet?
+  notifications                Notification[]
+  auditLogs                    AuditLog[]
+  invitationsSent              UserInvitation[]           @relation("InvitedBy")
+  invitationsAccepted          UserInvitation[]           @relation("AcceptedUser")
+  attachmentsUploaded          Attachment[]                @relation("AttachmentUploadedByUser")
+  ordersCreated                SaleOrder[]                @relation("OrderCreatedBy")
+  ordersApproved               SaleOrder[]                @relation("OrderApprovedBy")
+  ordersHeld                   SaleOrder[]                @relation("OrderHeldBy")
+  paymentReversals             OutletPaymentReversal[]    @relation("PaymentReversedBy")
+  dispatchesCreated            Dispatch[]
+  stockAdjustments             StockAdjustment[]          @relation("StockAdjustedBy")
+  goodsReceiptsCreated         GoodsReceipt[]             @relation("GoodsReceiptCreatedBy")
+  goodsReceiptsReversed        GoodsReceipt[]             @relation("GoodsReceiptReversedBy")
+  inventoryMovements           InventoryMovement[]        @relation("InventoryMovementCreatedBy")
+  managedWarehouse             Warehouse?                 @relation("WarehouseManager")
+  authSessions                 AuthSession[]
+  shifts                       Shift[]
+  fieldSyncStatuses            FieldSyncStatus[]
+  fieldVisits                  FieldVisit[]               @relation("FieldVisitAgent")
+  fieldVisitsAsCustomer        FieldVisit[]               @relation("FieldVisitCustomer")
+  fieldStops                   FieldStop[]
+  attendance                   DailyAttendance[]
+  shiftSchedule                ShiftSchedule?
+  serviceComplaintsRaised      ServiceComplaint[]         @relation("ServiceComplaintRaisedByUser")
+  serviceAssignmentsAsi        ServiceAssignmentHistory[] @relation("ServiceAssignmentAsi")
+  serviceAssignmentsSe         ServiceAssignmentHistory[] @relation("ServiceAssignmentSe")
+  serviceAssignmentsBy         ServiceAssignmentHistory[] @relation("ServiceAssignmentBy")
+  serviceTestsSubmitted        ServiceTestReport[]        @relation("ServiceTestSubmittedBy")
+  serviceActivities            ServiceComplaintActivity[] @relation("ServiceActivityActor")
+  serviceWarrantyDecisions     ServiceWarrantyDecision[]  @relation("ServiceWarrantyDecidedBy")
+  serviceMachineClientsCreated ServiceMachineClient[]     @relation("ServiceMachineClientCreatedBy")
+  serviceFormTemplatesCreated  ServiceFormTemplate[]      @relation("ServiceFormTemplateCreatedBy")
+  serviceFormSubmissions       ServiceFormSubmission[]    @relation("ServiceFormSubmittedBy")
+  dispatchTimelineEvents       DispatchTimeline[]         @relation("DispatchTimelineActor")
 
   @@map("users")
 }
@@ -207,13 +257,13 @@ model UserInvitation {
 }
 
 model AuthSession {
-  id           String    @id @default(uuid())
-  userId       String
+  id               String    @id @default(uuid())
+  userId           String
   refreshTokenHash String
-  expiresAt    DateTime
-  revokedAt    DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -239,27 +289,22 @@ model Outlet {
   isActive           Boolean  @default(true)
   createdAt          DateTime @default(now())
 
-  // Billing / GST details
-  legalName       String?
-  gstin           String?
-  billingAddress1 String?
-  billingAddress2 String?
-  billingCity     String?
-  billingState    String?
-  billingPincode  String?
-  billingCountry  String   @default("India")
+  billingProfileId String? @unique
 
   // Single warehouse that serves this outlet
-  warehouseId String?
-  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
-  user        User       @relation(fields: [userId], references: [id])
+  warehouseId    String?
+  warehouse      Warehouse?      @relation(fields: [warehouseId], references: [id])
+  user           User            @relation(fields: [userId], references: [id])
+  billingProfile BillingProfile? @relation("OutletBillingProfile", fields: [billingProfileId], references: [id])
 
-  orders   SaleOrder[]
-  invoices Invoice[]
-  payments OutletPayment[]
-  serviceComplaints ServiceComplaint[]
-  serviceSerialsSold ServiceSerialIndex[]
-  fieldVisits FieldVisit[]
+  orders                   SaleOrder[]
+  invoices                 Invoice[]
+  payments                 OutletPayment[]
+  paymentReversals         OutletPaymentReversal[]
+  serviceSerialsSold       ServiceSerialIndex[]
+  serviceWarrantyDecisions ServiceWarrantyDecision[] @relation("ServiceWarrantySourceOutlet")
+  serviceWarrantyClaims    ServiceWarrantyDecision[] @relation("ServiceWarrantyClaimingOutlet")
+  fieldVisits              FieldVisit[]
 
   @@map("outlets")
 }
@@ -310,21 +355,28 @@ model Product {
   specs          Json?
   warrantyMonths Int
   basePrice      Decimal
+  hsnCode        String
+  uqc            String
+  gstRate        Decimal
+  transferValue  Decimal
   sortOrder      Int      @default(0)
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  category          Category             @relation(fields: [categoryId], references: [id])
-  images            Image[]              @relation("ProductImages")
-  orderLines        SaleOrderLine[]
-  invoiceLines      InvoiceLine[]
-  dispatchLines     DispatchLine[]
-  warehouseStocks   WarehouseStock[]
-  goodsReceiptLines GoodsReceiptLine[]
-  stockAdjustments  StockAdjustment[]
-  serviceComplaintLines ServiceComplaintLine[]
-  serviceSerialIndexRows ServiceSerialIndex[]
+  category                 Category                  @relation(fields: [categoryId], references: [id])
+  images                   Image[]                   @relation("ProductImages")
+  orderLines               SaleOrderLine[]
+  invoiceLines             InvoiceLine[]
+  dispatchLines            DispatchLine[]
+  warehouseStocks          WarehouseStock[]
+  goodsReceiptLines        GoodsReceiptLine[]
+  goodsReceiptInvoiceLines GoodsReceiptInvoiceLine[]
+  inventoryMovements       InventoryMovement[]
+  stockAdjustments         StockAdjustment[]
+  serviceComplaintLines    ServiceComplaintLine[]
+  serviceSerialIndexRows   ServiceSerialIndex[]
+  demandSnapshots          SkuDemandSnapshot[]
 
   @@index([categoryId, isActive])
   @@map("products")
@@ -342,9 +394,9 @@ model Image {
   categoryId String?
   productId  String?
 
-  brand    Brand?    @relation("BrandImages",    fields: [brandId],    references: [id])
+  brand    Brand?    @relation("BrandImages", fields: [brandId], references: [id])
   category Category? @relation("CategoryImages", fields: [categoryId], references: [id])
-  product  Product?  @relation("ProductImages",  fields: [productId],  references: [id])
+  product  Product?  @relation("ProductImages", fields: [productId], references: [id])
 
   @@index([brandId])
   @@index([categoryId])
@@ -357,21 +409,24 @@ model Image {
 // =============================================================================
 
 model Warehouse {
-  id        String   @id @default(uuid())
-  name      String
-  location  String
-  address   String?
-  managerId String?  @unique
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id               String   @id @default(uuid())
+  name             String
+  location         String
+  address          String?
+  managerId        String?  @unique
+  billingProfileId String?  @unique
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
 
-  manager       User?            @relation("WarehouseManager", fields: [managerId], references: [id])
-  outlets       Outlet[]
-  stock         WarehouseStock[]
-  receipts      GoodsReceipt[]
-  adjustments   StockAdjustment[]
-  dispatches    Dispatch[]
-  serviceSourceOrders SaleOrder[] @relation("ServiceSourceWarehouse")
+  manager                  User?                     @relation("WarehouseManager", fields: [managerId], references: [id])
+  billingProfile           BillingProfile?           @relation("WarehouseBillingProfile", fields: [billingProfileId], references: [id])
+  outlets                  Outlet[]
+  stock                    WarehouseStock[]
+  receipts                 GoodsReceipt[]
+  inventoryMovements       InventoryMovement[]
+  adjustments              StockAdjustment[]
+  dispatches               Dispatch[]
+  serviceSourceOrders      SaleOrder[]               @relation("ServiceSourceWarehouse")
   serviceWarrantyDecisions ServiceWarrantyDecision[]
 
   @@index([managerId])
@@ -395,33 +450,159 @@ model WarehouseStock {
   @@map("warehouse_stocks")
 }
 
-
 model GoodsReceipt {
-  id            String   @id @default(uuid())
-  warehouseId   String
-  sourceType    GoodsReceiptSourceType
-  sourceBatchId String?
-  receiptDate   DateTime @default(now())
-  notes         String?
-  createdAt     DateTime @default(now())
+  id                     String             @id @default(uuid())
+  grnNumber              String             @unique
+  warehouseId            String
+  sourceBillingProfileId String
+  externalDocumentNumber String
+  dispatchDate           DateTime
+  receiptDate            DateTime
+  notes                  String?
+  status                 GoodsReceiptStatus @default(active)
+  idempotencyKey         String             @unique
+  createdById            String
+  reversedById           String?
+  reversedAt             DateTime?
+  reversalReason         String?
+  replacesId             String?            @unique
+  createdAt              DateTime           @default(now())
 
-  warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
-  lines     GoodsReceiptLine[]
+  warehouse            Warehouse            @relation(fields: [warehouseId], references: [id])
+  sourceBillingProfile BillingProfile       @relation("GoodsReceiptSourceProfile", fields: [sourceBillingProfileId], references: [id])
+  createdBy            User                 @relation("GoodsReceiptCreatedBy", fields: [createdById], references: [id])
+  reversedBy           User?                @relation("GoodsReceiptReversedBy", fields: [reversedById], references: [id])
+  replaces             GoodsReceipt?        @relation("GoodsReceiptReplacement", fields: [replacesId], references: [id])
+  replacement          GoodsReceipt?        @relation("GoodsReceiptReplacement")
+  lines                GoodsReceiptLine[]
+  invoice              GoodsReceiptInvoice?
+  movements            InventoryMovement[]
 
   @@index([warehouseId, receiptDate])
+  @@index([sourceBillingProfileId, receiptDate])
+  @@index([status])
   @@map("goods_receipts")
 }
 
 model GoodsReceiptLine {
-  id          String @id @default(uuid())
-  grnId       String
-  productId   String
-  qtyReceived Int
+  id                    String  @id @default(uuid())
+  grnId                 String
+  productId             String
+  qtyReceived           Int
+  skuSnapshot           String
+  productNameSnapshot   String
+  hsnCodeSnapshot       String
+  uqcSnapshot           String
+  gstRateSnapshot       Decimal
+  transferValueSnapshot Decimal
+  taxableValue          Decimal
 
-  grn     GoodsReceipt @relation(fields: [grnId], references: [id])
-  product Product      @relation(fields: [productId], references: [id])
+  grn         GoodsReceipt             @relation(fields: [grnId], references: [id])
+  product     Product                  @relation(fields: [productId], references: [id])
+  invoiceLine GoodsReceiptInvoiceLine?
+  movements   InventoryMovement[]
 
+  @@unique([grnId, productId])
   @@map("goods_receipt_lines")
+}
+
+model GoodsReceiptInvoice {
+  id                         String                    @id @default(uuid())
+  invoiceNumber              String                    @unique
+  goodsReceiptId             String                    @unique
+  invoiceDate                DateTime
+  sourceBillingSnapshot      Json
+  destinationBillingSnapshot Json
+  sellerGstin                String
+  buyerGstin                 String
+  placeOfSupplyStateCode     String
+  taxableTotal               Decimal
+  cgstTotal                  Decimal
+  sgstTotal                  Decimal
+  igstTotal                  Decimal
+  grandTotal                 Decimal
+  status                     GoodsReceiptInvoiceStatus @default(issued)
+  irn                        String?
+  acknowledgementNumber      String?
+  acknowledgementDate        DateTime?
+  signedQrCode               String?
+  eWayBillNumber             String?
+  eWayBillDate               DateTime?
+  eWayBillValidUntil         DateTime?
+  replacesId                 String?                   @unique
+  createdAt                  DateTime                  @default(now())
+
+  goodsReceipt GoodsReceipt              @relation(fields: [goodsReceiptId], references: [id])
+  replaces     GoodsReceiptInvoice?      @relation("GoodsReceiptInvoiceReplacement", fields: [replacesId], references: [id])
+  replacement  GoodsReceiptInvoice?      @relation("GoodsReceiptInvoiceReplacement")
+  lines        GoodsReceiptInvoiceLine[]
+
+  @@index([sellerGstin, invoiceDate])
+  @@index([status])
+  @@map("goods_receipt_invoices")
+}
+
+model GoodsReceiptInvoiceLine {
+  id                 String  @id @default(uuid())
+  invoiceId          String
+  goodsReceiptLineId String  @unique
+  productId          String
+  sku                String
+  productName        String
+  hsnCode            String
+  uqc                String
+  quantity           Int
+  unitValue          Decimal
+  taxableValue       Decimal
+  gstRate            Decimal
+  cgstRate           Decimal
+  cgstAmount         Decimal
+  sgstRate           Decimal
+  sgstAmount         Decimal
+  igstRate           Decimal
+  igstAmount         Decimal
+  lineTotal          Decimal
+
+  invoice          GoodsReceiptInvoice @relation(fields: [invoiceId], references: [id])
+  goodsReceiptLine GoodsReceiptLine    @relation(fields: [goodsReceiptLineId], references: [id])
+  product          Product             @relation(fields: [productId], references: [id])
+
+  @@index([invoiceId])
+  @@map("goods_receipt_invoice_lines")
+}
+
+model InventoryMovement {
+  id                 String                @id @default(uuid())
+  warehouseId        String
+  productId          String
+  goodsReceiptId     String
+  goodsReceiptLineId String
+  movementType       InventoryMovementType
+  quantityDelta      Int
+  createdById        String
+  reason             String?
+  createdAt          DateTime              @default(now())
+
+  warehouse        Warehouse        @relation(fields: [warehouseId], references: [id])
+  product          Product          @relation(fields: [productId], references: [id])
+  goodsReceipt     GoodsReceipt     @relation(fields: [goodsReceiptId], references: [id])
+  goodsReceiptLine GoodsReceiptLine @relation(fields: [goodsReceiptLineId], references: [id])
+  createdBy        User             @relation("InventoryMovementCreatedBy", fields: [createdById], references: [id])
+
+  @@index([warehouseId, productId, createdAt])
+  @@index([goodsReceiptId])
+  @@map("inventory_movements")
+}
+
+model GoodsReceiptSequence {
+  id                  String @id @default(uuid())
+  sellerGstin         String
+  financialYear       String
+  lastGrnSequence     Int    @default(0)
+  lastInvoiceSequence Int    @default(0)
+
+  @@unique([sellerGstin, financialYear])
+  @@map("goods_receipt_sequences")
 }
 
 model StockAdjustment {
@@ -447,28 +628,28 @@ model StockAdjustment {
 // =============================================================================
 
 model SaleOrder {
-  id              String        @id @default(uuid())
-  orderNumber     String        @unique
-  outletId        String
-  orderType       String        @default("sale")
-  sourceComplaintId String?
-  sourceWarehouseId String?
-  suppressAutoInvoice Boolean   @default(false)
-  serviceMetadata Json?
-  createdById     String?
-  orderDate       DateTime      @default(now())
-  deliveryAddress String
-  status          OrderStatus   @default(pending_approval)
-  priority        OrderPriority @default(medium)
-  subtotalValue   Decimal       @default(0)
-  discountType    ChargeType?
-  discountRate    Decimal       @default(0)
-  discountAmount  Decimal       @default(0)
-  taxableValue    Decimal       @default(0)
-  taxSnapshot     Json?
-  taxTotal        Decimal       @default(0)
-  paymentTermsDays Int          @default(30)
-  totalValue      Decimal       @default(0)
+  id                  String        @id @default(uuid())
+  orderNumber         String        @unique
+  outletId            String
+  orderType           String        @default("sale")
+  sourceComplaintId   String?
+  sourceWarehouseId   String?
+  suppressAutoInvoice Boolean       @default(false)
+  serviceMetadata     Json?
+  createdById         String?
+  orderDate           DateTime      @default(now())
+  deliveryAddress     String
+  status              OrderStatus   @default(pending_approval)
+  priority            OrderPriority @default(medium)
+  subtotalValue       Decimal       @default(0)
+  discountType        ChargeType?
+  discountRate        Decimal       @default(0)
+  discountAmount      Decimal       @default(0)
+  taxableValue        Decimal       @default(0)
+  taxSnapshot         Json?
+  taxTotal            Decimal       @default(0)
+  paymentTermsDays    Int           @default(30)
+  totalValue          Decimal       @default(0)
 
   approvedById    String?
   approvedAt      DateTime?
@@ -478,18 +659,18 @@ model SaleOrder {
   approvalNote    String?
   rejectionReason String?
   notes           String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  outlet     Outlet  @relation(fields: [outletId],    references: [id])
+  outlet          Outlet            @relation(fields: [outletId], references: [id])
   sourceComplaint ServiceComplaint? @relation("ComplaintReplacementOrders", fields: [sourceComplaintId], references: [id])
-  sourceWarehouse Warehouse? @relation("ServiceSourceWarehouse", fields: [sourceWarehouseId], references: [id])
-  createdBy  User?   @relation("OrderCreatedBy",  fields: [createdById],  references: [id])
-  approvedBy User?   @relation("OrderApprovedBy", fields: [approvedById], references: [id])
-  heldBy     User?   @relation("OrderHeldBy",     fields: [heldById],     references: [id])
+  sourceWarehouse Warehouse?        @relation("ServiceSourceWarehouse", fields: [sourceWarehouseId], references: [id])
+  createdBy       User?             @relation("OrderCreatedBy", fields: [createdById], references: [id])
+  approvedBy      User?             @relation("OrderApprovedBy", fields: [approvedById], references: [id])
+  heldBy          User?             @relation("OrderHeldBy", fields: [heldById], references: [id])
 
-  lines   SaleOrderLine[]
-  invoice Invoice?        // 1:1 — auto-generated on approval
+  lines                SaleOrderLine[]
+  invoice              Invoice? // 1:1 — auto-generated on approval
   warrantyDecisionLink ServiceWarrantyDecision? @relation("ServiceWarrantyReplacementOrder")
 
   // Dispatches are resolved via DispatchLine → SaleOrderLine → SaleOrder
@@ -514,8 +695,8 @@ model SaleOrderLine {
   lineTotal     Decimal         @default(0)
   status        OrderLineStatus @default(pending)
 
-  order         SaleOrder      @relation(fields: [orderId],    references: [id])
-  product       Product        @relation(fields: [productId],  references: [id])
+  order         SaleOrder      @relation(fields: [orderId], references: [id])
+  product       Product        @relation(fields: [productId], references: [id])
   dispatchLines DispatchLine[]
 
   @@index([orderId])
@@ -527,7 +708,7 @@ model SaleOrderLine {
 // =============================================================================
 
 model Dispatch {
-  id          String   @id @default(uuid())
+  id          String @id @default(uuid())
   warehouseId String
 
   // Required transport metadata
@@ -554,20 +735,20 @@ model Dispatch {
 }
 
 model DispatchLine {
-  id          String @id @default(uuid())
-  dispatchId  String
-  orderLineId String // order resolved through here: orderLine.orderId
-  productId   String
-  sku         String
+  id            String @id @default(uuid())
+  dispatchId    String
+  orderLineId   String // order resolved through here: orderLine.orderId
+  productId     String
+  sku           String
   qtyDispatched Int
 
   // Flat JSON array — not normalised on DB, normalised at query layer
   // e.g. ["SN-001", "SN-002"]
   serialNumbers Json @default("[]")
 
-  dispatch  Dispatch      @relation(fields: [dispatchId],  references: [id])
-  orderLine SaleOrderLine @relation(fields: [orderLineId], references: [id])
-  product   Product       @relation(fields: [productId],   references: [id])
+  dispatch  Dispatch             @relation(fields: [dispatchId], references: [id])
+  orderLine SaleOrderLine        @relation(fields: [orderLineId], references: [id])
+  product   Product              @relation(fields: [productId], references: [id])
   serials   DispatchLineSerial[]
 
   @@index([dispatchId])
@@ -579,7 +760,7 @@ model DispatchLine {
 // Enables O(log N) lookup in findSerialLegacyDispatchRows instead of full-table JS filter.
 // Backfill: bun backend/src/scripts/backfill-dispatch-line-serials.ts
 model DispatchLineSerial {
-  id               String       @id @default(uuid())
+  id               String @id @default(uuid())
   dispatchLineId   String
   normalizedSerial String
 
@@ -594,9 +775,9 @@ model DispatchLineSerial {
 model DispatchTimeline {
   id         String   @id @default(uuid())
   dispatchId String
-  status     String   // created | in_transit | delivered
+  status     String // created | in_transit | delivered
   actorId    String?
-  actorRole  String?  // "admin" | "warehouse" | "outlet"
+  actorRole  String? // "admin" | "warehouse" | "outlet"
   note       String?
   happenedAt DateTime @default(now())
 
@@ -613,27 +794,28 @@ model DispatchTimeline {
 
 // Auto-generated when order is approved. No createdBy — system action.
 model Invoice {
-  id            String   @id @default(uuid())
-  invoiceNumber String   @unique
-  orderId       String   @unique // 1:1 with SaleOrder
-  outletId      String
-  invoiceDate   DateTime @default(now())
-  dueDate       DateTime?
-  subtotal      Decimal
-  discountType  ChargeType?
-  discountRate  Decimal  @default(0)
-  discountAmount Decimal @default(0)
-  taxSnapshot   Json?
-  total         Decimal
-  amountPaid    Decimal  @default(0)
-  amountDue     Decimal  // kept in sync: total - amountPaid
-  createdAt     DateTime @default(now())
+  id             String      @id @default(uuid())
+  invoiceNumber  String      @unique
+  orderId        String      @unique // 1:1 with SaleOrder
+  outletId       String
+  invoiceDate    DateTime    @default(now())
+  dueDate        DateTime?
+  subtotal       Decimal
+  discountType   ChargeType?
+  discountRate   Decimal     @default(0)
+  discountAmount Decimal     @default(0)
+  taxSnapshot    Json?
+  total          Decimal
+  amountPaid     Decimal     @default(0)
+  amountDue      Decimal // kept in sync: total - amountPaid
+  createdAt      DateTime    @default(now())
 
-  order       SaleOrder                 @relation(fields: [orderId],  references: [id])
-  outlet      Outlet                    @relation(fields: [outletId], references: [id])
-  lines       InvoiceLine[]
-  charges     InvoiceCharge[]
-  allocations OutletPaymentAllocation[]
+  order            SaleOrder                 @relation(fields: [orderId], references: [id])
+  outlet           Outlet                    @relation(fields: [outletId], references: [id])
+  lines            InvoiceLine[]
+  charges          InvoiceCharge[]
+  allocations      OutletPaymentAllocation[]
+  warrantyDecision ServiceWarrantyDecision?  @relation("ServiceWarrantyReplacementInvoice")
 
   // Fast FIFO query: unpaid invoices per outlet ordered by invoiceDate ASC
   @@index([outletId, amountDue])
@@ -659,20 +841,45 @@ model InvoiceLine {
 
 // A single payment received from an outlet
 model OutletPayment {
-  id             String   @id @default(uuid())
+  id             String    @id @default(uuid())
   outletId       String
   amount         Decimal
   paymentDate    DateTime
   reference      String?
   description    String?
-  idempotencyKey String?  @unique
-  createdAt      DateTime @default(now())
+  idempotencyKey String?   @unique
+  voidedAt       DateTime?
+  voidedById     String?
+  voidReason     String?
+  createdAt      DateTime  @default(now())
 
   outlet      Outlet                    @relation(fields: [outletId], references: [id])
   allocations OutletPaymentAllocation[]
+  reversal    OutletPaymentReversal?
 
   @@index([outletId, paymentDate])
+  @@index([voidedAt])
   @@map("outlet_payments")
+}
+
+// Immutable audit row created when a payment is voided. The original payment
+// remains visible in history and this row restores invoice/outlet balances.
+model OutletPaymentReversal {
+  id           String   @id @default(uuid())
+  paymentId    String   @unique
+  outletId     String
+  amount       Decimal
+  reason       String
+  reversedById String?
+  reversedAt   DateTime @default(now())
+
+  payment    OutletPayment @relation(fields: [paymentId], references: [id])
+  outlet     Outlet        @relation(fields: [outletId], references: [id])
+  reversedBy User?         @relation("PaymentReversedBy", fields: [reversedById], references: [id])
+
+  @@index([outletId, reversedAt])
+  @@index([reversedById])
+  @@map("outlet_payment_reversals")
 }
 
 // Each row = how much of one payment was applied to one invoice (FIFO split)
@@ -691,8 +898,6 @@ model OutletPaymentAllocation {
   @@map("outlet_payment_allocations")
 }
 
-
-
 // Admin-managed tax/charge configurations applied globally to every invoice.
 model TaxCharge {
   id           String     @id @default(uuid())
@@ -710,38 +915,48 @@ model TaxCharge {
   @@map("tax_charges")
 }
 
-// Singleton — one record holds the seller's (org's) billing identity shown on every invoice.
-model OrgBillingProfile {
-  id           String   @id @default(uuid())
-  companyName  String   @default("")
-  addressLine1 String   @default("")
-  addressLine2 String   @default("")
-  city         String   @default("")
-  state        String   @default("")
-  pincode      String   @default("")
-  country      String   @default("India")
-  gstin        String   @default("")
-  pan          String   @default("")
-  sacCode      String   @default("")
-  logoUrl      String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+model BillingProfile {
+  id                 String             @id @default(uuid())
+  legalName          String
+  gstin              String             @unique
+  pan                String
+  addressLine1       String
+  addressLine2       String?
+  city               String
+  state              String
+  stateCode          String
+  pincode            String
+  country            String             @default("India")
+  contactName        String?
+  contactPhone       String?
+  contactEmail       String?
+  logoUrl            String?
+  profileType        BillingProfileType
+  canIssueGrnInvoice Boolean            @default(false)
+  isActive           Boolean            @default(true)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
-  @@map("org_billing_profile")
+  warehouse            Warehouse?     @relation("WarehouseBillingProfile")
+  outlet               Outlet?        @relation("OutletBillingProfile")
+  sourcedGoodsReceipts GoodsReceipt[] @relation("GoodsReceiptSourceProfile")
+
+  @@index([profileType, isActive])
+  @@map("billing_profiles")
 }
 
 // Snapshot of charges applied to an invoice at generation time — immutable.
 model InvoiceCharge {
   id           String     @id @default(uuid())
   invoiceId    String
-  taxChargeId  String?   // null = ad-hoc charge not from global config
+  taxChargeId  String? // null = ad-hoc charge not from global config
   name         String
   type         ChargeType
   rate         Decimal
   amount       Decimal
   displayOrder Int        @default(0)
 
-  invoice   Invoice    @relation(fields: [invoiceId],   references: [id])
+  invoice   Invoice    @relation(fields: [invoiceId], references: [id])
   taxCharge TaxCharge? @relation(fields: [taxChargeId], references: [id])
 
   @@index([invoiceId])
@@ -777,21 +992,24 @@ model Notification {
 // =============================================================================
 
 model Attachment {
-  id           String   @id @default(uuid())
-  entityType   String   // "order" | "dispatch" | "invoice" etc.
-  entityId     String
-  fileName     String
-  mimeType     String
-  fileSize     Int
-  storageKey   String
-  uploadedById String
-  isConfirmed  Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  id                      String   @id @default(uuid())
+  entityType              String // "order" | "dispatch" | "invoice" etc.
+  entityId                String
+  fileName                String
+  mimeType                String
+  fileSize                Int
+  storageKey              String
+  uploadedById            String?
+  uploadedByServiceUserId String?
+  isConfirmed             Boolean  @default(false)
+  createdAt               DateTime @default(now())
 
-  uploader      User          @relation(fields: [uploadedById], references: [id])
-  pendingUpload PendingUpload?
+  uploader           User?        @relation("AttachmentUploadedByUser", fields: [uploadedById], references: [id])
+  serviceUserUploader ServiceUser? @relation("AttachmentUploadedByServiceUser", fields: [uploadedByServiceUserId], references: [id])
+  pendingUpload      PendingUpload?
 
   @@index([entityType, entityId])
+  @@index([uploadedByServiceUserId])
   @@map("attachments")
 }
 
@@ -900,7 +1118,7 @@ model Shift {
 }
 
 model FieldLocation {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   agentId       String
   shiftId       String
   orgId         String
@@ -918,7 +1136,7 @@ model FieldLocation {
   speed         Float?
   heading       Float?
   isMocked      Boolean?
-  receivedAt    DateTime @default(now())
+  receivedAt    DateTime  @default(now())
 
   shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
 
@@ -933,7 +1151,7 @@ model FieldLocation {
 }
 
 model FieldSyncStatus {
-  id                 String   @id @default(uuid())
+  id                 String    @id @default(uuid())
   orgId              String
   agentId            String
   deviceId           String
@@ -947,8 +1165,8 @@ model FieldSyncStatus {
   lastSyncErrorCode  String?
   pendingQueueDepth  Int?
   permissionsSummary Json?
-  isActive           Boolean  @default(true)
-  updatedAt          DateTime @updatedAt
+  isActive           Boolean   @default(true)
+  updatedAt          DateTime  @updatedAt
 
   agent User @relation(fields: [agentId], references: [id])
 
@@ -970,28 +1188,32 @@ model ShiftSchedule {
 
   user User @relation(fields: [userId], references: [id])
 
+  @@index([orgId, isEnabled])
   @@map("shift_schedules")
 }
 
 model FieldVisit {
-  id          String   @id @default(uuid())
-  agentId     String
-  shiftId     String
-  orgId       String
-  lat         Float
-  lng         Float
-  description String?
-  audioUrl    String?
-  outletId    String?
-  customerId  String?
-  recordedAt  DateTime
-  createdAt   DateTime @default(now())
+  id            String   @id @default(uuid())
+  agentId       String
+  shiftId       String
+  orgId         String
+  lat           Float
+  lng           Float
+  description   String?
+  audioUrl      String?
+  outletId      String?
+  customerId    String?
+  clientEventId String?
+  recordedAt    DateTime
+  createdAt     DateTime @default(now())
 
   agent    User    @relation("FieldVisitAgent", fields: [agentId], references: [id])
   shift    Shift   @relation(fields: [shiftId], references: [id], onDelete: Cascade)
   outlet   Outlet? @relation(fields: [outletId], references: [id])
   customer User?   @relation("FieldVisitCustomer", fields: [customerId], references: [id])
 
+  // P0-4: Scoped to org so the same clientEventId can be used across different orgs.
+  @@unique([orgId, clientEventId])
   @@index([agentId, recordedAt])
   @@index([shiftId])
   @@index([outletId])
@@ -1001,35 +1223,39 @@ model FieldVisit {
 }
 
 model FieldStop {
-  id         String    @id @default(uuid())
-  agentId    String
-  shiftId    String
-  orgId      String
-  lat        Float
-  lng        Float
-  reason     String?
-  notes      String?
-  startedAt  DateTime
-  endedAt    DateTime?
-  createdAt  DateTime  @default(now())
+  id            String    @id @default(uuid())
+  agentId       String
+  shiftId       String
+  orgId         String
+  lat           Float
+  lng           Float
+  reason        String?
+  notes         String?
+  clientEventId String?
+  startedAt     DateTime
+  endedAt       DateTime?
+  createdAt     DateTime  @default(now())
 
   agent User  @relation(fields: [agentId], references: [id])
   shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
 
+  // P0-4: Scoped to org so the same clientEventId can be used across different orgs.
+  @@unique([orgId, clientEventId])
   @@index([agentId, startedAt])
   @@index([shiftId])
   @@map("field_stops")
 }
 
 model DailyAttendance {
-  id       String           @id @default(uuid())
-  userId   String
-  orgId    String
-  date     String
-  status   AttendanceStatus
-  markedBy String?
-  note     String?
-  markedAt DateTime         @default(now())
+  id        String           @id @default(uuid())
+  userId    String
+  orgId     String
+  date      String
+  status    AttendanceStatus
+  markedBy  String?
+  note      String?
+  markedAt  DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
 
   user User @relation(fields: [userId], references: [id])
 
@@ -1042,56 +1268,129 @@ model DailyAttendance {
 // SERVICE  —  Complaints, serial intelligence, warranty fulfillment
 // =============================================================================
 
+model ServiceUser {
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
+  email        String   @unique
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  complaints          ServiceComplaint[]  @relation("ServiceComplaintRaisedByServiceUser")
+  sessions            ServiceUserSession[]
+  attachmentsUploaded Attachment[]        @relation("AttachmentUploadedByServiceUser")
+
+  @@map("service_users")
+}
+
+model ServiceUserSession {
+  id               String    @id @default(uuid())
+  serviceUserId    String
+  refreshTokenHash String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  serviceUser ServiceUser @relation(fields: [serviceUserId], references: [id], onDelete: Cascade)
+
+  @@index([serviceUserId])
+  @@index([expiresAt])
+  @@map("service_user_sessions")
+}
+
 model ServiceComplaint {
-  id               String                 @id @default(uuid())
-  complaintNumber  String                 @unique
-  orgId            String?
-  status           ServiceComplaintStatus @default(raised)
-  title            String?
-  description      String?
-  customerName     String?
-  customerPhone    String?
-  outletId         String?
-  raisedById       String
+  id              String                 @id @default(uuid())
+  complaintNumber String                 @unique
+  orgId           String?
+  status          ServiceComplaintStatus @default(raised)
+
+  // raiser: exactly one of these is set (enforced in app layer)
+  raisedByUserId        String?
+  raisedByServiceUserId String?
+
+  issueCategory String
+  title         String?
+  description   String?
+  customerName  String?
+  customerPhone String?
+
+  complainantType ServiceComplainantType @default(self)
+  thirdPartyName  String?
+  thirdPartyPhone String?
+
+  // customer location (critical for field dispatch routing)
+  customerState   String?
+  customerCity    String?
+  customerPincode String?
+  customerAddress String?
+  alternatePhone  String?
+
+  // stage-entry timestamps (H01)
+  assignedAt DateTime?
+  visitAt    DateTime?
+  testedAt   DateTime?
+  decidedAt  DateTime?
+
   telephonicReason String?
   resolutionNote   String?
   closedAt         DateTime?
   cancelledAt      DateTime?
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
+  reopenedAt       DateTime?
 
-  outlet             Outlet?                    @relation(fields: [outletId], references: [id])
-  raisedBy           User                       @relation("ServiceComplaintRaisedBy", fields: [raisedById], references: [id])
-  lines              ServiceComplaintLine[]
-  assignments        ServiceAssignmentHistory[]
-  testReports        ServiceTestReport[]
-  activities         ServiceComplaintActivity[]
-  warrantyDecision   ServiceWarrantyDecision?
-  replacementOrders  SaleOrder[]                @relation("ComplaintReplacementOrders")
-  formSubmissions    ServiceFormSubmission[]
+  // resolution sub-type (queryable, set at each terminal transition)
+  resolutionReason ServiceResolutionReason?
+
+  // post-resolution happy calling queue
+  happyCallingStatus ServiceHappyCallingStatus?
+  happyCallingNote   String?
+  physicalReturnAt   DateTime?
+  physicalReturnNote String?
+
+  // RSM denormalized from ASI at assignment time
+  rsmUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  raisedByUser        User?                      @relation("ServiceComplaintRaisedByUser", fields: [raisedByUserId], references: [id])
+  raisedByServiceUser ServiceUser?               @relation("ServiceComplaintRaisedByServiceUser", fields: [raisedByServiceUserId], references: [id])
+  rsmUser             User?                      @relation("ServiceComplaintRsm", fields: [rsmUserId], references: [id])
+  lines               ServiceComplaintLine[]
+  assignments         ServiceAssignmentHistory[]
+  testReports         ServiceTestReport[]
+  activities          ServiceComplaintActivity[]
+  warrantyDecision    ServiceWarrantyDecision?
+  replacementOrders   SaleOrder[]                @relation("ComplaintReplacementOrders")
+  formSubmissions     ServiceFormSubmission[]
 
   @@index([orgId, status, createdAt])
+  @@index([orgId, customerState, status, createdAt])
   @@index([status, createdAt])
-  @@index([outletId, createdAt])
-  @@index([raisedById, createdAt])
+  @@index([raisedByServiceUserId, createdAt])
+  @@index([raisedByUserId, createdAt])
+  @@index([rsmUserId, createdAt])
+  @@index([happyCallingStatus, createdAt])
   @@map("service_complaints")
 }
 
 model ServiceComplaintLine {
-  id                        String   @id @default(uuid())
-  complaintId               String
-  serialNumber              String?
-  normalizedSerial          String?
-  batterySku                String?
-  replacementSerialNumber   String?
+  id                          String   @id @default(uuid())
+  complaintId                 String
+  sku                         String
+  serialNumber                String
+  normalizedSerial            String
+  productId                   String?
+  replacementSerialNumber     String?
   normalizedReplacementSerial String?
-  productId                 String?
-  notes                     String?
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  notes                       String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
 
-  complaint ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
-  product   Product?         @relation(fields: [productId], references: [id])
+  complaint   ServiceComplaint    @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  product     Product?            @relation(fields: [productId], references: [id])
   testReports ServiceTestReport[]
 
   @@index([complaintId])
@@ -1101,14 +1400,14 @@ model ServiceComplaintLine {
 }
 
 model ServiceAssignmentHistory {
-  id           String   @id @default(uuid())
+  id           String                  @id @default(uuid())
   complaintId  String
   asiUserId    String?
   seUserId     String?
   assignedById String
   action       ServiceAssignmentAction
   note         String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime                @default(now())
 
   complaint  ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
   asiUser    User?            @relation("ServiceAssignmentAsi", fields: [asiUserId], references: [id])
@@ -1122,18 +1421,19 @@ model ServiceAssignmentHistory {
 }
 
 model ServiceTestReport {
-  id             String   @id @default(uuid())
-  complaintId    String
+  id              String             @id @default(uuid())
+  complaintId     String
   complaintLineId String?
-  submittedById  String
-  verdict        ServiceTestVerdict
-  summary        String?
-  structuredData Json?
-  createdAt      DateTime @default(now())
+  submittedById   String
+  verdict         ServiceTestVerdict
+  summary         String?
+  causeOfFailure  String?
+  structuredData  Json?
+  createdAt       DateTime           @default(now())
 
-  complaint     ServiceComplaint      @relation(fields: [complaintId], references: [id], onDelete: Cascade)
-  complaintLine ServiceComplaintLine? @relation(fields: [complaintLineId], references: [id])
-  submittedBy   User                  @relation("ServiceTestSubmittedBy", fields: [submittedById], references: [id])
+  complaint       ServiceComplaint        @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  complaintLine   ServiceComplaintLine?   @relation(fields: [complaintLineId], references: [id])
+  submittedBy     User                    @relation("ServiceTestSubmittedBy", fields: [submittedById], references: [id])
   formSubmissions ServiceFormSubmission[]
 
   @@index([complaintId, createdAt])
@@ -1142,15 +1442,15 @@ model ServiceTestReport {
 }
 
 model ServiceComplaintActivity {
-  id           String   @id @default(uuid())
-  complaintId  String
-  actorId      String?
-  action       String
-  fromStatus   ServiceComplaintStatus?
-  toStatus     ServiceComplaintStatus?
-  note         String?
-  meta         Json?
-  createdAt    DateTime @default(now())
+  id          String                  @id @default(uuid())
+  complaintId String
+  actorId     String?
+  action      String
+  fromStatus  ServiceComplaintStatus?
+  toStatus    ServiceComplaintStatus?
+  note        String?
+  meta        Json?
+  createdAt   DateTime                @default(now())
 
   complaint ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
   actor     User?            @relation("ServiceActivityActor", fields: [actorId], references: [id])
@@ -1161,25 +1461,37 @@ model ServiceComplaintActivity {
 }
 
 model ServiceWarrantyDecision {
-  id                      String                        @id @default(uuid())
-  complaintId             String                        @unique
-  status                  ServiceWarrantyDecisionStatus @default(pending)
-  decidedById             String?
-  sourceWarehouseId       String?
-  approvedReplacementSerial String?
-  rejectionReason         String?
-  replacementOrderId      String?                       @unique
-  decidedAt               DateTime?
-  createdAt               DateTime                      @default(now())
-  updatedAt               DateTime                      @updatedAt
+  id          String                        @id @default(uuid())
+  complaintId String                        @unique
+  status      ServiceWarrantyDecisionStatus @default(pending)
+  decidedById String?
 
-  complaint        ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
-  decidedBy        User?            @relation("ServiceWarrantyDecidedBy", fields: [decidedById], references: [id])
-  sourceWarehouse  Warehouse?       @relation(fields: [sourceWarehouseId], references: [id])
-  replacementOrder SaleOrder?       @relation("ServiceWarrantyReplacementOrder", fields: [replacementOrderId], references: [id])
+  fulfillmentRoute     ServiceFulfillmentRoute?
+  sourceWarehouseId    String?
+  sourceOutletId       String?
+  claimingOutletId     String?
+  replacementOrderId   String?                  @unique
+  replacementInvoiceId String?                  @unique
+
+  proRataPercent Int? // 0–100, pro-rata warranty coverage percentage
+
+  approvedReplacementSerial String?
+  rejectionReason           String?
+  decidedAt                 DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  complaint          ServiceComplaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  decidedBy          User?            @relation("ServiceWarrantyDecidedBy", fields: [decidedById], references: [id])
+  sourceWarehouse    Warehouse?       @relation(fields: [sourceWarehouseId], references: [id])
+  sourceOutlet       Outlet?          @relation("ServiceWarrantySourceOutlet", fields: [sourceOutletId], references: [id])
+  claimingOutlet     Outlet?          @relation("ServiceWarrantyClaimingOutlet", fields: [claimingOutletId], references: [id])
+  replacementOrder   SaleOrder?       @relation("ServiceWarrantyReplacementOrder", fields: [replacementOrderId], references: [id])
+  replacementInvoice Invoice?         @relation("ServiceWarrantyReplacementInvoice", fields: [replacementInvoiceId], references: [id])
 
   @@index([status, createdAt])
   @@index([sourceWarehouseId])
+  @@index([claimingOutletId])
   @@map("service_warranty_decisions")
 }
 
@@ -1206,15 +1518,15 @@ model ServiceSerialIndex {
 }
 
 model ServiceSerialEvent {
-  id               String   @id @default(uuid())
+  id               String                  @id @default(uuid())
   normalizedSerial String
   orgId            String?
   eventType        ServiceSerialEventType
   entityType       ServiceSerialEntityType
   entityId         String
-  eventAt          DateTime @default(now())
+  eventAt          DateTime                @default(now())
   meta             Json?
-  createdAt        DateTime @default(now())
+  createdAt        DateTime                @default(now())
 
   @@unique([normalizedSerial, entityType, entityId, eventType])
   @@index([orgId, normalizedSerial, eventAt])
@@ -1223,33 +1535,24 @@ model ServiceSerialEvent {
   @@map("service_serial_events")
 }
 
-model ServiceComplaintSequence {
-  orgId        String @default("")
-  year         Int
-  lastSequence Int    @default(0)
-
-  @@id([orgId, year])
-  @@map("service_complaint_sequences")
-}
-
 model ServiceMachineClient {
-  id             String                     @id @default(uuid())
-  clientId       String                     @unique
-  orgId          String?
-  name           String
-  scopes         String[]                   @default([])
-  secretHash     String
-  secretLast4    String
-  status         ServiceMachineClientStatus @default(active)
-  expiresAt      DateTime?
-  rotatedAt      DateTime                   @default(now())
-  lastUsedAt     DateTime?
-  createdById    String?
-  createdAt      DateTime                   @default(now())
-  updatedAt      DateTime                   @updatedAt
+  id          String                     @id @default(uuid())
+  clientId    String                     @unique
+  orgId       String?
+  name        String
+  scopes      String[]                   @default([])
+  secretHash  String
+  secretLast4 String
+  status      ServiceMachineClientStatus @default(active)
+  expiresAt   DateTime?
+  rotatedAt   DateTime                   @default(now())
+  lastUsedAt  DateTime?
+  createdById String?
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
 
-  createdBy User?                      @relation("ServiceMachineClientCreatedBy", fields: [createdById], references: [id])
-  auditLogs  ServiceMachineClientAudit[]
+  createdBy User?                       @relation("ServiceMachineClientCreatedBy", fields: [createdById], references: [id])
+  auditLogs ServiceMachineClientAudit[]
 
   @@index([orgId, status, createdAt])
   @@index([status, createdAt])
@@ -1269,7 +1572,7 @@ model ServiceFormTemplate {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  createdBy   User?                     @relation("ServiceFormTemplateCreatedBy", fields: [createdById], references: [id])
+  createdBy   User?                      @relation("ServiceFormTemplateCreatedBy", fields: [createdById], references: [id])
   fields      ServiceFormTemplateField[]
   submissions ServiceFormSubmission[]
 
@@ -1279,19 +1582,19 @@ model ServiceFormTemplate {
 }
 
 model ServiceFormTemplateField {
-  id              String              @id @default(uuid())
+  id              String               @id @default(uuid())
   templateId      String
   fieldKey        String
   label           String
   fieldType       ServiceFormFieldType
-  isRequired      Boolean             @default(true)
-  displayOrder    Int                 @default(0)
+  isRequired      Boolean              @default(true)
+  displayOrder    Int                  @default(0)
   validationRules Json?
-  isActive        Boolean             @default(true)
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
-  template ServiceFormTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  template ServiceFormTemplate          @relation(fields: [templateId], references: [id], onDelete: Cascade)
   values   ServiceFormSubmissionValue[]
 
   @@unique([templateId, fieldKey])
@@ -1300,19 +1603,19 @@ model ServiceFormTemplateField {
 }
 
 model ServiceFormSubmission {
-  id            String   @id @default(uuid())
-  complaintId   String
-  templateId    String
-  submittedById String
-  testReportId  String?
-  isDisabled    Boolean  @default(false)
+  id             String   @id @default(uuid())
+  complaintId    String
+  templateId     String
+  submittedById  String
+  testReportId   String?
+  isDisabled     Boolean  @default(false)
   disabledReason String?
-  submittedAt   DateTime @default(now())
+  submittedAt    DateTime @default(now())
 
-  complaint   ServiceComplaint    @relation(fields: [complaintId], references: [id], onDelete: Cascade)
-  template    ServiceFormTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  submittedBy User                @relation("ServiceFormSubmittedBy", fields: [submittedById], references: [id])
-  testReport  ServiceTestReport?  @relation(fields: [testReportId], references: [id])
+  complaint   ServiceComplaint             @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  template    ServiceFormTemplate          @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  submittedBy User                         @relation("ServiceFormSubmittedBy", fields: [submittedById], references: [id])
+  testReport  ServiceTestReport?           @relation(fields: [testReportId], references: [id])
   values      ServiceFormSubmissionValue[]
 
   @@index([complaintId, submittedAt])
@@ -1353,6 +1656,31 @@ model ServiceMachineClientAudit {
   @@map("service_machine_client_audit")
 }
 
+// Daily SKU demand prediction snapshots.
+// One row per (snapshotDate, product, lookbackDays). Upserted by the
+// sku-demand-snapshot cron at 02:00 UTC using a rolling window of approved orders.
+model SkuDemandSnapshot {
+  id                  String   @id @default(uuid())
+  snapshotDate        DateTime // midnight UTC on the day this was computed
+  productId           String
+  sku                 String
+  lookbackDays        Int
+  orderCount          Int // distinct orders containing this SKU in the window
+  totalOrdersInWindow Int // all distinct orders in the window
+  totalQtyOrdered     Int // total units of this SKU ordered in the window
+  totalAllSkuQty      Int // total units across all SKUs in the window
+  orderFrequencyPct   Float // orderCount / totalOrdersInWindow × 100
+  volumeSharePct      Float // totalQtyOrdered / totalAllSkuQty × 100
+  meanDailyQty        Float // totalQtyOrdered / lookbackDays
+  createdAt           DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([snapshotDate, productId, lookbackDays])
+  @@index([snapshotDate, lookbackDays])
+  @@map("sku_demand_snapshots")
+}
+
 // Batch 06 / D-10 / C-16: cross-instance lock for cron jobs.
 // Insert a row keyed by (jobName, runKey) — unique violation = lock already held.
 // Daily jobs use runKey "YYYY-MM-DD"; per-minute jobs use "YYYY-MM-DDTHH:MM".
@@ -1366,4 +1694,106 @@ model CronLock {
   @@unique([jobName, runKey])
   @@index([lockedAt])
   @@map("cron_locks")
+}
+
+// =============================================================================
+// ACCOUNTS — Double-entry General Ledger (spine of the accounts layer)
+// See plan/decisions/accounts.md (DEC-20260712-001) and
+// plan/decisions/accounts-market-research.md for the design rationale.
+// =============================================================================
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+// What business event produced a journal entry. INVOICE/PAYMENT/PAYMENT_REVERSAL
+// are auto-posted from operational flows in Phase 1; the rest land in later phases.
+enum JournalSourceType {
+  INVOICE
+  PAYMENT
+  PAYMENT_REVERSAL
+  EXCHANGE
+  WARRANTY
+  SCRAP
+  MANUAL
+  OPENING
+}
+
+// Chart of Accounts — a tree of accounts. `isPostable = false` = a header/group
+// node that only aggregates its children. Seeded from a battery-distributor
+// template (scripts/seed-chart-of-accounts.ts).
+model LedgerAccount {
+  id         String       @id @default(uuid())
+  code       String       @unique // e.g. "1200" Debtors, "4100" Sales, "2110" GST Output CGST
+  name       String
+  type       AccountType
+  parentId   String?
+  isPostable Boolean      @default(true)
+  isActive   Boolean      @default(true)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  parent   LedgerAccount?  @relation("AccountTree", fields: [parentId], references: [id])
+  children LedgerAccount[] @relation("AccountTree")
+  lines    JournalLine[]
+
+  @@index([type])
+  @@index([parentId])
+  @@map("ledger_accounts")
+}
+
+// One balanced accounting event. Immutable once posted — corrections are made
+// with a reversing entry (reversalOfId), never by editing. sum(debit)==sum(credit)
+// is enforced by the posting engine (backend/src/accounts/posting.ts).
+model JournalEntry {
+  id           String            @id @default(uuid())
+  entryNumber  String            @unique // "JE-2026-000123"
+  entryDate    DateTime
+  narration    String
+  sourceType   JournalSourceType
+  sourceId     String? // id of the invoice / outlet_payment / reversal that produced it
+  reversalOfId String?           @unique // set when this entry reverses another
+  postedById   String? // actor id; scalar (no FK) to avoid a back-relation on User
+  createdAt    DateTime          @default(now())
+
+  lines      JournalLine[]
+  reversalOf JournalEntry?  @relation("Reversal", fields: [reversalOfId], references: [id])
+  reversedBy JournalEntry?  @relation("Reversal")
+
+  @@index([sourceType, sourceId])
+  @@index([entryDate])
+  @@map("journal_entries")
+}
+
+// A single debit or credit line of a journal entry. One of debit/credit is > 0,
+// the other is 0. `outletId` tags party (AR/AP) lines so the GL Debtors balance
+// can be reconciled against the per-outlet subledger (accounts.statement).
+model JournalLine {
+  id        String  @id @default(uuid())
+  entryId   String
+  accountId String
+  debit     Decimal @default(0)
+  credit    Decimal @default(0)
+  outletId  String?
+  memo      String?
+
+  entry   JournalEntry  @relation(fields: [entryId], references: [id])
+  account LedgerAccount @relation(fields: [accountId], references: [id])
+
+  @@index([entryId])
+  @@index([accountId])
+  @@index([outletId])
+  @@map("journal_lines")
+}
+
+// Per-year monotonic counter for human-readable journal entry numbers.
+model JournalSequence {
+  year         Int @id
+  lastSequence Int @default(0)
+
+  @@map("journal_sequences")
 }

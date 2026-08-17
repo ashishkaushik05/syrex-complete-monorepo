@@ -25,6 +25,7 @@ function makeCtx(opts?: {
   actorId?: string;
   complaint?: { status?: string; latestAsiUserId?: string | null; latestSeUserId?: string | null };
   users?: Record<string, FakeUser>;
+  onComplaintUpdate?: (data: Record<string, unknown>) => void;
 }): TrpcContext {
   const actorId = opts?.actorId ?? ADMIN_ID;
   const users: Record<string, FakeUser> = {
@@ -94,13 +95,25 @@ function makeCtx(opts?: {
       findMany: async () => Object.values(users),
     },
     serviceComplaint: {
-      findFirst: async (args: { where: { id: string; orgId: string } }) => {
-        if (args.where.id !== complaint.id || args.where.orgId !== "org-A") return null;
+      findFirst: async (args: { where: any }) => {
+        const filters = args.where.AND ?? [args.where];
+        const requested = filters.find((filter: any) => typeof filter.id === "string")?.id;
+        const scopedIds = filters.find((filter: any) => filter.id?.in)?.id.in as string[] | undefined;
+        const orgId = filters.find((filter: any) => filter.orgId)?.orgId;
+        if (requested !== complaint.id || orgId !== "org-A") return null;
+        if (scopedIds && !scopedIds.includes(complaint.id)) return null;
         return complaint;
       },
-      update: async () => ({ id: complaint.id, status: "assigned" }),
+      update: async (args: { data: Record<string, unknown> }) => {
+        opts?.onComplaintUpdate?.(args.data);
+        return { id: complaint.id, status: "assigned" };
+      },
     },
     serviceAssignmentHistory: {
+      findMany: async () => complaint.assignments.map((assignment) => ({
+        complaintId: complaint.id,
+        ...assignment,
+      })),
       create: async (args: { data: Record<string, unknown> }) => ({
         id: "assignment-1",
         createdAt: new Date("2026-05-26T00:00:00.000Z"),
@@ -119,9 +132,12 @@ function makeCtx(opts?: {
   return {
     requestId: "test-req",
     actor: { id: actorId, orgId: "org-A", sessionId: "sess-1" },
+    serviceUser: null,
     prisma: fakePrisma as TrpcContext["prisma"],
     permissions: SUPER_PERMS,
     managedWarehouseId: null,
+    userType: "internal",
+    linkedOutletId: null,
     serviceClientId: null,
     serviceClientSecret: null,
     serviceScopes: [],
@@ -156,7 +172,10 @@ describe("service assignment role boundaries", () => {
   });
 
   it("initial assignment appoints an ASI and moves raised complaint to assigned", async () => {
-    const caller = serviceAssignmentsRouter.createCaller(makeCtx());
+    let updateData: Record<string, unknown> | undefined;
+    const caller = serviceAssignmentsRouter.createCaller(makeCtx({
+      onComplaintUpdate: (data) => { updateData = data; },
+    }));
 
     const result = await caller.assign({
       complaintId: "11111111-1111-4111-8111-111111111111",
@@ -167,6 +186,8 @@ describe("service assignment role boundaries", () => {
     expect(result.asiUserId).toBe(ASI_ID);
     expect(result.seUserId).toBeNull();
     expect(result.action).toBe("assign");
+    expect(updateData?.status).toBe("assigned");
+    expect(updateData?.assignedAt).toBeInstanceOf(Date);
   });
 
   it("cannot assign a service engineer before an ASI owns the complaint", async () => {
@@ -194,7 +215,7 @@ describe("service assignment role boundaries", () => {
         complaintId: "11111111-1111-4111-8111-111111111111",
         seUserId: SE_ID,
       }),
-      "FORBIDDEN",
+      "NOT_FOUND",
     );
   });
 });

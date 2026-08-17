@@ -15,6 +15,7 @@ const stopSchema = z.object({
   lng: z.number(),
   reason: z.string().nullable(),
   notes: z.string().nullable(),
+  clientEventId: z.string().nullable().optional(),
   startedAt: z.string(),
   endedAt: z.string().nullable(),
   createdAt: z.string()
@@ -29,6 +30,7 @@ const STOP_SELECT = {
   lng: true,
   reason: true,
   notes: true,
+  clientEventId: true,
   startedAt: true,
   endedAt: true,
   createdAt: true
@@ -43,6 +45,7 @@ function toStop(s: {
   lng: number;
   reason: string | null;
   notes: string | null;
+  clientEventId?: string | null;
   startedAt: Date;
   endedAt: Date | null;
   createdAt: Date;
@@ -60,11 +63,14 @@ export const fieldStopsRouter = createTRPCRouter({
     .input(
       z.object({
         agentId: z.string().uuid().optional(),
+        // P1-2: shiftId allows offline replay into a specific (possibly closed) shift.
+        shiftId: z.string().uuid().optional(),
         lat: z.number(),
         lng: z.number(),
         reason: z.string().min(1).optional(),
         notes: z.string().min(1).optional(),
-        startedAt: z.string().datetime().optional()
+        startedAt: z.string().datetime().optional(),
+        clientEventId: z.string().min(1).optional()
       })
     )
     .output(stopSchema)
@@ -79,13 +85,38 @@ export const fieldStopsRouter = createTRPCRouter({
           "Cannot create records on another agent's shift"
         );
       }
-      // Prefer x-org-id header; fall back to looking up the active shift for this agent.
-      const shift = await ctx.prisma.shift.findFirst({
-        where: { agentId, ...(ctx.actor.orgId ? { orgId: ctx.actor.orgId } : {}), status: "active" },
-        select: { id: true, orgId: true }
-      });
-      if (!shift) throw apiError("BAD_REQUEST", "No active shift — stops require an active shift");
+      // P1-2: If shiftId is provided, validate it belongs to this agent/org and
+      // use it directly (allows offline replay into closed shifts). Otherwise fall
+      // back to the current active shift.
+      const shift = input.shiftId
+        ? await ctx.prisma.shift.findFirst({
+            where: {
+              id: input.shiftId,
+              agentId,
+              ...(ctx.actor.orgId ? { orgId: ctx.actor.orgId } : {})
+            },
+            select: { id: true, orgId: true }
+          })
+        : await ctx.prisma.shift.findFirst({
+            where: { agentId, ...(ctx.actor.orgId ? { orgId: ctx.actor.orgId } : {}), status: "active" },
+            select: { id: true, orgId: true }
+          });
+      if (!shift) throw apiError("BAD_REQUEST", input.shiftId ? "Shift not found or not accessible" : "No active shift — stops require an active shift");
       const orgId = shift.orgId;
+
+      if (input.clientEventId) {
+        // P0-4: Scope duplicate check to org — same clientEventId across different orgs is allowed.
+        const existing = await ctx.prisma.fieldStop.findUnique({
+          where: {
+            orgId_clientEventId: {
+              orgId,
+              clientEventId: input.clientEventId
+            }
+          },
+          select: STOP_SELECT
+        });
+        if (existing) return toStop(existing);
+      }
 
       const openStop = await ctx.prisma.fieldStop.findFirst({
         where: { agentId, orgId, endedAt: null },
@@ -102,6 +133,7 @@ export const fieldStopsRouter = createTRPCRouter({
           lng: input.lng,
           reason: input.reason ?? null,
           notes: input.notes ?? null,
+          clientEventId: input.clientEventId ?? null,
           startedAt: input.startedAt ? new Date(input.startedAt) : new Date()
         },
         select: STOP_SELECT
@@ -122,7 +154,7 @@ export const fieldStopsRouter = createTRPCRouter({
       const agentId = ctx.actor.id!;
       await assertFieldEnabled(ctx.prisma, agentId);
 
-      // Resolve orgId from the stop record itself — don't require x-org-id header.
+      // Resolve orgId from the stop record itself.
       const stopRecord = await ctx.prisma.fieldStop.findUnique({
         where: { id: input.stopId },
         select: { orgId: true, agentId: true }

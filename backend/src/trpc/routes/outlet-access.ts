@@ -2,19 +2,12 @@ import type { TrpcContext } from "../context";
 import { apiError } from "../error";
 import { P, SUPER_ADMIN_PERMISSION } from "../../rbac/catalog";
 
-export async function actorHasInternalSalesOutletAccess(ctx: TrpcContext): Promise<boolean> {
-  const actorId = ctx.actor.id;
-  if (!actorId) return false;
+export function actorHasInternalSalesOutletAccess(ctx: TrpcContext): boolean {
+  if (!ctx.actor.id) return false;
   if (!ctx.permissions.includes(P.outlets.read) || !ctx.permissions.includes(P.orders.write)) {
     return false;
   }
-
-  const actor = await ctx.prisma.user.findUnique({
-    where: { id: actorId },
-    select: { userType: true },
-  });
-
-  return actor?.userType === "internal";
+  return ctx.userType === "internal";
 }
 
 export function assertWarehouseScope(ctx: TrpcContext, resourceWarehouseId: string | null): void {
@@ -37,20 +30,32 @@ export async function assertOutletWarehouseScope(ctx: TrpcContext, outletId: str
   }
 }
 
-export async function findActorLinkedOutletId(
+export function findActorLinkedOutletId(ctx: TrpcContext): string | null {
+  return ctx.linkedOutletId ?? null;
+}
+
+export type FinancialScope = {
+  linkedOutletId: string | null;
+  hasGlobalAccess: boolean;
+  isWarehouseScoped: boolean;
+};
+
+export function resolveFinancialScope(
   ctx: TrpcContext,
-): Promise<string | null> {
-  const actorId = ctx.actor.id;
-  if (!actorId) {
-    return null;
+  options?: { includeInternalSales?: boolean; errorMessage?: string },
+): FinancialScope {
+  const linkedOutletId = findActorLinkedOutletId(ctx);
+  const isSuperAdmin = ctx.permissions.includes(SUPER_ADMIN_PERMISSION);
+  const hasInternalSalesAccess =
+    options?.includeInternalSales ? actorHasInternalSalesOutletAccess(ctx) : false;
+  const hasGlobalAccess = isSuperAdmin || hasInternalSalesAccess;
+  const isWarehouseScoped = !hasGlobalAccess && !linkedOutletId && !!ctx.managedWarehouseId;
+
+  if (!hasGlobalAccess && !linkedOutletId && !isWarehouseScoped) {
+    throw apiError("FORBIDDEN", options?.errorMessage ?? "No safe scope available");
   }
 
-  const linked = await ctx.prisma.outlet.findUnique({
-    where: { userId: actorId },
-    select: { id: true },
-  });
-
-  return linked?.id ?? null;
+  return { linkedOutletId, hasGlobalAccess, isWarehouseScoped };
 }
 
 export async function assertOutletAccess(
@@ -74,7 +79,7 @@ export async function assertOutletAccess(
     return;
   }
 
-  if (await actorHasInternalSalesOutletAccess(ctx)) {
+  if (actorHasInternalSalesOutletAccess(ctx)) {
     return;
   }
 

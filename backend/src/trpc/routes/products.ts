@@ -16,8 +16,13 @@ const productSchema = z.object({
   specs: z.unknown().nullable(),
   warrantyMonths: z.number().int(),
   basePrice: z.string(),
+  hsnCode: z.string(),
+  uqc: z.string(),
+  gstRate: z.string(),
+  transferValue: z.string(),
   sortOrder: z.number().int(),
   isActive: z.boolean(),
+  primaryImageUrl: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string()
 });
@@ -31,6 +36,16 @@ const createProductSchema = z.object({
   specs: z.record(z.string(), z.unknown()).nullable().optional(),
   warrantyMonths: z.number().int().min(0),
   basePrice: z.string().min(1),
+  hsnCode: z.string().trim().min(4),
+  uqc: z.string().trim().min(1),
+  gstRate: z.string().refine((value) => {
+    const rate = Number(value);
+    return Number.isFinite(rate) && rate >= 0 && rate <= 100;
+  }, "gstRate must be between 0 and 100"),
+  transferValue: z.string().refine((value) => {
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount > 0;
+  }, "transferValue must be greater than zero"),
   sortOrder: z.number().int().default(0),
   isActive: z.boolean().default(true)
 });
@@ -45,6 +60,16 @@ const updateProductSchema = z.object({
   specs: z.record(z.string(), z.unknown()).nullable().optional(),
   warrantyMonths: z.number().int().min(0).optional(),
   basePrice: z.string().min(1).optional(),
+  hsnCode: z.string().trim().min(4).optional(),
+  uqc: z.string().trim().min(1).optional(),
+  gstRate: z.string().refine((value) => {
+    const rate = Number(value);
+    return Number.isFinite(rate) && rate >= 0 && rate <= 100;
+  }).optional(),
+  transferValue: z.string().refine((value) => {
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount > 0;
+  }).optional(),
   sortOrder: z.number().int().optional(),
   isActive: z.boolean().optional()
 });
@@ -79,10 +104,15 @@ function toProduct(product: {
   specs: unknown;
   warrantyMonths: number;
   basePrice: { toString(): string };
+  hsnCode: string;
+  uqc: string;
+  gstRate: { toString(): string };
+  transferValue: { toString(): string };
   sortOrder: number;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+  images?: Array<{ uri: string }>;
 }) {
   return {
     id: product.id,
@@ -95,8 +125,13 @@ function toProduct(product: {
     specs: product.specs ?? null,
     warrantyMonths: product.warrantyMonths,
     basePrice: product.basePrice.toString(),
+    hsnCode: product.hsnCode,
+    uqc: product.uqc,
+    gstRate: product.gstRate.toString(),
+    transferValue: product.transferValue.toString(),
     sortOrder: product.sortOrder,
     isActive: product.isActive,
+    primaryImageUrl: product.images?.[0]?.uri ?? null,
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString()
   };
@@ -107,30 +142,29 @@ export const productsRouter = createTRPCRouter({
     .input(listProductsInputSchema)
     .output(z.object({ items: z.array(productSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const products = await ctx.prisma.product.findMany({
         where: {
           categoryId: input.categoryId,
           category: input.brandId ? { brandId: input.brandId } : undefined,
           isActive: input.isActive,
-          OR: input.q
-            ? [
-                { name: { contains: input.q, mode: "insensitive" } },
-                { sku: { contains: input.q, mode: "insensitive" } },
-                { displayName: { contains: input.q, mode: "insensitive" } }
-              ]
-            : undefined
+          AND: [
+            ...(input.q ? [{ OR: [{ name: { contains: input.q, mode: "insensitive" as const } }, { sku: { contains: input.q, mode: "insensitive" as const } }, { displayName: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+          ],
         },
-        include: { category: { select: { brandId: true } } },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
+        include: {
+          category: { select: { brandId: true } },
+          images: { orderBy: { sortOrder: "asc" }, take: 1, select: { uri: true } },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: input.limit + 1
       });
       const hasMore = products.length > input.limit;
       const pageItems = hasMore ? products.slice(0, input.limit) : products;
       return {
         items: pageItems.map(toProduct),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 
@@ -140,7 +174,10 @@ export const productsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const product = await ctx.prisma.product.findUnique({
         where: { id: input.id },
-        include: { category: { select: { brandId: true } } }
+        include: {
+          category: { select: { brandId: true } },
+          images: { orderBy: { sortOrder: "asc" }, take: 1, select: { uri: true } },
+        },
       });
       if (!product) {
         throw apiError("NOT_FOUND", "Product not found");
@@ -167,6 +204,10 @@ export const productsRouter = createTRPCRouter({
         specs: toInputJson(input.specs),
         warrantyMonths: input.warrantyMonths,
         basePrice: input.basePrice,
+        hsnCode: input.hsnCode,
+        uqc: input.uqc,
+        gstRate: input.gstRate,
+        transferValue: input.transferValue,
         sortOrder: input.sortOrder,
         isActive: input.isActive
       }
@@ -202,6 +243,10 @@ export const productsRouter = createTRPCRouter({
         specs: toInputJson(input.specs),
         warrantyMonths: input.warrantyMonths,
         basePrice: input.basePrice,
+        hsnCode: input.hsnCode,
+        uqc: input.uqc,
+        gstRate: input.gstRate,
+        transferValue: input.transferValue,
         sortOrder: input.sortOrder,
         isActive: input.isActive
       }

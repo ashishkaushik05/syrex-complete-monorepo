@@ -21,36 +21,35 @@ const t = initTRPC.context<TrpcContext>().create({
 export const createTRPCRouter = t.router;
 export const publicProcedure = t.procedure;
 
-const authMiddleware = t.middleware(async ({ ctx, next }) => {
+const authMiddleware = t.middleware(({ ctx, next }) => {
   if (!ctx.actor.id) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Missing actor context"
     });
   }
-  const user = await ctx.prisma.user.findUnique({
-    where: { id: ctx.actor.id },
-    include: {
-      role: { select: { permissions: true } },
-      managedWarehouse: { select: { id: true } }
-    }
-  });
-  if (!user || !user.isActive) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Actor not found"
-    });
-  }
-  return next({
-    ctx: {
-      ...ctx,
-      permissions: user.role.permissions,
-      managedWarehouseId: user.managedWarehouse?.id ?? null
-    }
-  });
+  // Permissions, managedWarehouseId, userType, and linkedOutletId are populated by
+  // resolveActorFromBearer in app.ts — no additional DB query needed here.
+  return next({ ctx });
 });
 
 export const protectedProcedure = t.procedure.use(authMiddleware);
+
+const internalUserMiddleware = t.middleware(({ ctx, next }) => {
+  if (ctx.userType !== "internal") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Internal staff access is required",
+    });
+  }
+  return next({ ctx });
+});
+
+/**
+ * Use for staff-only workflows. Customer and outlet flows must instead use
+ * their dedicated, ownership-scoped procedures rather than staff permissions.
+ */
+export const internalProcedure = protectedProcedure.use(internalUserMiddleware);
 
 export const perm = (permission: CatalogPermission) =>
   protectedProcedure.use(async ({ ctx, next }) => {
@@ -78,6 +77,45 @@ export const permAny = (...permissions: CatalogPermission[]) =>
     }
     return next({ ctx });
   });
+
+export const internalPerm = (permission: CatalogPermission) =>
+  internalProcedure.use(async ({ ctx, next }) => {
+    const perms = ctx.permissions;
+    if (!perms.includes(SUPER_ADMIN_PERMISSION) && !perms.includes(permission)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Requires: ${permission}`,
+      });
+    }
+    return next({ ctx });
+  });
+
+export const internalPermAny = (...permissions: CatalogPermission[]) =>
+  internalProcedure.use(async ({ ctx, next }) => {
+    const perms = ctx.permissions;
+    const allowed =
+      perms.includes(SUPER_ADMIN_PERMISSION) ||
+      permissions.some((permission) => perms.includes(permission));
+    if (!allowed) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Requires one of: ${permissions.join(", ")}`,
+      });
+    }
+    return next({ ctx });
+  });
+
+const servicePortalMiddleware = t.middleware(({ ctx, next }) => {
+  if (!ctx.serviceUser) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Your account is not configured for service access. Contact your administrator.",
+    });
+  }
+  return next({ ctx });
+});
+
+export const servicePortalProcedure = t.procedure.use(servicePortalMiddleware);
 
 const serviceCredentialMiddleware = t.middleware(async ({ ctx, next }) => {
   const clientId = ctx.serviceClientId;

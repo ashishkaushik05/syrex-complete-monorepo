@@ -212,6 +212,7 @@ export function FieldSenseLiveMapPage() {
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasMoreAgents, setHasMoreAgents] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const agentsRef = useRef<AgentWithDetail[]>([])
@@ -255,6 +256,7 @@ export function FieldSenseLiveMapPage() {
         })
         setAgents(data)
         setLoading(false)
+        if (payload?.hasMore) setHasMoreAgents(true)
 
         if (data.length === 0) return
 
@@ -314,6 +316,7 @@ export function FieldSenseLiveMapPage() {
       },
       controller.signal,
       () => setConnected(true),
+      () => setConnected(false),
     )
 
     return () => {
@@ -368,6 +371,13 @@ export function FieldSenseLiveMapPage() {
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>
+      )}
+
+      {hasMoreAgents && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          Showing first 200 active agents. Additional agents exist but are not displayed. Use filters to narrow results.
+        </div>
       )}
 
       <div className="relative flex flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

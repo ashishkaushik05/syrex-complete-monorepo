@@ -1,0 +1,77 @@
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'schema.prisma'
+      - '.github/workflows/backend-ci.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'backend/**'
+      - 'schema.prisma'
+      - '.github/workflows/backend-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: backend quality gate
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: syrex_test
+          POSTGRES_USER: syrex
+          POSTGRES_PASSWORD: syrex_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syrex -d syrex_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://syrex:syrex_test_password@127.0.0.1:5432/syrex_test
+      JWT_SECRET: ci-staff-secret-at-least-thirty-two-characters
+      SERVICE_PORTAL_JWT_SECRET: ci-service-secret-at-least-thirty-two-characters
+      DEFAULT_ORG_ID: org-ci
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        working-directory: .
+        run: |
+          echo '{"name":"syrex-root","version":"1.0.0"}' > package.json
+          backend/node_modules/.bin/prisma generate --schema schema.prisma
+          rm package.json
+
+      - name: Prepare isolated test database
+        run: bun run db:test:prepare
+
+      # Blocking gates — a PR cannot merge if these fail.
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: RBAC preflight
+        run: bun run rbac:preflight
+
+      - name: Test
+        run: bun test
+
+      # Report-only in Phase 0. Becomes a blocking gate in Phase 5 (--min 4.0).
+      # See plan/testing/PHASED_PLAN.md §CI gates.
+      - name: Test:code ratio (report)
+        run: bun run test:ratio

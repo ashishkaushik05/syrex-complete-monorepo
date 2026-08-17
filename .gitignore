@@ -6,3 +6,4 @@ GEMINI.md
 backend/.env
 backend/.env.local
 web/.env
+backend/bun_test.logs

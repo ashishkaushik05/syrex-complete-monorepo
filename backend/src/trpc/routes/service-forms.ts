@@ -1,10 +1,15 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { createTRPCRouter, perm, permAny } from "../trpc";
+import { createTRPCRouter, internalPerm, internalPermAny } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { recordComplaintActivity, FINAL_STATUSES } from "./service-shared";
+import { decodeCursor, encodeCursor } from "./_shared";
+import { recordComplaintActivity } from "./service-shared";
 import type { ServiceFormTemplateField } from "@prisma/client";
+import {
+  resolveServiceActorRole,
+  serviceComplaintAccessWhere,
+} from "./service-access";
 
 // Batch 04: refuse null actor orgId rather than silently widening filters.
 function requireOrgId(actorOrgId: string | null): string {
@@ -169,9 +174,18 @@ const submissionValueSchema = z.object({
   id: z.string(),
   fieldId: z.string(),
   fieldKey: z.string(),
+  fieldLabel: z.string(),
   rawValue: z.string(),
   isValid: z.boolean(),
   validationError: z.string().nullable(),
+});
+
+const submissionAttachmentSchema = z.object({
+  id: z.string(),
+  fileName: z.string(),
+  mimeType: z.string(),
+  fileSize: z.number().int(),
+  createdAt: z.string(),
 });
 
 const submissionSchema = z.object({
@@ -185,6 +199,7 @@ const submissionSchema = z.object({
   disabledReason: z.string().nullable(),
   submittedAt: z.string(),
   values: z.array(submissionValueSchema),
+  attachments: z.array(submissionAttachmentSchema),
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -217,43 +232,70 @@ function toTemplateField(f: {
   };
 }
 
+function toSubmissionAttachment(attachment: {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  createdAt: Date;
+}) {
+  return {
+    id: attachment.id,
+    fileName: attachment.fileName,
+    mimeType: attachment.mimeType,
+    fileSize: attachment.fileSize,
+    createdAt: attachment.createdAt.toISOString(),
+  };
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 export const serviceFormsRouter = createTRPCRouter({
   // ── Template management (service:templates) ─────────────────────────────────
 
-  listTemplates: perm(P.service.read)
+  listTemplates: internalPerm(P.service.read)
     .input(
       z.object({
         isActive: z.boolean().optional(),
         withFields: z.boolean().default(false),
+        cursor: z.string().nullable().optional(),
+        limit: z.number().int().min(1).max(100).default(25),
       }),
     )
-    .output(z.array(templateSchema))
+    .output(z.object({ items: z.array(templateSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const orgId = requireOrgId(ctx.actor.orgId);
+      const parsed = decodeCursor(input.cursor);
       const rows = await ctx.prisma.serviceFormTemplate.findMany({
         where: {
           orgId,
           ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+          ...(parsed ? { OR: [{ createdAt: { lt: new Date(parsed.ts) } }, { createdAt: new Date(parsed.ts), id: { lt: parsed.id } }] } : {}),
         },
         include: { fields: { orderBy: { displayOrder: "asc" } } },
-        orderBy: { createdAt: "desc" },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.limit + 1,
       });
-      return rows.map((t) => ({
-        id: t.id,
-        name: t.name,
-        description: t.description,
-        version: t.version,
-        isActive: t.isActive,
-        createdById: t.createdById,
-        createdAt: t.createdAt.toISOString(),
-        updatedAt: t.updatedAt.toISOString(),
-        fields: input.withFields ? t.fields.map(toTemplateField) : undefined,
-      }));
+      const hasMore = rows.length > input.limit;
+      const items = hasMore ? rows.slice(0, input.limit) : rows;
+      const nextCursor = hasMore ? encodeCursor(items[items.length - 1]) : null;
+      return {
+        items: items.map((t) => ({
+          id: t.id,
+          name: t.name,
+          description: t.description,
+          version: t.version,
+          isActive: t.isActive,
+          createdById: t.createdById,
+          createdAt: t.createdAt.toISOString(),
+          updatedAt: t.updatedAt.toISOString(),
+          fields: input.withFields ? t.fields.map(toTemplateField) : undefined,
+        })),
+        nextCursor,
+      };
     }),
 
-  getTemplate: perm(P.service.read)
+  getTemplate: internalPerm(P.service.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(templateSchema)
     .query(async ({ ctx, input }) => {
@@ -276,7 +318,7 @@ export const serviceFormsRouter = createTRPCRouter({
       };
     }),
 
-  createTemplate: permAny(P.service.templates, P.service.manage)
+  createTemplate: internalPermAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         name: z.string().min(2).max(200),
@@ -350,7 +392,7 @@ export const serviceFormsRouter = createTRPCRouter({
       };
     }),
 
-  updateTemplate: permAny(P.service.templates, P.service.manage)
+  updateTemplate: internalPermAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         id: z.string().uuid(),
@@ -386,7 +428,7 @@ export const serviceFormsRouter = createTRPCRouter({
       };
     }),
 
-  addField: permAny(P.service.templates, P.service.manage)
+  addField: internalPermAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         templateId: z.string().uuid(),
@@ -439,7 +481,7 @@ export const serviceFormsRouter = createTRPCRouter({
       }
     }),
 
-  updateField: permAny(P.service.templates, P.service.manage)
+  updateField: internalPermAny(P.service.templates, P.service.manage)
     .input(
       z.object({
         fieldId: z.string().uuid(),
@@ -481,7 +523,7 @@ export const serviceFormsRouter = createTRPCRouter({
       return toTemplateField(field);
     }),
 
-  disableField: permAny(P.service.templates, P.service.manage)
+  disableField: internalPermAny(P.service.templates, P.service.manage)
     .input(z.object({ fieldId: z.string().uuid() }))
     .output(templateFieldSchema)
     .mutation(async ({ ctx, input }) => {
@@ -506,7 +548,7 @@ export const serviceFormsRouter = createTRPCRouter({
       return toTemplateField(field);
     }),
 
-  disableTemplate: permAny(P.service.templates, P.service.manage)
+  disableTemplate: internalPermAny(P.service.templates, P.service.manage)
     .input(z.object({ id: z.string().uuid() }))
     .output(z.object({ id: z.string(), isActive: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
@@ -524,7 +566,7 @@ export const serviceFormsRouter = createTRPCRouter({
 
   // ── Submissions (service:write / service:form) ─────────────────────────────
 
-  submitForm: perm(P.service.form)
+  submitForm: internalPerm(P.service.form)
     .input(
       z.object({
         complaintId: z.string().uuid(),
@@ -535,16 +577,20 @@ export const serviceFormsRouter = createTRPCRouter({
             rawValue: z.string(),
           }),
         ),
+        attachmentIds: z.array(z.string().uuid()).max(5).optional(),
       }),
     )
     .output(submissionSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id as string;
       const orgId = requireOrgId(ctx.actor.orgId);
+      const actorRole = await resolveServiceActorRole(ctx);
+      const attachmentIds = input.attachmentIds ?? [];
+      const accessWhere = await serviceComplaintAccessWhere(ctx, orgId);
 
       const [complaint, template] = await Promise.all([
         ctx.prisma.serviceComplaint.findFirst({
-          where: { id: input.complaintId, orgId },
+          where: { AND: [accessWhere, { id: input.complaintId }] },
           select: { id: true, orgId: true, status: true },
         }),
         ctx.prisma.serviceFormTemplate.findFirst({
@@ -555,11 +601,22 @@ export const serviceFormsRouter = createTRPCRouter({
 
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
       if (!template) throw apiError("NOT_FOUND", "Form template not found");
-      if (!template.isActive) throw apiError("BAD_REQUEST", "Cannot submit a disabled form template");
-
-      if (FINAL_STATUSES.has(complaint.status)) {
-        throw apiError("CONFLICT", `Cannot submit a form to a complaint with status '${complaint.status}'`);
+      if (complaint.status !== "visit") {
+        throw apiError(
+          "CONFLICT",
+          `Diagnostic forms can only be submitted after a visit is logged; current status is '${complaint.status}'`,
+        );
       }
+      if (new Set(attachmentIds).size !== attachmentIds.length) {
+        throw apiError("BAD_REQUEST", "Duplicate attachment IDs are not allowed");
+      }
+      if (
+        actorRole === "service_engineer" &&
+        (attachmentIds.length < 1 || attachmentIds.length > 5)
+      ) {
+        throw apiError("BAD_REQUEST", "Service Engineer form submissions require 1 to 5 images");
+      }
+      if (!template.isActive) throw apiError("BAD_REQUEST", "Cannot submit a disabled form template");
 
       const keys = input.values.map((v) => v.fieldKey);
       if (new Set(keys).size !== keys.length) {
@@ -596,10 +653,51 @@ export const serviceFormsRouter = createTRPCRouter({
       }
 
       type SubmissionWithIncludes = Prisma.ServiceFormSubmissionGetPayload<{
-        include: { values: true; template: { select: { name: true } } };
+        include: {
+          values: { include: { field: { select: { label: true } } } };
+          template: { select: { name: true } };
+        };
       }>;
 
       const submission = await ctx.prisma.$transaction(async (tx) => {
+        const attachments = attachmentIds.length === 0
+          ? []
+          : await tx.attachment.findMany({
+              where: { id: { in: attachmentIds } },
+              select: {
+                id: true,
+                entityType: true,
+                entityId: true,
+                fileName: true,
+                mimeType: true,
+                fileSize: true,
+                uploadedById: true,
+                isConfirmed: true,
+                createdAt: true,
+                pendingUpload: { select: { id: true } },
+              },
+            });
+        if (attachments.length !== attachmentIds.length) {
+          throw apiError("BAD_REQUEST", "One or more evidence attachments were not found");
+        }
+        for (const attachment of attachments) {
+          if (!attachment.mimeType.toLowerCase().startsWith("image/")) {
+            throw apiError("BAD_REQUEST", "Diagnostic evidence must use an image MIME type");
+          }
+          if (attachment.uploadedById !== actorId) {
+            throw apiError("BAD_REQUEST", "Diagnostic evidence must be uploaded by the submitting user");
+          }
+          if (
+            attachment.entityType !== "service_complaint" ||
+            attachment.entityId !== input.complaintId
+          ) {
+            throw apiError("BAD_REQUEST", "Diagnostic evidence must be staged against this complaint");
+          }
+          if (!attachment.isConfirmed || attachment.pendingUpload) {
+            throw apiError("BAD_REQUEST", "Diagnostic evidence upload must be confirmed");
+          }
+        }
+
         const sub = await tx.serviceFormSubmission.create({
           data: {
             complaintId: input.complaintId,
@@ -610,10 +708,36 @@ export const serviceFormsRouter = createTRPCRouter({
             },
           },
           include: {
-            values: true,
+            values: {
+              include: {
+                field: { select: { label: true } },
+              },
+            },
             template: { select: { name: true } },
           },
         }) as SubmissionWithIncludes;
+
+        if (attachmentIds.length > 0) {
+          const claimed = await tx.attachment.updateMany({
+            where: {
+              id: { in: attachmentIds },
+              entityType: "service_complaint",
+              entityId: input.complaintId,
+              uploadedById: actorId,
+              isConfirmed: true,
+            },
+            data: {
+              entityType: "service_form_submission",
+              entityId: sub.id,
+            },
+          });
+          if (claimed.count !== attachmentIds.length) {
+            throw apiError(
+              "CONFLICT",
+              "Diagnostic evidence was already committed; refresh and retry",
+            );
+          }
+        }
 
         await recordComplaintActivity(tx, {
           complaintId: input.complaintId,
@@ -625,75 +749,128 @@ export const serviceFormsRouter = createTRPCRouter({
             templateId: input.templateId,
             templateName: template.name,
             fieldCount: validatedValues.length,
+            attachmentCount: attachmentIds.length,
           },
         });
 
-        return sub;
+        return { sub, attachments };
       });
 
       return {
-        id: submission.id,
-        complaintId: submission.complaintId,
-        templateId: submission.templateId,
-        templateName: submission.template.name,
-        submittedById: submission.submittedById,
-        testReportId: submission.testReportId,
-        isDisabled: submission.isDisabled,
-        disabledReason: submission.disabledReason,
-        submittedAt: submission.submittedAt.toISOString(),
-        values: submission.values.map((v) => ({
+        id: submission.sub.id,
+        complaintId: submission.sub.complaintId,
+        templateId: submission.sub.templateId,
+        templateName: submission.sub.template.name,
+        submittedById: submission.sub.submittedById,
+        testReportId: submission.sub.testReportId,
+        isDisabled: submission.sub.isDisabled,
+        disabledReason: submission.sub.disabledReason,
+        submittedAt: submission.sub.submittedAt.toISOString(),
+        values: submission.sub.values.map((v) => ({
           id: v.id,
           fieldId: v.fieldId,
           fieldKey: v.fieldKey,
+          fieldLabel: v.field.label,
           rawValue: v.rawValue,
           isValid: v.isValid,
           validationError: v.validationError,
         })),
+        attachments: submission.attachments.map(toSubmissionAttachment),
       };
     }),
 
-  listSubmissions: perm(P.service.read)
-    .input(z.object({ complaintId: z.string().uuid() }))
-    .output(z.array(submissionSchema))
+  listSubmissions: internalPerm(P.service.read)
+    .input(
+      z.object({
+        complaintId: z.string().uuid(),
+        cursor: z.string().nullable().optional(),
+        limit: z.number().int().min(1).max(100).default(25),
+      }),
+    )
+    .output(z.object({ items: z.array(submissionSchema), nextCursor: z.string().nullable() }))
     .query(async ({ ctx, input }) => {
       const orgId = requireOrgId(ctx.actor.orgId);
+      const accessWhere = await serviceComplaintAccessWhere(ctx, orgId);
       const complaint = await ctx.prisma.serviceComplaint.findFirst({
-        where: { id: input.complaintId, orgId },
+        where: { AND: [accessWhere, { id: input.complaintId }] },
         select: { id: true, orgId: true },
       });
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
 
+      const parsed = decodeCursor(input.cursor);
       const subs = await ctx.prisma.serviceFormSubmission.findMany({
-        where: { complaintId: input.complaintId },
+        where: {
+          complaintId: input.complaintId,
+          ...(parsed ? { OR: [{ submittedAt: { gt: new Date(parsed.ts) } }, { submittedAt: new Date(parsed.ts), id: { gt: parsed.id } }] } : {}),
+        },
         include: {
-          values: true,
+          values: {
+            include: {
+              field: { select: { label: true } },
+            },
+          },
           template: { select: { name: true } },
         },
-        orderBy: { submittedAt: "asc" },
+        orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
+        take: input.limit + 1,
       });
+      const hasMore = subs.length > input.limit;
+      const items = hasMore ? subs.slice(0, input.limit) : subs;
+      const evidence = items.length === 0
+        ? []
+        : await ctx.prisma.attachment.findMany({
+            where: {
+              entityType: "service_form_submission",
+              entityId: { in: items.map((item) => item.id) },
+              isConfirmed: true,
+            },
+            select: {
+              id: true,
+              entityId: true,
+              fileName: true,
+              mimeType: true,
+              fileSize: true,
+              createdAt: true,
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          });
+      const evidenceBySubmission = new Map<string, typeof evidence>();
+      for (const attachment of evidence) {
+        const current = evidenceBySubmission.get(attachment.entityId) ?? [];
+        current.push(attachment);
+        evidenceBySubmission.set(attachment.entityId, current);
+      }
+      const nextCursor = hasMore
+        ? encodeCursor({ createdAt: items[items.length - 1].submittedAt, id: items[items.length - 1].id })
+        : null;
 
-      return subs.map((s) => ({
-        id: s.id,
-        complaintId: s.complaintId,
-        templateId: s.templateId,
-        templateName: s.template.name,
-        submittedById: s.submittedById,
-        testReportId: s.testReportId,
-        isDisabled: s.isDisabled,
-        disabledReason: s.disabledReason,
-        submittedAt: s.submittedAt.toISOString(),
-        values: s.values.map((v) => ({
-          id: v.id,
-          fieldId: v.fieldId,
-          fieldKey: v.fieldKey,
-          rawValue: v.rawValue,
-          isValid: v.isValid,
-          validationError: v.validationError,
+      return {
+        items: items.map((s) => ({
+          id: s.id,
+          complaintId: s.complaintId,
+          templateId: s.templateId,
+          templateName: s.template.name,
+          submittedById: s.submittedById,
+          testReportId: s.testReportId,
+          isDisabled: s.isDisabled,
+          disabledReason: s.disabledReason,
+          submittedAt: s.submittedAt.toISOString(),
+          values: s.values.map((v) => ({
+            id: v.id,
+            fieldId: v.fieldId,
+            fieldKey: v.fieldKey,
+            fieldLabel: v.field.label,
+            rawValue: v.rawValue,
+            isValid: v.isValid,
+            validationError: v.validationError,
+          })),
+          attachments: (evidenceBySubmission.get(s.id) ?? []).map(toSubmissionAttachment),
         })),
-      }));
+        nextCursor,
+      };
     }),
 
-  disableSubmission: permAny(P.service.workflow, P.service.manage)
+  disableSubmission: internalPermAny(P.service.workflow, P.service.manage)
     .input(
       z.object({
         submissionId: z.string().uuid(),
@@ -704,9 +881,10 @@ export const serviceFormsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
       const orgId = requireOrgId(ctx.actor.orgId);
+      const accessWhere = await serviceComplaintAccessWhere(ctx, orgId);
 
       const existing = await ctx.prisma.serviceFormSubmission.findFirst({
-        where: { id: input.submissionId, complaint: { orgId } },
+        where: { id: input.submissionId, complaint: accessWhere },
         select: { id: true, complaintId: true, isDisabled: true },
       });
       if (!existing) throw apiError("NOT_FOUND", "Form submission not found");

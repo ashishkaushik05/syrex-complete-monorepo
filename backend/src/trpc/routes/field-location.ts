@@ -11,6 +11,8 @@ import {
   validateLocationPoint
 } from "./field-helpers";
 
+const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // M-04: in-memory sliding-window rate limiter for location ingest.
 // Keyed by `${agentId}:${shiftId}`. Cap: INGEST_RATE_LIMIT points per window.
@@ -255,8 +257,46 @@ const activeAgentSchema = z.object({
       lastSyncAttemptAt: z.string().nullable(),
       lastSyncErrorCode: z.string().nullable()
     })
+    .nullable(),
+  healthState: z
+    .enum(['ACTIVE', 'DELAYED', 'STALE', 'OFFLINE', 'GPS_DISABLED', 'SHIFT_DESYNC'])
     .nullable()
 });
+
+// ---------------------------------------------------------------------------
+// Health classification
+// ---------------------------------------------------------------------------
+
+type HealthState = 'ACTIVE' | 'DELAYED' | 'STALE' | 'OFFLINE' | 'GPS_DISABLED' | 'SHIFT_DESYNC';
+
+function classifyHealthState(
+  health: { lastReceivedAt: Date | null; lastSyncAttemptAt: Date | null; lastSyncErrorCode: string | null; permissionsSummary: unknown } | null,
+  lastPingAt: Date | null
+): HealthState {
+  const now = Date.now();
+  const lastReceived = health?.lastReceivedAt ?? lastPingAt;
+  const lastSync = health?.lastSyncAttemptAt;
+
+  // GPS_DISABLED: error code indicates location permission issue
+  const errCode = health?.lastSyncErrorCode ?? '';
+  if (errCode === 'GPS_DISABLED' || errCode === 'LOCATION_PERMISSION_DENIED') {
+    return 'GPS_DISABLED';
+  }
+
+  if (!lastReceived && !lastSync) return 'OFFLINE';
+
+  const latestActivityMs = Math.max(
+    lastReceived ? now - lastReceived.getTime() : Infinity,
+    lastSync ? now - lastSync.getTime() : Infinity
+  );
+
+  const lastReceivedMs = lastReceived ? now - lastReceived.getTime() : Infinity;
+
+  if (lastReceivedMs <= 2 * 60 * 1000) return 'ACTIVE';
+  if (lastReceivedMs <= 10 * 60 * 1000) return 'DELAYED';
+  if (latestActivityMs <= 30 * 60 * 1000) return 'STALE';
+  return 'OFFLINE';
+}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -302,10 +342,7 @@ export const fieldLocationRouter = createTRPCRouter({
 
       await ctx.prisma.fieldLocation.createMany({ data });
 
-      // C-11: Broadcast ONLY to shift.orgId. Previously a second broadcast went
-      // to the attacker-controlled `x-org-id` header (now `ctx.actor.orgId`),
-      // which leaked location data across orgs whenever the header diverged
-      // from the shift's true org. `shift.orgId` is the single source of truth.
+      // C-11: Broadcast ONLY to shift.orgId — the single source of truth for org scope.
       const last = input.locations[input.locations.length - 1];
       broadcastLocationUpdate(shift.orgId, {
         orgId: shift.orgId,
@@ -333,10 +370,10 @@ export const fieldLocationRouter = createTRPCRouter({
     .output(ingestV2AckSchema)
     .mutation(async ({ ctx, input }) => {
       const agentId = ctx.actor.id!;
+      const t0 = Date.now();
       await assertFieldEnabled(ctx.prisma, agentId);
 
-      // Prefer orgId from x-org-id header; if absent, infer it from the shift
-      // so mobile clients that don't send the header still work.
+      // Prefer orgId from context (DEFAULT_ORG_ID); fall back to inferring from the shift.
       let orgId = ctx.actor.orgId;
       if (!orgId) {
         const hint = await ctx.prisma.shift.findFirst({
@@ -413,6 +450,8 @@ export const fieldLocationRouter = createTRPCRouter({
         appVersion?: string;
       }> = [];
 
+      let oldPointWarningCount = 0;
+      const fortyEightHoursAgo = new Date(Date.now() - FORTY_EIGHT_HOURS_MS);
       const seenInBatch = new Set<string>();
       for (const point of input.points) {
         if (seenInBatch.has(point.clientPointId)) {
@@ -431,6 +470,11 @@ export const fieldLocationRouter = createTRPCRouter({
             reason: validation.reason
           });
           continue;
+        }
+
+        // P1-1: Warn (but accept) points older than 48 h — could be a stale replay.
+        if (validation.recordedAt < fortyEightHoursAgo) {
+          oldPointWarningCount++;
         }
 
         validPoints.push({
@@ -580,6 +624,22 @@ export const fieldLocationRouter = createTRPCRouter({
           receivedAt: broadcastCandidate.receivedAt.toISOString()
         });
       }
+
+      console.log(JSON.stringify({
+        event: 'field.ingestV2',
+        orgId,
+        agentId,
+        shiftId: shift.id,
+        clientShiftId: input.clientShiftId,
+        deviceId: input.deviceId ?? null,
+        pointCount: input.points.length,
+        acceptedCount: accepted.length,
+        duplicateCount: duplicates.length,
+        rejectedCount: rejected.length,
+        oldPointWarningCount,
+        retryable: false,
+        durationMs: Date.now() - t0,
+      }));
 
       return {
         serverShiftId: shift.id,
@@ -799,25 +859,29 @@ export const fieldLocationRouter = createTRPCRouter({
       const shiftIds = activeShifts.map((s) => s.id);
       const agentIds = activeShifts.map((s) => s.agentId);
 
-      // Batch-fetch all last locations per shift (one query)
-      const allLocations = await ctx.prisma.fieldLocation.findMany({
-        where: { shiftId: { in: shiftIds } },
-        select: { shiftId: true, lat: true, lng: true, receivedAt: true },
-        orderBy: { receivedAt: "desc" }
-      });
-      // Keep only the most recent per shiftId
-      const lastLocByShift = new Map<
-        string,
-        { lat: number; lng: number; receivedAt: Date }
-      >();
-      for (const loc of allLocations) {
-        if (!lastLocByShift.has(loc.shiftId)) {
-          lastLocByShift.set(loc.shiftId, {
-            lat: loc.lat,
-            lng: loc.lng,
-            receivedAt: loc.receivedAt
-          });
-        }
+      // P1-3: DISTINCT ON returns exactly one row per shift (the most recent),
+      // avoiding a full scan of all historical location rows for every active shift.
+      // NB: the table is mapped to snake_case (@@map) but the columns are NOT
+      // (no @map), so Postgres column identifiers are camelCase and must be
+      // double-quoted to preserve case.
+      type LastLocRow = { shiftId: string; lat: number; lng: number; receivedAt: Date };
+      const rawLocs = shiftIds.length > 0
+        ? await (ctx.prisma.$queryRawUnsafe as (q: string, ...p: unknown[]) => Promise<LastLocRow[]>)(
+            `SELECT DISTINCT ON ("shiftId") "shiftId", lat, lng, "receivedAt"
+             FROM field_locations
+             WHERE "shiftId" = ANY($1::text[])
+             ORDER BY "shiftId", "receivedAt" DESC`,
+            shiftIds
+          )
+        : [] as LastLocRow[];
+
+      const lastLocByShift = new Map<string, { lat: number; lng: number; receivedAt: Date }>();
+      for (const loc of rawLocs) {
+        lastLocByShift.set(loc.shiftId, {
+          lat: loc.lat,
+          lng: loc.lng,
+          receivedAt: loc.receivedAt
+        });
       }
 
       // Batch-fetch all sync statuses per agent (one query)
@@ -853,7 +917,17 @@ export const fieldLocationRouter = createTRPCRouter({
 
       const agents = activeShifts.map((shift) => {
         const lastLoc = lastLocByShift.get(shift.id) ?? null;
-        const health = healthByAgent.get(shift.agentId) ?? null;
+        const healthRaw = healthByAgent.get(shift.agentId) ?? null;
+        const lastPingDate = lastLoc?.receivedAt ?? null;
+        const healthState = classifyHealthState(
+          healthRaw ? {
+            lastReceivedAt: healthRaw.lastReceivedAt ?? null,
+            lastSyncAttemptAt: healthRaw.lastSyncAttemptAt ?? null,
+            lastSyncErrorCode: healthRaw.lastSyncErrorCode,
+            permissionsSummary: null
+          } : null,
+          lastPingDate
+        );
         return {
           agentId: shift.agentId,
           agentName: shift.agent.name,
@@ -862,19 +936,20 @@ export const fieldLocationRouter = createTRPCRouter({
           lastPingAt: lastLoc?.receivedAt.toISOString() ?? null,
           lat: lastLoc?.lat ?? null,
           lng: lastLoc?.lng ?? null,
-          health: health
+          health: healthRaw
             ? {
-                deviceId: health.deviceId,
-                platform: health.platform,
-                appVersion: health.appVersion,
-                pendingQueueDepth: health.pendingQueueDepth,
-                lastCapturedAt: health.lastCapturedAt?.toISOString() ?? null,
-                lastReceivedAt: health.lastReceivedAt?.toISOString() ?? null,
+                deviceId: healthRaw.deviceId,
+                platform: healthRaw.platform,
+                appVersion: healthRaw.appVersion,
+                pendingQueueDepth: healthRaw.pendingQueueDepth,
+                lastCapturedAt: healthRaw.lastCapturedAt?.toISOString() ?? null,
+                lastReceivedAt: healthRaw.lastReceivedAt?.toISOString() ?? null,
                 lastSyncAttemptAt:
-                  health.lastSyncAttemptAt?.toISOString() ?? null,
-                lastSyncErrorCode: health.lastSyncErrorCode
+                  healthRaw.lastSyncAttemptAt?.toISOString() ?? null,
+                lastSyncErrorCode: healthRaw.lastSyncErrorCode
               }
-            : null
+            : null,
+          healthState
         };
       });
       // L-13: hasMore is true when we hit the page cap exactly

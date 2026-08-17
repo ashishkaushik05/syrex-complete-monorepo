@@ -11,9 +11,9 @@ on:
 # This file documents CI intent; re-enable Actions when billing is resolved.
 
 jobs:
-  # ── 1. Backend: TypeScript check ──────────────────────────────────────────
+  # ── 1. Backend: TypeScript + RBAC checks ───────────────────────────────────
   backend-check:
-    name: Backend — typecheck
+    name: Backend — preflight
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -28,9 +28,9 @@ jobs:
           backend/node_modules/.bin/prisma generate --schema schema.prisma
           rm package.json
 
-      - name: Typecheck
+      - name: Typecheck and RBAC preflight
         working-directory: backend
-        run: /home/ashish/.bun/bin/bun run typecheck
+        run: /home/ashish/.bun/bin/bun run ci:preflight
 
   # ── 2. Web: build + lint ──────────────────────────────────────────────────
   web-check:

@@ -21,6 +21,7 @@ import { serviceFormsRouter } from "./service-forms";
 import { serviceIntegrationsRouter } from "./service-integrations";
 
 import type { TrpcContext } from "../context";
+import { makeCtx as baseCtx } from "./__testkit__";
 
 const SUPER_PERMS = ["*"]; // SUPER_ADMIN_PERMISSION
 
@@ -69,17 +70,15 @@ function makeCtx(opts: { orgId: string | null }): TrpcContext {
   };
   fakePrisma.$transaction = async (cb: (tx: typeof fakePrisma) => Promise<unknown>) => cb(fakePrisma);
 
-  return {
-    requestId: "test-req",
-    actor: { id: "user-1", orgId: opts.orgId, sessionId: "sess-1" },
-    prisma: fakePrisma as unknown as TrpcContext["prisma"],
+  return baseCtx({
+    actorId: "user-1",
+    actorOrgId: opts.orgId,
+    sessionId: "sess-1",
     permissions: SUPER_PERMS,
-    managedWarehouseId: null,
-    serviceClientId: null,
-    serviceClientSecret: null,
-    serviceScopes: [],
+    userType: "internal",
     sourceIp: "127.0.0.1",
-  };
+    prisma: fakePrisma,
+  });
 }
 
 async function expectTrpcCode(promise: Promise<unknown>, code: TRPCError["code"]) {
@@ -96,10 +95,10 @@ async function expectTrpcCode(promise: Promise<unknown>, code: TRPCError["code"]
 }
 
 describe("service-complaints IDOR / null-orgId", () => {
-  it("get with another org's id returns NOT_FOUND", async () => {
+  it("detail with another org's id returns NOT_FOUND", async () => {
     const caller = serviceComplaintsRouter.createCaller(makeCtx({ orgId: "org-A" }));
     await expectTrpcCode(
-      caller.get({ id: "11111111-1111-4111-8111-111111111111" }),
+      caller.detail({ id: "11111111-1111-4111-8111-111111111111" }),
       "NOT_FOUND",
     );
   });
@@ -109,8 +108,20 @@ describe("service-complaints IDOR / null-orgId", () => {
     await expectTrpcCode(caller.list({ limit: 10 }), "FORBIDDEN");
   });
 
-  it("detail with another org's id returns NOT_FOUND", async () => {
-    const caller = serviceComplaintsRouter.createCaller(makeCtx({ orgId: "org-A" }));
+  it("detail with null actor orgId throws FORBIDDEN", async () => {
+    const caller = serviceComplaintsRouter.createCaller(makeCtx({ orgId: null }));
+    await expectTrpcCode(
+      caller.detail({ id: "11111111-1111-4111-8111-111111111111" }),
+      "FORBIDDEN",
+    );
+  });
+
+  it("service-user-A cannot read service-user-B complaint (raisedByServiceUserId scope)", async () => {
+    // An actor without manage/approve/workflow can only see complaints assigned to them.
+    // A complaint with a different serviceUserId returns NOT_FOUND.
+    const ctx = makeCtx({ orgId: "org-A" });
+    ctx.permissions = ["service:read"]; // no manage
+    const caller = serviceComplaintsRouter.createCaller(ctx);
     await expectTrpcCode(
       caller.detail({ id: "11111111-1111-4111-8111-111111111111" }),
       "NOT_FOUND",
@@ -211,7 +222,7 @@ describe("service-forms IDOR / null-orgId", () => {
 describe("service-integrations IDOR / null-orgId & creation guards", () => {
   it("listClients with null orgId throws FORBIDDEN", async () => {
     const caller = serviceIntegrationsRouter.createCaller(makeCtx({ orgId: null }));
-    await expectTrpcCode(caller.listClients(), "FORBIDDEN");
+    await expectTrpcCode(caller.listClients({}), "FORBIDDEN");
   });
 
   it("createClient with null orgId throws FORBIDDEN", async () => {

@@ -2,8 +2,18 @@ import { createApp } from "./app";
 import { env } from "./config/env";
 import { logger } from "./infra/logger";
 import { assertPermissionCatalogIntegrity } from "./rbac/catalog";
+import { prisma } from "./infra/db/prisma";
 
 assertPermissionCatalogIntegrity();
+
+if (!env.SERVICE_PORTAL_JWT_SECRET) {
+  throw new Error("SERVICE_PORTAL_JWT_SECRET must be set, >=32 chars");
+}
+
+// Idempotent bootstrap: ensure the complaint number sequence exists.
+prisma.$executeRaw`CREATE SEQUENCE IF NOT EXISTS service_complaint_number_seq`.catch((err) => {
+  logger.error("bootstrap_sequence_failed", { err });
+});
 
 const app = createApp();
 
@@ -12,6 +22,22 @@ Bun.cron(`${import.meta.dir}/cron/field-auto-start.ts`, "* * * * *", "field-auto
 
 // Field Sense: auto-close runs at 13:30 UTC = 19:00 IST (Asia/Kolkata)
 Bun.cron(`${import.meta.dir}/cron/field-auto-close.ts`, "30 13 * * *", "field-auto-close");
+
+// Field Sense: location retention runs daily at 20:10 UTC. The job is
+// configurable with FIELD_LOCATION_RETENTION_DAYS and can be disabled by env.
+Bun.cron(
+  `${import.meta.dir}/cron/field-location-retention.ts`,
+  "10 20 * * *",
+  "field-location-retention"
+);
+
+// SKU demand prediction: daily snapshot at 02:00 UTC (07:30 IST).
+// Configurable window via DEMAND_LOOKBACK_DAYS env var (default: 30).
+Bun.cron(
+  `${import.meta.dir}/cron/sku-demand-snapshot.ts`,
+  "0 2 * * *",
+  "sku-demand-snapshot"
+);
 
 export default {
   port: env.PORT,

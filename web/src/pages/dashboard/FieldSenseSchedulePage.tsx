@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { trpcQuery, trpcMutation } from '@/lib/api'
+import { trpcQuery, trpcMutation, getStoredOrgId } from '@/lib/api'
+import { usePermission } from '@/context/PermissionContext'
 
 type Schedule = {
   id: string
@@ -131,6 +132,8 @@ const TIMEZONE_GROUPS: { label: string; zones: string[] }[] = [
 
 export function FieldSenseSchedulePage() {
   const queryClient = useQueryClient()
+  const { can } = usePermission()
+  const canManageSchedules = can('field:admin') || can('*')
   const [editState, setEditState] = useState<EditState | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -154,7 +157,8 @@ export function FieldSenseSchedulePage() {
       timezone: string
       isEnabled: boolean
     }) => {
-      return trpcMutation('fieldSchedule.setForUser', payload)
+      const orgId = getStoredOrgId()
+      return trpcMutation('fieldSchedule.setForUser', { ...payload, ...(orgId ? { orgId } : {}) })
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['field-schedules'] })
@@ -294,16 +298,20 @@ export function FieldSenseSchedulePage() {
                             : '—'}
                         </span>
                       </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => openEdit(user)}
-                          className="h-7 gap-1 text-xs text-slate-500 hover:text-slate-800"
-                        >
-                          <Edit2 className="h-3 w-3" />
-                          {schedule ? 'Edit' : 'Set'}
-                        </Button>
+                      <TableCell className="w-16">
+                        {canManageSchedules ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(user)}
+                            className="h-7 gap-1 text-xs text-slate-500 hover:text-slate-800"
+                          >
+                            <Edit2 className="h-3 w-3" />
+                            {schedule ? 'Edit' : 'Set'}
+                          </Button>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   )

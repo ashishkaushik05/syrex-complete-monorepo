@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { createTRPCRouter, perm, serviceScopedProcedure } from "../trpc";
+import { createTRPCRouter, internalPerm, serviceScopedProcedure } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
+import { decodeCursor, encodeCursor } from "./_shared";
 // Batch 04: refuse null actor orgId rather than silently widening filters.
 function requireOrgId(actorOrgId: string | null): string {
   if (!actorOrgId) {
@@ -59,19 +60,139 @@ function toClientMeta(row: {
 }
 
 export const serviceIntegrationsRouter = createTRPCRouter({
-  listClients: perm(P.service.manage)
-    .input(z.void())
-    .output(z.array(clientMetaSchema))
-    .query(async ({ ctx }) => {
+  listClients: internalPerm(P.service.manage)
+    .input(
+      z.object({
+        status: z.enum(["active", "revoked"]).optional(),
+        cursor: z.string().nullable().optional(),
+        limit: z.number().int().min(1).max(100).default(25),
+      }),
+    )
+    .output(z.object({ items: z.array(clientMetaSchema), nextCursor: z.string().nullable() }))
+    .query(async ({ ctx, input }) => {
       const orgId = requireOrgId(ctx.actor.orgId);
+      const parsed = decodeCursor(input.cursor);
       const rows = await ctx.prisma.serviceMachineClient.findMany({
-        where: { orgId },
+        where: {
+          orgId,
+          ...(input.status ? { status: input.status } : {}),
+          ...(parsed ? { OR: [{ createdAt: { lt: new Date(parsed.ts) } }, { createdAt: new Date(parsed.ts), id: { lt: parsed.id } }] } : {}),
+        },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.limit + 1,
       });
-      return rows.map(toClientMeta);
+      const hasMore = rows.length > input.limit;
+      const items = hasMore ? rows.slice(0, input.limit) : rows;
+      const nextCursor = hasMore ? encodeCursor(items[items.length - 1]) : null;
+      return { items: items.map(toClientMeta), nextCursor };
     }),
 
-  createClient: perm(P.service.manage)
+  getClient: internalPerm(P.service.manage)
+    .input(z.object({ clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format") }))
+    .output(clientMetaSchema)
+    .query(async ({ ctx, input }) => {
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const row = await ctx.prisma.serviceMachineClient.findFirst({
+        where: { clientId: input.clientId, orgId },
+      });
+      if (!row) throw apiError("NOT_FOUND", "Client not found");
+      return toClientMeta(row);
+    }),
+
+  updateClient: internalPerm(P.service.manage)
+    .input(
+      z.object({
+        clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format"),
+        name: z.string().min(2).max(120).optional(),
+        scopes: z.array(z.enum(ALLOWED_MACHINE_SCOPES)).min(1).optional(),
+      }),
+    )
+    .output(clientMetaSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const existing = await ctx.prisma.serviceMachineClient.findFirst({
+        where: { clientId: input.clientId, orgId },
+      });
+      if (!existing) throw apiError("NOT_FOUND", "Client not found");
+      if (existing.status === "revoked") throw apiError("CONFLICT", "Cannot update a revoked client");
+
+      const updated = await ctx.prisma.$transaction(async (tx) => {
+        const client = await tx.serviceMachineClient.update({
+          where: { id: existing.id },
+          data: {
+            name: input.name,
+            scopes: input.scopes,
+          },
+        });
+        await tx.serviceMachineClientAudit.create({
+          data: {
+            serviceClientId: existing.id,
+            action: "updated",
+            actorId,
+            meta: { changes: { name: input.name, scopes: input.scopes } },
+          },
+        });
+        return client;
+      });
+      return toClientMeta(updated);
+    }),
+
+  listAuditLogs: internalPerm(P.service.manage)
+    .input(
+      z.object({
+        clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format"),
+        cursor: z.string().nullable().optional(),
+        limit: z.number().int().min(1).max(100).default(25),
+      }),
+    )
+    .output(
+      z.object({
+        items: z.array(
+          z.object({
+            id: z.string(),
+            action: z.string(),
+            actorId: z.string().nullable(),
+            meta: z.unknown(),
+            createdAt: z.string(),
+          }),
+        ),
+        nextCursor: z.string().nullable(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const client = await ctx.prisma.serviceMachineClient.findFirst({
+        where: { clientId: input.clientId, orgId },
+        select: { id: true },
+      });
+      if (!client) throw apiError("NOT_FOUND", "Client not found");
+
+      const parsed = decodeCursor(input.cursor);
+      const rows = await ctx.prisma.serviceMachineClientAudit.findMany({
+        where: {
+          serviceClientId: client.id,
+          ...(parsed ? { OR: [{ createdAt: { lt: new Date(parsed.ts) } }, { createdAt: new Date(parsed.ts), id: { lt: parsed.id } }] } : {}),
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.limit + 1,
+      });
+      const hasMore = rows.length > input.limit;
+      const items = hasMore ? rows.slice(0, input.limit) : rows;
+      const nextCursor = hasMore ? encodeCursor(items[items.length - 1]) : null;
+      return {
+        items: items.map((r) => ({
+          id: r.id,
+          action: r.action,
+          actorId: r.actorId,
+          meta: r.meta,
+          createdAt: r.createdAt.toISOString(),
+        })),
+        nextCursor,
+      };
+    }),
+
+  createClient: internalPerm(P.service.manage)
     .input(
       z.object({
         name: z.string().min(2).max(120),
@@ -127,7 +248,7 @@ export const serviceIntegrationsRouter = createTRPCRouter({
       };
     }),
 
-  rotateSecret: perm(P.service.manage)
+  rotateSecret: internalPerm(P.service.manage)
     .input(
       z.object({
         clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format"),
@@ -182,7 +303,7 @@ export const serviceIntegrationsRouter = createTRPCRouter({
       };
     }),
 
-  revokeClient: perm(P.service.manage)
+  revokeClient: internalPerm(P.service.manage)
     .input(
       z.object({
         clientId: z.string().regex(/^svc_[0-9a-f]{32}$/, "Invalid client ID format"),

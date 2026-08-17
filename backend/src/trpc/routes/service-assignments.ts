@@ -1,8 +1,12 @@
 import { z } from "zod";
-import { createTRPCRouter, perm } from "../trpc";
+import { createTRPCRouter, internalPerm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { FINAL_STATUSES, recordComplaintActivity, resolveTransition } from "./service-shared";
+import { FINAL_STATUSES, recordComplaintActivity } from "./service-shared";
+import {
+  resolveServiceActorRole,
+  serviceComplaintAccessWhere,
+} from "./service-access";
 
 // Batch 04: refuse null actor orgId rather than silently widening filters.
 function requireOrgId(actorOrgId: string | null): string {
@@ -96,7 +100,7 @@ function toStaffUser(user: { id: string; name: string; email: string; role: { na
 }
 
 export const serviceAssignmentsRouter = createTRPCRouter({
-  candidates: perm(P.service.assign)
+  candidates: internalPerm(P.service.assign)
     .input(z.void())
     .output(serviceAssignmentCandidatesSchema)
     .query(async ({ ctx }) => {
@@ -128,7 +132,7 @@ export const serviceAssignmentsRouter = createTRPCRouter({
       };
     }),
 
-  assign: perm(P.service.assign)
+  assign: internalPerm(P.service.assign)
     .input(initialAssignInputSchema)
     .output(assignmentOutputSchema)
     .mutation(async ({ ctx, input }) => {
@@ -149,6 +153,9 @@ export const serviceAssignmentsRouter = createTRPCRouter({
         },
       });
       if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+      if (await resolveServiceActorRole(ctx) === "asi") {
+        throw apiError("FORBIDDEN", "ASI users cannot assign ASI ownership");
+      }
       if (FINAL_STATUSES.has(complaint.status)) {
         throw apiError("CONFLICT", `Cannot assign a complaint with status '${complaint.status}'`);
       }
@@ -158,10 +165,17 @@ export const serviceAssignmentsRouter = createTRPCRouter({
 
       const asiUser = await ctx.prisma.user.findUnique({
         where: { id: input.asiUserId },
-        select: { id: true, isActive: true, userType: true, role: { select: { name: true } } },
+        select: {
+          id: true,
+          isActive: true,
+          userType: true,
+          managedByRsmId: true,
+          role: { select: { name: true } },
+        },
       });
       assertAssignableUser(asiUser, ASI_ROLE_NAMES, "ASI");
 
+      const now = new Date();
       const created = await ctx.prisma.$transaction(async (tx) => {
         const row = await tx.serviceAssignmentHistory.create({
           data: {
@@ -174,15 +188,17 @@ export const serviceAssignmentsRouter = createTRPCRouter({
           },
         });
 
-        let nextStatus = complaint.status;
-        if (complaint.status === "raised") {
-          const transition = resolveTransition(complaint.status, "assign");
-          nextStatus = transition.nextStatus;
-          await tx.serviceComplaint.update({
-            where: { id: input.complaintId },
-            data: { status: nextStatus },
-          });
-        }
+        // Status advance requires ASI assignment (C02); set assignedAt on first assignment (H01)
+        const nextStatus = complaint.status === "raised" ? "assigned" : complaint.status;
+        await tx.serviceComplaint.update({
+          where: { id: input.complaintId },
+          data: {
+            status: nextStatus,
+            assignedAt: complaint.status === "raised" ? now : undefined,
+            // Denormalize the RSM link from the ASI's hierarchy for O(1) scoped queries.
+            rsmUserId: asiUser?.managedByRsmId ?? undefined,
+          },
+        });
 
         await recordComplaintActivity(tx, {
           complaintId: input.complaintId,
@@ -191,10 +207,7 @@ export const serviceAssignmentsRouter = createTRPCRouter({
           fromStatus: complaint.status,
           toStatus: nextStatus,
           note: input.note ?? null,
-          meta: {
-            asiUserId: input.asiUserId,
-            seUserId: null,
-          },
+          meta: { asiUserId: input.asiUserId, seUserId: null },
         });
 
         return row;
@@ -212,15 +225,17 @@ export const serviceAssignmentsRouter = createTRPCRouter({
       };
     }),
 
-  reassign: perm(P.service.assign)
+  reassign: internalPerm(P.service.assign)
     .input(assignmentInputSchema)
     .output(assignmentOutputSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id!;
       const orgId = requireOrgId(ctx.actor.orgId);
+      const actorRole = await resolveServiceActorRole(ctx);
+      const accessWhere = await serviceComplaintAccessWhere(ctx, orgId);
 
       const complaint = await ctx.prisma.serviceComplaint.findFirst({
-        where: { id: input.complaintId, orgId },
+        where: { AND: [accessWhere, { id: input.complaintId }] },
         select: {
           id: true,
           orgId: true,
@@ -243,15 +258,8 @@ export const serviceAssignmentsRouter = createTRPCRouter({
         throw apiError("CONFLICT", "Assign an ASI before assigning service engineers");
       }
 
-      const actor = await ctx.prisma.user.findUnique({
-        where: { id: actorId },
-        select: { id: true, role: { select: { name: true } } },
-      });
-      const actorIsAsi = isAsiRoleName(actor?.role?.name);
+      const actorIsAsi = actorRole === "asi";
       if (actorIsAsi) {
-        if (latestAssignment.asiUserId !== actorId) {
-          throw apiError("FORBIDDEN", "ASI can assign engineers only for complaints assigned to them");
-        }
         if (input.asiUserId && input.asiUserId !== actorId) {
           throw apiError("FORBIDDEN", "ASI cannot transfer complaint ownership to another ASI");
         }

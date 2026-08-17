@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { assertCanGrantPermissions, decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import { Prisma } from "@prisma/client";
 
 const userTypeSchema = z.enum(["internal", "outlet"]);
@@ -82,17 +82,15 @@ export const usersRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const users = await ctx.prisma.user.findMany({
         where: {
           roleId: input.roleId,
           isActive: input.isActive,
-          OR: input.q
-            ? [
-                { email: { contains: input.q, mode: "insensitive" } },
-                { name: { contains: input.q, mode: "insensitive" } }
-              ]
-            : undefined
+          AND: [
+            ...(input.q ? [{ OR: [{ email: { contains: input.q, mode: "insensitive" as const } }, { name: { contains: input.q, mode: "insensitive" as const } }] }] : []),
+            ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+          ],
         },
         select: {
           id: true,
@@ -107,14 +105,13 @@ export const usersRouter = createTRPCRouter({
           updatedAt: true
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
         take: input.limit + 1
       });
       const hasMore = users.length > input.limit;
       const pageItems = hasMore ? users.slice(0, input.limit) : users;
       return {
         items: pageItems.map(toUser),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 
@@ -148,6 +145,7 @@ export const usersRouter = createTRPCRouter({
     if (!role) {
       throw apiError("BAD_REQUEST", "Invalid roleId");
     }
+    assertCanGrantPermissions(ctx.permissions, role.permissions);
     const existing = await ctx.prisma.user.findUnique({ where: { email: input.email } });
     if (existing) {
       throw apiError("CONFLICT", "Email already exists");
@@ -190,6 +188,7 @@ export const usersRouter = createTRPCRouter({
       if (!role) {
         throw apiError("BAD_REQUEST", "Invalid roleId");
       }
+      assertCanGrantPermissions(ctx.permissions, role.permissions);
     }
 
     const user = await ctx.prisma.user.update({

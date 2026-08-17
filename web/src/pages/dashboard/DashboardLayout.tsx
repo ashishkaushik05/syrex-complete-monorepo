@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
+  Activity,
   AlarmClock,
+  BarChart3,
   BatteryCharging,
   Bell,
   Boxes,
@@ -128,6 +130,14 @@ const navItems: NavItem[] = [
     label: "AR Aging",
     to: "/dashboard/accounts/ar-aging",
     icon: Receipt,
+    exact: false,
+    requiredPermission: "invoices:read",
+  },
+  {
+    section: "Accounts",
+    label: "Statements",
+    to: "/dashboard/accounts/statements",
+    icon: ClipboardList,
     exact: false,
     requiredPermission: "invoices:read",
   },
@@ -323,6 +333,22 @@ const navItems: NavItem[] = [
     exact: false,
     requiredPermission: "field:read",
   },
+  {
+    section: "Field Sense",
+    label: "Operations",
+    to: "/dashboard/field-operations",
+    icon: Activity,
+    exact: false,
+    requiredPermission: "field:read",
+  },
+  {
+    section: "Field Sense",
+    label: "Analytics",
+    to: "/dashboard/field-analytics",
+    icon: BarChart3,
+    exact: false,
+    requiredPermission: "field:read",
+  },
 ];
 
 type BreadcrumbSegment = { label: string; to?: string };
@@ -398,6 +424,11 @@ function buildBreadcrumbs(pathname: string): BreadcrumbSegment[] {
   if (pathname.startsWith("/dashboard/accounts/ar-aging")) {
     crumbs.push({ label: "Accounts" });
     crumbs.push({ label: "AR Aging" });
+    return crumbs;
+  }
+  if (pathname.startsWith("/dashboard/accounts/statements")) {
+    crumbs.push({ label: "Accounts" });
+    crumbs.push({ label: "Statements" });
     return crumbs;
   }
   if (pathname.startsWith("/dashboard/accounts/outstanding")) {
@@ -544,6 +575,16 @@ function buildBreadcrumbs(pathname: string): BreadcrumbSegment[] {
   if (pathname.startsWith("/dashboard/service/integrations")) {
     crumbs.push({ label: "Service", to: "/dashboard/service/complaints" });
     crumbs.push({ label: "Integrations" });
+    return crumbs;
+  }
+  if (pathname.startsWith("/dashboard/field-operations")) {
+    crumbs.push({ label: "Field Sense" });
+    crumbs.push({ label: "Operations" });
+    return crumbs;
+  }
+  if (pathname.startsWith("/dashboard/field-analytics")) {
+    crumbs.push({ label: "Field Sense" });
+    crumbs.push({ label: "Field Analytics" });
     return crumbs;
   }
 

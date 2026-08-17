@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createTRPCRouter, perm } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
-import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
+import { assertCanGrantPermissions, decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 
 const invitationStatusSchema = z.enum(["pending", "accepted", "revoked", "expired"]);
 
@@ -83,6 +83,12 @@ export const invitationsRouter = createTRPCRouter({
         throw apiError("UNAUTHORIZED", "Missing actor context");
       }
 
+      const targetRole = await ctx.prisma.role.findUnique({ where: { name: input.role } });
+      if (!targetRole) {
+        throw apiError("BAD_REQUEST", "Invalid role");
+      }
+      assertCanGrantPermissions(ctx.permissions, targetRole.permissions);
+
       const invitation = await ctx.prisma.userInvitation.create({
         data: {
           email: input.email,
@@ -106,14 +112,14 @@ export const invitationsRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
       const items = await ctx.prisma.userInvitation.findMany({
         where: {
           status: input.status,
-          email: input.email
+          email: input.email,
+          ...(cursor ? { OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] } : {}),
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: offset,
         take: input.limit + 1
       });
 
@@ -121,7 +127,7 @@ export const invitationsRouter = createTRPCRouter({
       const pageItems = hasMore ? items.slice(0, input.limit) : items;
       return {
         items: pageItems.map(toInvitationView),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null
+        nextCursor: hasMore ? encodeCursor(pageItems[pageItems.length - 1]) : null
       };
     }),
 

@@ -17,7 +17,9 @@ type WarehouseDetail = {
   location: string
   address?: string | null
   managerId?: string | null
+  billingProfileId?: string | null
   manager?: { id: string; name: string; email: string } | null
+  billingProfile?: { id: string; legalName: string; gstin: string; state: string; stateCode: string; isActive: boolean } | null
   isActive: boolean
   createdAt: string
   summary: {
@@ -89,13 +91,6 @@ type WarehouseProductOptionsResponse = {
   data: WarehouseProductOptionRow[]
 }
 
-type GRNLineDraft = {
-  productId: string
-  productName: string
-  sku: string
-  qtyReceived: number
-}
-
 function badgeClassForAvailability(availableQty: number, reorderPoint: number) {
   if (availableQty <= 0) return 'bg-red-100 text-red-700'
   if (availableQty <= reorderPoint) return 'bg-amber-100 text-amber-700'
@@ -125,13 +120,7 @@ export function WarehouseDetailPage() {
   const [assignOpen, setAssignOpen] = useState(false)
   const [assignSearch, setAssignSearch] = useState('')
   const [assignError, setAssignError] = useState<string | null>(null)
-  const [grnOpen, setGrnOpen] = useState(false)
   const [adjustOpen, setAdjustOpen] = useState(false)
-  const [grnSourceType, setGrnSourceType] = useState<'production_batch' | 'external_purchase' | 'manual'>('external_purchase')
-  const [grnNotes, setGrnNotes] = useState('')
-  const [grnSearch, setGrnSearch] = useState('')
-  const [grnLines, setGrnLines] = useState<GRNLineDraft[]>([])
-  const [grnError, setGrnError] = useState<string | null>(null)
   const [adjustSearch, setAdjustSearch] = useState('')
   const [adjustProductId, setAdjustProductId] = useState('')
   const [adjustQty, setAdjustQty] = useState('')
@@ -190,6 +179,13 @@ export function WarehouseDetailPage() {
       return response.data.data
     },
   })
+  const warehouseProfilesQuery = useQuery({
+    queryKey: ['billing-profiles', 'warehouse'],
+    enabled: canWriteWarehouses,
+    queryFn: async () => (await api.get<any>('/settings/billing/profiles', {
+      params: { profileType: 'warehouse', isActive: true },
+    })).data.data as Array<{ id: string; legalName: string; gstin: string }>,
+  })
 
   const productOptions = useMemo(() => {
     const map = new Map<string, WarehouseProductOptionRow>()
@@ -205,12 +201,6 @@ export function WarehouseDetailPage() {
     }
     return Array.from(map.values()).sort((a, b) => a.productName.localeCompare(b.productName))
   }, [productOptionsQuery.data, stockRows])
-
-  const grnFilteredOptions = useMemo(() => {
-    const term = grnSearch.trim().toLowerCase()
-    if (!term) return productOptions.slice(0, 30)
-    return productOptions.filter((row) => row.productName.toLowerCase().includes(term) || row.sku.toLowerCase().includes(term))
-  }, [productOptions, grnSearch])
 
   const adjustFilteredOptions = useMemo(() => {
     const term = adjustSearch.trim().toLowerCase()
@@ -250,32 +240,12 @@ export function WarehouseDetailPage() {
     },
     onError: (error) => setAssignError(apiErrorMessage(error, 'Unable to update manager.')),
   })
-
-  const grnMutation = useMutation({
-    mutationFn: async () => {
-      await api.post(`/warehouses/${warehouseId}/stock/grn`, {
-        sourceType: grnSourceType,
-        notes: grnNotes.trim() || undefined,
-        lines: grnLines.map((line) => ({
-          productId: line.productId,
-          qtyReceived: line.qtyReceived,
-        })),
-      })
-    },
+  const updateConfigurationMutation = useMutation({
+    mutationFn: async (payload: { billingProfileId?: string | null; isActive?: boolean }) => api.patch(`/warehouses/${warehouseId}`, payload),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['warehouses', 'detail', warehouseId] }),
-        queryClient.invalidateQueries({ queryKey: ['warehouses', 'stock', warehouseId] }),
-        queryClient.invalidateQueries({ queryKey: ['warehouses', 'recent-dispatches', warehouseId] }),
-      ])
-      setGrnOpen(false)
-      setGrnSourceType('external_purchase')
-      setGrnNotes('')
-      setGrnSearch('')
-      setGrnLines([])
-      setGrnError(null)
+      await queryClient.invalidateQueries({ queryKey: ['warehouses', 'detail', warehouseId] })
+      await queryClient.invalidateQueries({ queryKey: ['warehouses', 'list'] })
     },
-    onError: (error) => setGrnError(apiErrorMessage(error, 'Unable to record GRN.')),
   })
 
   const adjustMutation = useMutation({
@@ -300,24 +270,6 @@ export function WarehouseDetailPage() {
     },
     onError: (error) => setAdjustError(apiErrorMessage(error, 'Unable to adjust stock.')),
   })
-
-  const addGrnLine = (row: WarehouseProductOptionRow) => {
-    if (grnLines.some((line) => line.productId === row.productId)) return
-    setGrnLines((current) => [...current, { productId: row.productId, productName: row.productName, sku: row.sku, qtyReceived: 1 }])
-  }
-
-  const submitGrn = () => {
-    if (grnLines.length === 0) {
-      setGrnError('Add at least one GRN line.')
-      return
-    }
-    if (grnLines.some((line) => !Number.isFinite(line.qtyReceived) || line.qtyReceived <= 0)) {
-      setGrnError('All quantities must be greater than 0.')
-      return
-    }
-    setGrnError(null)
-    grnMutation.mutate()
-  }
 
   const submitAdjustment = () => {
     if (!adjustProductId) {
@@ -349,7 +301,7 @@ export function WarehouseDetailPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>{detailQuery.data.name}</CardTitle>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setGrnOpen(true)}>
+              <Button variant="outline" onClick={() => navigate(`/dashboard/dispatch/warehouses/${warehouseId}/grn`)}>
                 Record GRN
               </Button>
               <Button variant="outline" onClick={() => setAdjustOpen(true)}>
@@ -408,7 +360,23 @@ export function WarehouseDetailPage() {
                   </div>
                 ) : null}
               </div>
+              <div>
+                <span className="font-medium text-slate-900">Billing profile:</span>{' '}
+                {canWriteWarehouses ? (
+                  <select
+                    className="ml-2 h-8 rounded-md border border-slate-200 px-2 text-sm"
+                    value={detailQuery.data.billingProfileId ?? ''}
+                    onChange={(event) => updateConfigurationMutation.mutate({ billingProfileId: event.target.value || null })}
+                  >
+                    <option value="">Unassigned</option>
+                    {(warehouseProfilesQuery.data ?? []).map((profile) => <option key={profile.id} value={profile.id}>{profile.legalName} · {profile.gstin}</option>)}
+                  </select>
+                ) : detailQuery.data.billingProfile ? `${detailQuery.data.billingProfile.legalName} (${detailQuery.data.billingProfile.gstin})` : 'Unassigned'}
+              </div>
             </div>
+            {!detailQuery.data.managerId || !detailQuery.data.billingProfileId ? (
+              <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-sm text-amber-800">Configuration incomplete: assign both a manager and active warehouse billing profile before activation or production operations.</p>
+            ) : null}
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
               <div className="rounded-md border border-slate-200 p-2">
                 <p className="text-xs text-slate-500">SKUs Tracked</p>
@@ -550,73 +518,6 @@ export function WarehouseDetailPage() {
           ) : null}
         </CardContent>
       </Card>
-
-      <Dialog open={grnOpen} onOpenChange={setGrnOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Record GRN</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <label className="text-sm font-medium text-slate-700">
-              Source Type
-              <select
-                className="mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
-                value={grnSourceType}
-                onChange={(event) => setGrnSourceType(event.target.value as 'production_batch' | 'external_purchase' | 'manual')}
-              >
-                <option value="production_batch">Production Batch</option>
-                <option value="external_purchase">External Purchase</option>
-                <option value="manual">Manual</option>
-              </select>
-            </label>
-            <Input placeholder="Notes (optional)" value={grnNotes} onChange={(event) => setGrnNotes(event.target.value)} />
-            <Input placeholder="Search product by name or SKU" value={grnSearch} onChange={(event) => setGrnSearch(event.target.value)} />
-            <div className="max-h-36 overflow-y-auto rounded-md border border-slate-200">
-              {grnFilteredOptions.length === 0 ? (
-                <p className="p-2 text-xs text-slate-500">No matching products.</p>
-              ) : (
-                grnFilteredOptions.map((row) => (
-                  <button
-                    key={row.productId}
-                    type="button"
-                    className="flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50"
-                    onClick={() => addGrnLine(row)}
-                  >
-                    <span>{row.productName}</span>
-                    <span className="text-xs text-slate-500">{row.sku}</span>
-                  </button>
-                ))
-              )}
-            </div>
-            <div className="space-y-2">
-              {grnLines.map((line) => (
-                <div key={line.productId} className="grid grid-cols-[1fr_120px_80px] items-center gap-2">
-                  <div className="rounded-md border border-slate-200 px-2 py-1 text-sm">{line.productName} ({line.sku})</div>
-                  <Input
-                    type="number"
-                    min={1}
-                    value={line.qtyReceived}
-                    onChange={(event) => {
-                      const qty = Number(event.target.value)
-                      setGrnLines((current) => current.map((item) => (item.productId === line.productId ? { ...item, qtyReceived: qty } : item)))
-                    }}
-                  />
-                  <Button variant="outline" onClick={() => setGrnLines((current) => current.filter((item) => item.productId !== line.productId))}>
-                    Remove
-                  </Button>
-                </div>
-              ))}
-            </div>
-            {grnError ? <p className="text-sm text-red-600">{grnError}</p> : null}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setGrnOpen(false)}>Cancel</Button>
-            <Button onClick={submitGrn} disabled={grnMutation.isPending}>
-              {grnMutation.isPending ? 'Saving...' : 'Submit GRN'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}>
         <DialogContent>

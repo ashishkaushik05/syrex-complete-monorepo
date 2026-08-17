@@ -31,9 +31,8 @@ const fallbackApi = axios.create({
 })
 
 const ACCESS_TOKEN_KEY = 'syrex_phase1_access_token'
-const ORG_KEY = 'syrex_phase1_org_id'
 const REFRESH_TOKEN_KEY = 'syrex_phase1_refresh_token'
-const DEV_FALLBACK_ORG_ID = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim() || (import.meta.env.DEV ? 'default' : '')
+const ORG_ID_KEY = 'syrex_phase1_org_id'
 
 let accessTokenInMemory: string | null = window.localStorage.getItem(ACCESS_TOKEN_KEY)
 let refreshInFlight: Promise<boolean> | null = null
@@ -42,6 +41,7 @@ type AuthSessionPayload = {
   accessToken: string
   refreshToken: string
   expiresIn: number
+  orgId?: string
   user: {
     id: string
     email: string
@@ -69,16 +69,22 @@ function isAuthSessionPayload(value: unknown): value is AuthSessionPayload {
   )
 }
 
-function setAuthSession(session: Pick<AuthSessionPayload, 'accessToken' | 'refreshToken'>) {
+function setAuthSession(session: Pick<AuthSessionPayload, 'accessToken' | 'refreshToken' | 'orgId'>) {
   accessTokenInMemory = session.accessToken
   window.localStorage.setItem(ACCESS_TOKEN_KEY, session.accessToken)
   window.localStorage.setItem(REFRESH_TOKEN_KEY, session.refreshToken)
+  if (session.orgId) window.localStorage.setItem(ORG_ID_KEY, session.orgId)
 }
 
 function clearAuthSession() {
   accessTokenInMemory = null
   window.localStorage.removeItem(ACCESS_TOKEN_KEY)
   window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+  window.localStorage.removeItem(ORG_ID_KEY)
+}
+
+export function getStoredOrgId(): string | null {
+  return window.localStorage.getItem(ORG_ID_KEY)
 }
 
 function getAccessToken() {
@@ -111,20 +117,12 @@ function normalizeHeaders(headers?: HeadersInit): Record<string, string> {
   return { ...headers }
 }
 
-function getOrgId() {
-  const stored = window.localStorage.getItem(ORG_KEY)
-  if (stored) return stored
-  return DEV_FALLBACK_ORG_ID || null
-}
-
 function trpcHeaders(extra?: HeadersInit, options?: { includeAuth?: boolean }): HeadersInit {
   const includeAuth = options?.includeAuth !== false
-  const orgId = getOrgId()
   const accessToken = includeAuth ? getAccessToken() : null
   return {
     ...normalizeHeaders(extra),
     ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    ...(orgId ? { 'x-org-id': orgId } : {}),
   }
 }
 
@@ -636,6 +634,10 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
             displayName: product.displayName ?? product.name,
             skuCode: product.sku,
             basePrice: Number(product.basePrice),
+            hsnCode: product.hsnCode,
+            uqc: product.uqc,
+            gstRate: Number(product.gstRate),
+            transferValue: Number(product.transferValue),
             warrantyMonths: product.warrantyMonths,
             category: category?.name ?? null,
             brand: category?.brandId ? (brandById.get(category.brandId)?.name ?? null) : null,
@@ -753,6 +755,31 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     }
   }
 
+  if (url === '/settings/billing/profiles') {
+    const profiles = await trpcQuery<any[]>('orgBillingProfile.list', {
+      profileType: config?.params?.profileType,
+      isActive: config?.params?.isActive,
+    })
+    return { data: { data: profiles } }
+  }
+
+  if (/^\/warehouses\/[^/]+\/grns$/.test(url)) {
+    const warehouseId = url.split('/')[2]
+    const result = await trpcQuery<any>('inventory.listGoodsReceipts', {
+      warehouseId,
+      limit: Number(config?.params?.limit ?? 100),
+      status: config?.params?.status,
+      q: config?.params?.q,
+    })
+    return { data: { data: result.items, nextCursor: result.nextCursor } }
+  }
+
+  if (/^\/grns\/[^/]+$/.test(url)) {
+    const id = url.split('/')[2]
+    const receipt = await trpcQuery<any>('inventory.getGoodsReceipt', { id })
+    return { data: { data: receipt } }
+  }
+
   if (url === '/products') {
     const page = Number(config?.params?.page ?? 1)
     const limit = Number(config?.params?.limit ?? 20)
@@ -804,6 +831,10 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
             skuCode: product.sku,
             sku: product.sku,
             basePrice: Number(product.basePrice),
+            hsnCode: product.hsnCode,
+            uqc: product.uqc,
+            gstRate: Number(product.gstRate),
+            transferValue: Number(product.transferValue),
             warrantyMonths: product.warrantyMonths,
             category: category?.name ?? null,
             brand: category?.brandId ? (brandById.get(category.brandId)?.name ?? null) : null,
@@ -1255,18 +1286,6 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     return { data: { data: [] } }
   }
 
-  if (url === '/field/agents/active') {
-    return { data: { data: [] } }
-  }
-
-  if (url === '/field/shifts') {
-    return { data: { data: [] } }
-  }
-
-  if (/^\/field\/shifts\/[^/]+\/trail$/.test(url) || /^\/field\/shifts\/[^/]+\/visits$/.test(url)) {
-    return { data: { data: [] } }
-  }
-
   if (url === '/tickets') {
     const page = Number(config?.params?.page ?? 1)
     const limit = Number(config?.params?.limit ?? 20)
@@ -1298,7 +1317,7 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     const serialInsights = await Promise.all(
       (detail?.lines ?? []).flatMap((line: any) => {
         const jobs: Array<Promise<any>> = []
-        if (line?.serialNumber) {
+        if (line?.serialNumber && line.serialNumber.length >= 2) {
           jobs.push(
             trpcQuery<any>('serviceSerials.resolve', { serial: line.serialNumber }).then((resolved) => ({
               lineId: line.id,
@@ -1308,7 +1327,7 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
             })),
           )
         }
-        if (line?.replacementSerialNumber) {
+        if (line?.replacementSerialNumber && line.replacementSerialNumber.length >= 2) {
           jobs.push(
             trpcQuery<any>('serviceSerials.resolve', { serial: line.replacementSerialNumber }).then((resolved) => ({
               lineId: line.id,
@@ -1333,7 +1352,7 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
 
   if (url === '/service/serials') {
     const serial = String(config?.params?.q ?? config?.params?.serial ?? '')
-    if (!serial) return { data: { data: null } }
+    if (serial.length < 2) return { data: { data: null } }
     const resolved = await trpcQuery<any>('serviceSerials.resolve', { serial })
     return { data: { data: resolved } }
   }
@@ -1347,21 +1366,24 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
 
   if (/^\/tickets\/[^/]+\/submissions$/.test(url)) {
     const id = url.split('/')[2]
-    const subs = await trpcQuery<any>('serviceForms.listSubmissions', { complaintId: id })
-    return { data: { data: Array.isArray(subs) ? subs : [] } }
+    const submissions = await trpcQuery<{ items: unknown[]; nextCursor: string | null }>(
+      'serviceForms.listSubmissions',
+      { complaintId: id },
+    )
+    return { data: { data: submissions.items } }
   }
 
   if (url === '/service/forms/templates') {
     const withFields = config?.params?.withFields === 'true' || config?.params?.withFields === true
-    const templates = await trpcQuery<any>('serviceForms.listTemplates', {
+    const templates = await trpcQuery<{ items: unknown[]; nextCursor: string | null }>('serviceForms.listTemplates', {
       isActive: true,
       withFields,
     })
-    return { data: { data: Array.isArray(templates) ? templates : [] } }
+    return { data: { data: templates.items } }
   }
 
   if (url === '/service/integrations/clients') {
-    const clients = await trpcQuery<any>('serviceIntegrations.listClients', undefined)
+    const clients = await trpcQuery<any>('serviceIntegrations.listClients', { limit: 50 })
     return { data: { data: clients } }
   }
 
@@ -1509,6 +1531,25 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
     }
   }
 
+  if (/^\/accounts\/outlets\/[^/]+\/statement$/.test(url)) {
+    const outletId = url.split('/')[3]
+    const now = new Date()
+    const defaultFrom = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+    const defaultTo = now.toISOString()
+    const toISOSafe = (val: unknown): string => {
+      if (val instanceof Date) return val.toISOString()
+      if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(val)) return val
+      if (typeof val === 'string' || typeof val === 'number') return new Date(val).toISOString()
+      return new Date().toISOString()
+    }
+    const statement = await trpcQuery<any>('accounts.statement', {
+      outletId,
+      from: toISOSafe(config?.params?.from ?? defaultFrom),
+      to: toISOSafe(config?.params?.to ?? defaultTo),
+    })
+    return { data: { data: statement } }
+  }
+
   if (/^\/accounts\/outlets\/[^/]+\/payments$/.test(url)) {
     const outletId = url.split('/')[3]
     const { page, limit } = getPageAndLimit(config)
@@ -1530,6 +1571,8 @@ async function phase1Get(url: string, config?: RequestConfig): Promise<unknown |
       return {
         ...payment,
         amount: Number(payment.amount ?? 0),
+        voidedAt: payment.voidedAt ?? null,
+        voidReason: payment.voidReason ?? null,
         allocatedAmount,
         allocatedInvoices: allocations.length,
         allocations,
@@ -1716,6 +1759,10 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
         : null,
       warrantyMonths: Number(body.warrantyMonths ?? 0),
       basePrice: String(body.basePrice ?? '0'),
+      hsnCode: body.hsnCode,
+      uqc: body.uqc,
+      gstRate: String(body.gstRate ?? '0'),
+      transferValue: String(body.transferValue ?? '0'),
       sortOrder: body.sortOrder ?? 0,
       isActive: body.isActive ?? true,
     })
@@ -1781,6 +1828,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       phone: body.phone,
       address: body.address,
       creditLimit: '0',
+      billingProfileId: body.billingProfileId ?? null,
       isActive: true,
     })
     return { data: { data: outlet } }
@@ -1791,8 +1839,9 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       name: body.name,
       location: body.location,
       address: body.address,
-      managerId: null,
-      isActive: true,
+      managerId: body.managerId ?? null,
+      billingProfileId: body.billingProfileId ?? null,
+      isActive: body.isActive ?? false,
     })
     return { data: warehouse }
   }
@@ -2074,12 +2123,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (/^\/tickets\/[^/]+\/comments$/.test(url)) {
-    const id = url.split('/')[2]
-    const updated = await trpcMutation<any>('serviceComplaints.update', {
-      id,
-      resolutionNote: body?.comment ?? body?.note ?? null,
-    })
-    return { data: { data: updated } }
+    throw makeApiError('Complaint comments are not yet supported. Use resolution notes on the complaint detail page.', 400)
   }
 
   if (/^\/tickets\/[^/]+\/close$/.test(url)) {
@@ -2102,7 +2146,12 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (/^\/tickets\/[^/]+\/reopen$/.test(url)) {
-    throw makeApiError('Complaint reopening is not supported. Raise a new complaint.', 400)
+    const id = url.split('/')[2]
+    const reopened = await trpcMutation<any>('serviceComplaints.reopen', {
+      id,
+      reason: body?.reason ?? body?.note,
+    })
+    return { data: { data: reopened } }
   }
 
   if (/^\/tickets\/[^/]+\/assign$/.test(url)) {
@@ -2141,6 +2190,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
       complaintId: id,
       templateId: body?.templateId,
       values: Array.isArray(body?.values) ? body.values : [],
+      attachmentIds: Array.isArray(body?.attachmentIds) ? body.attachmentIds : undefined,
     })
     return { data: { data: submitted } }
   }
@@ -2158,6 +2208,15 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: submitted } }
   }
 
+  if (/^\/tickets\/[^/]+\/retest$/.test(url)) {
+    const id = url.split('/')[2]
+    const requested = await trpcMutation<any>('serviceTests.requestRetest', {
+      complaintId: id,
+      note: body?.note ?? body?.reason,
+    })
+    return { data: { data: requested } }
+  }
+
   if (/^\/tickets\/[^/]+\/transition$/.test(url)) {
     const id = url.split('/')[2]
     const transitioned = await trpcMutation<any>('serviceComplaints.transition', {
@@ -2173,7 +2232,7 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     const approved = await trpcMutation<any>('serviceWarranty.approve', {
       complaintId: id,
       sourceWarehouseId: body?.sourceWarehouseId,
-      note: body?.note ?? null,
+      note: body?.note ?? undefined,
     })
     return { data: { data: approved } }
   }
@@ -2199,30 +2258,51 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
 
   if (/^\/tickets\/[^/]+\/fulfillment-order$/.test(url)) {
     const id = url.split('/')[2]
+    const route = body?.fulfillmentRoute ?? (body?.sourceWarehouseId ? 'warehouse' : 'outlet')
     const created = await trpcMutation<any>('serviceWarranty.createFulfillmentOrder', {
+      fulfillmentRoute: route,
       complaintId: id,
-      sourceWarehouseId: body?.sourceWarehouseId,
-      deliveryAddress: body?.deliveryAddress,
+      ...(route === 'warehouse'
+        ? { sourceWarehouseId: body?.sourceWarehouseId, deliveryAddress: body?.deliveryAddress }
+        : { sourceOutletId: body?.sourceOutletId }),
       lines: body?.lines ?? [],
     })
     return { data: { data: created } }
   }
 
   if (url === '/tickets') {
-    const created = await trpcMutation<any>('serviceComplaints.create', {
+    const rawLines: any[] = Array.isArray(body?.lines) ? body.lines : []
+    const validLines = rawLines.filter((l: any) => l.sku)
+    const shared = {
+      issueCategory: body?.issueCategory,
       title: body?.title || undefined,
       description: body?.description || undefined,
       customerName: body?.customerName,
       customerPhone: body?.customerPhone,
       outletId: body?.outletId || undefined,
-      lines: Array.isArray(body?.lines)
-        ? body.lines.map((line: any) => ({
-            productId: line.productId,
-            serialNumber: line.serialNumber || undefined,
-            notes: line.notes ?? undefined,
-          }))
-        : [],
-    })
+      serviceUserId: body?.serviceUserId || undefined,
+      newServiceUser: body?.newServiceUser || undefined,
+    }
+    let created: any
+    if (validLines.length > 1) {
+      const result = await trpcMutation<any>('serviceComplaints.batchCreate', {
+        ...shared,
+        lines: validLines.map((l: any) => ({
+          sku: l.sku,
+          serialNumber: l.serialNumber || undefined,
+          notes: l.notes || undefined,
+        })),
+      })
+      created = result?.complaints?.[0]
+    } else {
+      const line = validLines[0] ?? {}
+      created = await trpcMutation<any>('serviceComplaints.create', {
+        ...shared,
+        sku: line.sku ?? '',
+        serialNumber: line.serialNumber || '',
+        notes: line.notes || undefined,
+      })
+    }
     return { data: { data: created } }
   }
 
@@ -2278,6 +2358,11 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: profile } }
   }
 
+  if (url === '/settings/billing/profiles') {
+    const profile = await trpcMutation<any>('orgBillingProfile.create', body)
+    return { data: { data: profile } }
+  }
+
   if (url === '/settings/billing/charges/reorder') {
     const result = await trpcMutation<any>('taxCharges.reorder', { orderedIds: body.orderedIds })
     return { data: { data: result.items } }
@@ -2287,15 +2372,30 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { ok: true } }
   }
 
-  if (/^\/warehouses\/[^/]+\/stock\/grn$/.test(url)) {
+  if (/^\/warehouses\/[^/]+\/grns\/preview$/.test(url)) {
     const warehouseId = url.split('/')[2]
-    const sourceType = body?.sourceType === 'production_batch' ? 'production_line_movement' : 'manual'
-    const receipt = await trpcMutation('inventory.createGoodsReceipt', {
+    const preview = await trpcQuery<any>('inventory.previewProductionGoodsReceipt', {
       warehouseId,
-      sourceType,
-      sourceBatchId: body?.sourceBatchId ?? null,
+      sourceBillingProfileId: body?.sourceBillingProfileId,
+      externalDocumentNumber: body?.externalDocumentNumber,
+      dispatchDate: body?.dispatchDate,
       receiptDate: body?.receiptDate,
       notes: body?.notes ?? null,
+      lines: (body?.lines ?? []).map((line: any) => ({ productId: line.productId, qtyReceived: Number(line.qtyReceived) })),
+    })
+    return { data: { data: preview } }
+  }
+
+  if (/^\/warehouses\/[^/]+\/grns$/.test(url)) {
+    const warehouseId = url.split('/')[2]
+    const receipt = await trpcMutation('inventory.createProductionGoodsReceipt', {
+      warehouseId,
+      sourceBillingProfileId: body?.sourceBillingProfileId,
+      externalDocumentNumber: body?.externalDocumentNumber,
+      dispatchDate: body?.dispatchDate,
+      receiptDate: body?.receiptDate,
+      notes: body?.notes ?? null,
+      idempotencyKey: body?.idempotencyKey,
       lines: (body?.lines ?? []).map((line: any) => ({
         productId: line.productId,
         qtyReceived: Number(line.qtyReceived),
@@ -2338,6 +2438,13 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: added } }
   }
 
+  if (/^\/service\/forms\/templates\/[^/]+\/fields\/[^/]+\/disable$/.test(url)) {
+    const parts = url.split('/')
+    const fieldId = parts[6]
+    const field = await trpcMutation<any>('serviceForms.disableField', { fieldId })
+    return { data: { data: field } }
+  }
+
   if (/^\/service\/forms\/templates\/[^/]+\/disable$/.test(url)) {
     const templateId = url.split('/')[4]
     const disabled = await trpcMutation<any>('serviceForms.disableTemplate', { id: templateId })
@@ -2363,6 +2470,27 @@ async function phase1Post(url: string, body?: any): Promise<unknown | null> {
 }
 
 async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
+  if (/^\/settings\/billing\/profiles\/[^/]+$/.test(url)) {
+    const id = url.split('/')[4]
+    const profile = await trpcMutation<any>('orgBillingProfile.update', { id, ...body })
+    return { data: { data: profile } }
+  }
+
+  if (/^\/grns\/[^/]+\/reverse$/.test(url)) {
+    const id = url.split('/')[2]
+    const receipt = await trpcMutation<any>('inventory.reverseProductionGoodsReceipt', { id, reason: body?.reason })
+    return { data: { data: receipt } }
+  }
+
+  if (/^\/grns\/[^/]+\/replace$/.test(url)) {
+    const originalGoodsReceiptId = url.split('/')[2]
+    const receipt = await trpcMutation<any>('inventory.replaceProductionGoodsReceipt', {
+      ...body,
+      originalGoodsReceiptId,
+    })
+    return { data: { data: receipt } }
+  }
+
   if (/^\/roles\/[^/]+$/.test(url)) {
     const id = url.split('/')[2]
     const payload: Record<string, unknown> = { id }
@@ -2416,6 +2544,15 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     return { data: result }
   }
 
+  if (/^\/accounts\/payments\/[^/]+\/void$/.test(url)) {
+    const id = url.split('/')[3]
+    const payment = await trpcMutation<any>('payments.void', {
+      id,
+      reason: String(body?.reason ?? '').trim(),
+    })
+    return { data: { data: payment } }
+  }
+
   if (/^\/catalog\/brands\/[^/]+$/.test(url)) {
     const id = url.split('/')[3]
     const brand = await trpcMutation('brands.update', {
@@ -2462,6 +2599,10 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
         : undefined,
       warrantyMonths: body.warrantyMonths,
       basePrice: body.basePrice !== undefined ? String(body.basePrice) : undefined,
+      hsnCode: body.hsnCode,
+      uqc: body.uqc,
+      gstRate: body.gstRate !== undefined ? String(body.gstRate) : undefined,
+      transferValue: body.transferValue !== undefined ? String(body.transferValue) : undefined,
       sortOrder: body.sortOrder,
       isActive: body.isActive,
     })
@@ -2479,6 +2620,7 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     if (body.location !== undefined) payload.location = body.location
     if (body.address !== undefined) payload.address = body.address
     if (Object.prototype.hasOwnProperty.call(body ?? {}, 'managerId')) payload.managerId = body.managerId
+    if (Object.prototype.hasOwnProperty.call(body ?? {}, 'billingProfileId')) payload.billingProfileId = body.billingProfileId
     if (body.isActive !== undefined) payload.isActive = body.isActive
     const warehouse = await trpcMutation('warehouses.update', payload)
     return { data: warehouse }
@@ -2488,14 +2630,7 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     const id = url.split('/')[2]
     const outlet = await trpcMutation('outlets.updateBilling', {
       id,
-      legalName: body.legalName ?? undefined,
-      gstin: body.gstin ?? undefined,
-      billingAddress1: body.billingAddress1 ?? undefined,
-      billingAddress2: body.billingAddress2 ?? undefined,
-      billingCity: body.billingCity ?? undefined,
-      billingState: body.billingState ?? undefined,
-      billingPincode: body.billingPincode ?? undefined,
-      billingCountry: body.billingCountry ?? undefined,
+      billingProfileId: body.billingProfileId ?? null,
     })
     return { data: outlet }
   }
@@ -2505,20 +2640,13 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     const outlet = await trpcMutation('outlets.update', {
       id,
       warehouseId: body.warehouseId ?? undefined,
+      billingProfileId: body.billingProfileId ?? undefined,
       name: body.name,
       ownerName: body.ownerName,
       phone: body.phone,
       address: body.address,
       creditLimit: body.creditLimit !== undefined ? String(body.creditLimit) : undefined,
       isActive: body.isActive,
-      legalName: body.legalName ?? undefined,
-      gstin: body.gstin ?? undefined,
-      billingAddress1: body.billingAddress1 ?? undefined,
-      billingAddress2: body.billingAddress2 ?? undefined,
-      billingCity: body.billingCity ?? undefined,
-      billingState: body.billingState ?? undefined,
-      billingPincode: body.billingPincode ?? undefined,
-      billingCountry: body.billingCountry ?? undefined,
     })
     return { data: outlet }
   }
@@ -2550,6 +2678,29 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
     return { data: { data: updated } }
   }
 
+  if (/^\/service\/forms\/templates\/[^/]+\/fields\/[^/]+$/.test(url)) {
+    const parts = url.split('/')
+    const fieldId = parts[6]
+    const field = await trpcMutation<any>('serviceForms.updateField', {
+      fieldId,
+      label: body?.label ?? undefined,
+      isRequired: typeof body?.isRequired === 'boolean' ? body.isRequired : undefined,
+      displayOrder: typeof body?.displayOrder === 'number' ? body.displayOrder : undefined,
+      validationRules: body?.validationRules ?? undefined,
+    })
+    return { data: { data: field } }
+  }
+
+  if (/^\/service\/forms\/templates\/[^/]+$/.test(url)) {
+    const id = url.split('/')[4]
+    const updated = await trpcMutation<any>('serviceForms.updateTemplate', {
+      id,
+      name: body?.name ?? undefined,
+      description: body?.description ?? undefined,
+    })
+    return { data: { data: updated } }
+  }
+
   if (/^\/settings\/billing\/charges\/[^/]+$/.test(url)) {
     const id = url.split('/')[4]
     const charge = await trpcMutation<any>('taxCharges.update', {
@@ -2564,12 +2715,7 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
   }
 
   if (/^\/tickets\/[^/]+\/priority$/.test(url)) {
-    const id = url.split('/')[2]
-    const updated = await trpcMutation<any>('serviceComplaints.update', {
-      id,
-      resolutionNote: body?.priority ? `Priority updated to ${body.priority}` : null,
-    })
-    return { data: { data: updated } }
+    throw makeApiError('Complaint priority is not supported by the backend.', 400)
   }
 
   if (/^\/notifications\/[^/]+\/read$/.test(url)) {
@@ -2581,10 +2727,14 @@ async function phase1Patch(url: string, body?: any): Promise<unknown | null> {
 
 async function phase1Delete(url: string): Promise<unknown | null> {
   if (/^\/users\/[^/]+$/.test(url)) {
-    throw makeApiError('User delete is not available in Phase 1 backend.', 400)
+    const id = url.split('/')[2]
+    await trpcMutation<any>('users.remove', { id })
+    return { data: { ok: true } }
   }
   if (/^\/roles\/[^/]+$/.test(url)) {
-    throw makeApiError('Role delete is not available in Phase 1 backend.', 400)
+    const id = url.split('/')[2]
+    await trpcMutation<any>('roles.delete', { id })
+    return { data: { ok: true } }
   }
   if (/^\/settings\/billing\/charges\/[^/]+$/.test(url)) {
     const id = url.split('/')[4]
@@ -2634,12 +2784,8 @@ async function resolveDelete<T = unknown>(url: string, config?: RequestConfig): 
 fallbackApi.interceptors.request.use((config) => {
   const headers = (config.headers ?? {}) as any
   const accessToken = getAccessToken()
-  const orgId = getOrgId()
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`
-  }
-  if (orgId) {
-    headers['x-org-id'] = orgId
   }
   config.headers = headers
   return config
@@ -2695,8 +2841,8 @@ export function openFieldSenseStream(
   }) => void,
   signal: AbortSignal,
   onConnect?: () => void,
+  onDisconnect?: () => void,
 ): void {
-  const orgId = getOrgId()
   const url = `${sseBaseURL}/field/live-stream`
 
   let reconnectDelay = 1000
@@ -2705,6 +2851,7 @@ export function openFieldSenseStream(
 
   function connect() {
     if (signal.aborted) return
+    reconnectTimer = null
     const accessToken = getAccessToken()
 
     fetch(url, {
@@ -2712,19 +2859,20 @@ export function openFieldSenseStream(
       headers: {
         Accept: 'text/event-stream',
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        ...(orgId ? { 'x-org-id': orgId } : {}),
       },
     })
       .then(async (res) => {
         if (signal.aborted) return
         if (!res.ok || !res.body) {
+          onDisconnect?.()
           if (res.status === 401) {
             const refreshed = await refreshAccessToken()
             if (refreshed) {
               reconnectDelay = 1000
               scheduleReconnect()
-              return
             }
+            // If refresh failed, clearAuthSession was called — stop reconnecting.
+            return
           }
           scheduleReconnect()
           return
@@ -2758,16 +2906,19 @@ export function openFieldSenseStream(
           // reader aborted or network error mid-stream
         }
         // Stream ended — reconnect unless aborted
+        onDisconnect?.()
         scheduleReconnect()
       })
       .catch(() => {
         // fetch itself failed (network error or abort)
+        onDisconnect?.()
         scheduleReconnect()
       })
   }
 
   function scheduleReconnect() {
     if (signal.aborted) return
+    if (reconnectTimer !== null) return
     reconnectTimer = setTimeout(() => {
       reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY)
       connect()

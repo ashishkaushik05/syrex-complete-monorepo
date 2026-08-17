@@ -12,6 +12,8 @@ export const SERVICE_P = {
   cancel: "service:cancel",
   telephonic: "service:telephonic",
   form: "service:form",
+  analytics: "service:analytics",
+  "happy-calling": "service:happy-calling",
 } as const;
 
 export const serviceManifest = definePermissionModule({
@@ -30,5 +32,7 @@ export const serviceManifest = definePermissionModule({
     cancel: { label: "Cancel Service", description: "Cancel complaints and close unresolved service flows.", risk: "high" },
     telephonic: { label: "Telephonic Closure", description: "Close complaints through telephonic resolution path with reason capture.", risk: "high" },
     form: { label: "Submit Service Forms", description: "Fill and submit form submissions as part of service test workflow.", risk: "medium" },
+    analytics: { label: "Service Analytics", description: "View service dashboards, resolution metrics, and warranty funnel reports.", risk: "low" },
+    "happy-calling": { label: "Happy Calling", description: "Run post-resolution customer follow-up calls and log physical returns.", risk: "medium" },
   },
 });

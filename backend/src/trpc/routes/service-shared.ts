@@ -1,4 +1,5 @@
 import { Prisma, ServiceComplaintStatus } from "@prisma/client";
+import { z } from "zod";
 import type { TrpcContext } from "../context";
 import { apiError } from "../error";
 
@@ -14,7 +15,6 @@ export const SERVICE_STATUS_VALUES = [
 ] as const;
 
 export const SERVICE_TRANSITION_ACTIONS = [
-  "assign",
   "visit_logged",
   "test_submitted",
   "retest_requested",
@@ -42,6 +42,27 @@ export function normalizeSerial(serial: string) {
   return serial.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+export const serviceComplaintCreateFieldsSchema = z.object({
+  issueCategory: z.string().trim().min(1).max(200),
+  title: z.string().trim().max(200).optional(),
+  description: z.string().trim().max(4000).optional(),
+  customerName: z.string().trim().min(1).max(200),
+  customerPhone: z.string().trim().min(5).max(40),
+  complainantType: z.enum(["self", "on_behalf_of"]).default("self"),
+  thirdPartyName: z.string().trim().min(1).max(200).optional(),
+  thirdPartyPhone: z.string().trim().min(5).max(40).optional(),
+  customerState: z.string().trim().max(100).optional(),
+  customerCity: z.string().trim().max(100).optional(),
+  customerPincode: z.string().trim().max(20).optional(),
+  customerAddress: z.string().trim().max(500).optional(),
+  alternatePhone: z.string().trim().min(5).max(40).optional(),
+  sku: z.string().trim().min(1).max(100),
+  serialNumber: z.string().trim().min(2).max(200),
+  notes: z.string().trim().max(1000).optional(),
+});
+
+export type ServiceComplaintCreateFields = z.infer<typeof serviceComplaintCreateFieldsSchema>;
+
 export function parseSerialNumbers(value: Prisma.JsonValue): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((row): row is string => typeof row === "string");
@@ -56,12 +77,6 @@ export function resolveTransition(
   }
 
   switch (action) {
-    case "assign": {
-      if (currentStatus !== "raised") {
-        throw apiError("CONFLICT", "Assignment can only move complaint from raised to assigned");
-      }
-      return { nextStatus: "assigned", statusChanged: true };
-    }
     case "visit_logged": {
       if (currentStatus !== "assigned" && currentStatus !== "retest_requested") {
         throw apiError("CONFLICT", "Visit can be logged only from assigned or retest_requested state");
@@ -87,8 +102,8 @@ export function resolveTransition(
       return { nextStatus: "telephonic_closure", statusChanged: true };
     }
     case "tested_ok_close": {
-      if (currentStatus !== "test_result_submitted" && currentStatus !== "visit") {
-        throw apiError("CONFLICT", "Tested OK closure requires visit/test progression first");
+      if (currentStatus !== "test_result_submitted") {
+        throw apiError("CONFLICT", "Tested OK closure requires a submitted test result");
       }
       return { nextStatus: "resolved", statusChanged: true };
     }
@@ -112,15 +127,11 @@ export function resolveTransition(
   }
 }
 
-export async function nextComplaintNumber(tx: Prisma.TransactionClient, now: Date, orgId: string) {
+export async function nextComplaintNumber(tx: Prisma.TransactionClient, now: Date) {
   const year = now.getUTCFullYear();
-  await tx.$executeRaw`
-    INSERT INTO service_complaint_sequences ("orgId", year, "lastSequence")
-    VALUES (${orgId}, ${year}, 1)
-    ON CONFLICT ("orgId", year) DO UPDATE SET "lastSequence" = service_complaint_sequences."lastSequence" + 1
-  `;
-  const row = await tx.serviceComplaintSequence.findUnique({ where: { orgId_year: { orgId, year } } });
-  return `CMP-${year}-${String(row!.lastSequence).padStart(6, "0")}`;
+  const result = await tx.$queryRaw<[{ nextval: bigint }]>`SELECT nextval('service_complaint_number_seq')`;
+  const seq = Number(result[0].nextval);
+  return `CMP-${year}-${String(seq).padStart(6, "0")}`;
 }
 
 export function assertOrgAccess(actorOrgId: string | null, resourceOrgId: string | null, resourceName = "resource"): void {
@@ -171,8 +182,13 @@ export async function recordComplaintActivity(
   }
 }
 
-export async function findSerialLegacyDispatchRows(ctx: TrpcContext, normalizedSerial: string) {
-  const refs = await ctx.prisma.dispatchLineSerial.findMany({
+type SerialDb = Pick<
+  Prisma.TransactionClient,
+  "dispatchLineSerial" | "dispatchLine" | "serviceSerialIndex" | "serviceSerialEvent"
+>;
+
+async function findSerialLegacyDispatchRowsWithDb(db: SerialDb, normalizedSerial: string) {
+  const refs = await db.dispatchLineSerial.findMany({
     where: { normalizedSerial },
     select: { dispatchLineId: true },
   });
@@ -181,7 +197,7 @@ export async function findSerialLegacyDispatchRows(ctx: TrpcContext, normalizedS
 
   const ids = refs.map((r) => r.dispatchLineId);
 
-  return ctx.prisma.dispatchLine.findMany({
+  return db.dispatchLine.findMany({
     where: { id: { in: ids } },
     include: {
       dispatch: {
@@ -244,30 +260,36 @@ export async function findSerialLegacyDispatchRows(ctx: TrpcContext, normalizedS
   });
 }
 
-export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
+export async function findSerialLegacyDispatchRows(ctx: TrpcContext, normalizedSerial: string) {
+  return findSerialLegacyDispatchRowsWithDb(ctx.prisma, normalizedSerial);
+}
+
+async function ensureSerialIndexWithDb(
+  db: SerialDb,
+  input: { serial: string; orgId: string | null },
+) {
+  const serial = input.serial;
   const normalizedSerial = normalizeSerial(serial);
   if (!normalizedSerial) {
     throw apiError("BAD_REQUEST", "Serial must contain alphanumeric characters");
   }
 
-  const existing = await ctx.prisma.serviceSerialIndex.findUnique({
+  const existing = await db.serviceSerialIndex.findUnique({
     where: { normalizedSerial },
   });
   if (existing?.hydratedLegacy) {
     return existing;
   }
 
-  const legacyRows = await findSerialLegacyDispatchRows(ctx, normalizedSerial);
+  const legacyRows = await findSerialLegacyDispatchRowsWithDb(db, normalizedSerial);
   const first = legacyRows[0];
   const now = new Date();
 
-  const orgId = ctx.actor.orgId ?? null;
-
-  const upserted = await ctx.prisma.serviceSerialIndex.upsert({
+  const upserted = await db.serviceSerialIndex.upsert({
     where: { normalizedSerial },
     create: {
       normalizedSerial,
-      orgId,
+      orgId: input.orgId,
       serialNumber: serial,
       productId: first?.productId,
       soldOutletId: first?.orderLine.order.outletId,
@@ -285,14 +307,14 @@ export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
   });
 
   if (legacyRows.length > 0) {
-    const existingEventCount = await ctx.prisma.serviceSerialEvent.count({
+    const existingEventCount = await db.serviceSerialEvent.count({
       where: { normalizedSerial },
     });
     if (existingEventCount === 0) {
-      await ctx.prisma.serviceSerialEvent.createMany({
+      await db.serviceSerialEvent.createMany({
         data: legacyRows.slice(0, 10).map((row) => ({
           normalizedSerial,
-          orgId,
+          orgId: input.orgId,
           eventType: "legacy_dispatch_hydrated",
           entityType: "dispatch_line",
           entityId: row.id,
@@ -309,6 +331,153 @@ export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
   }
 
   return upserted;
+}
+
+export async function ensureSerialIndex(ctx: TrpcContext, serial: string) {
+  return ensureSerialIndexWithDb(ctx.prisma, {
+    serial,
+    orgId: ctx.actor.orgId ?? null,
+  });
+}
+
+export async function createServiceComplaint(
+  prisma: TrpcContext["prisma"],
+  input: ServiceComplaintCreateFields & {
+    orgId: string;
+    activityActorId?: string | null;
+    raisedByUserId?: string | null;
+    serviceUserId?: string | null;
+    newServiceUser?: { name: string; phone: string; email: string } | null;
+  },
+) {
+  if (
+    input.complainantType === "on_behalf_of" &&
+    (!input.thirdPartyName?.trim() || !input.thirdPartyPhone?.trim())
+  ) {
+    throw apiError(
+      "BAD_REQUEST",
+      "Third-party name and phone are required when complainant type is on_behalf_of",
+    );
+  }
+  if (input.serviceUserId && input.newServiceUser) {
+    throw apiError("BAD_REQUEST", "Choose an existing service user or create a new one, not both");
+  }
+
+  const normalizedSerial = normalizeSerial(input.serialNumber);
+  if (!normalizedSerial) {
+    throw apiError("BAD_REQUEST", "Serial must contain alphanumeric characters");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${normalizedSerial}))`;
+
+    const product = await tx.product.findFirst({
+      where: {
+        sku: input.sku,
+        isActive: true,
+        category: {
+          isActive: true,
+          brand: { isActive: true },
+        },
+      },
+      select: { id: true, sku: true },
+    });
+    if (!product) {
+      throw apiError("BAD_REQUEST", `No product found for SKU ${input.sku}`);
+    }
+
+    const existing = await tx.serviceComplaint.findFirst({
+      where: {
+        orgId: input.orgId,
+        lines: { some: { normalizedSerial } },
+        status: { notIn: [...FINAL_STATUSES] },
+      },
+      select: { complaintNumber: true },
+    });
+    if (existing) {
+      throw apiError(
+        "CONFLICT",
+        `Serial ${input.serialNumber} already has an open complaint: ${existing.complaintNumber}`,
+      );
+    }
+
+    let raisedByServiceUserId = input.serviceUserId ?? null;
+    if (raisedByServiceUserId) {
+      const serviceUser = await tx.serviceUser.findUnique({
+        where: { id: raisedByServiceUserId },
+        select: { id: true, isActive: true },
+      });
+      if (!serviceUser?.isActive) {
+        throw apiError("BAD_REQUEST", "Service user not found or inactive");
+      }
+    } else if (input.newServiceUser) {
+      const serviceUser = await tx.serviceUser.create({
+        data: {
+          name: input.newServiceUser.name.trim(),
+          phone: input.newServiceUser.phone.trim(),
+          email: input.newServiceUser.email.trim().toLowerCase(),
+          passwordHash: await Bun.password.hash(crypto.randomUUID()),
+        },
+        select: { id: true },
+      });
+      raisedByServiceUserId = serviceUser.id;
+    }
+
+    const raisedByUserId = raisedByServiceUserId ? null : (input.raisedByUserId ?? null);
+    if (!raisedByUserId && !raisedByServiceUserId) {
+      throw apiError("BAD_REQUEST", "Complaint raiser is required");
+    }
+
+    const now = new Date();
+    const complaintNumber = await nextComplaintNumber(tx, now);
+    const complaint = await tx.serviceComplaint.create({
+      data: {
+        complaintNumber,
+        orgId: input.orgId,
+        status: "raised",
+        issueCategory: input.issueCategory,
+        title: input.title || null,
+        description: input.description || null,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        complainantType: input.complainantType,
+        thirdPartyName: input.thirdPartyName ?? null,
+        thirdPartyPhone: input.thirdPartyPhone ?? null,
+        customerState: input.customerState ?? null,
+        customerCity: input.customerCity ?? null,
+        customerPincode: input.customerPincode ?? null,
+        customerAddress: input.customerAddress ?? null,
+        alternatePhone: input.alternatePhone ?? null,
+        raisedByUserId,
+        raisedByServiceUserId,
+        lines: {
+          create: {
+            sku: product.sku,
+            serialNumber: input.serialNumber.trim(),
+            normalizedSerial,
+            productId: product.id,
+            notes: input.notes ?? null,
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    await recordComplaintActivity(tx, {
+      complaintId: complaint.id,
+      actorId: input.activityActorId ?? null,
+      action: "raised",
+      fromStatus: null,
+      toStatus: "raised",
+      note: input.description ?? null,
+    });
+    await ensureSerialIndexWithDb(tx, {
+      serial: input.serialNumber.trim(),
+      orgId: input.orgId,
+    });
+
+    return complaint.id;
+  });
 }
 
 export async function assertServiceReadable(ctx: TrpcContext, complaintId: string) {

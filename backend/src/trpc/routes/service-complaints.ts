@@ -1,17 +1,23 @@
 import { z } from "zod";
-import { createTRPCRouter, perm, permAny } from "../trpc";
+import { Prisma } from "@prisma/client";
+import { createTRPCRouter, internalPerm, internalPermAny } from "../trpc";
 import { P } from "../../rbac/catalog";
 import { apiError } from "../error";
 import { decodeCursor, encodeCursor, paginationInputSchema } from "./_shared";
 import {
+  FINAL_STATUSES,
   SERVICE_STATUS_VALUES,
   SERVICE_TRANSITION_ACTIONS,
-  ensureSerialIndex,
-  nextComplaintNumber,
-  normalizeSerial,
+  createServiceComplaint,
   recordComplaintActivity,
   resolveTransition,
+  serviceComplaintCreateFieldsSchema,
 } from "./service-shared";
+import {
+  assertServiceComplaintAccess,
+  resolveServiceActorRole,
+  serviceComplaintAccessWhere,
+} from "./service-access";
 
 // Batch 04: enforce org context on every service procedure. Null actor orgId is
 // treated as a configuration error and refused — never silently widened to all orgs.
@@ -24,18 +30,20 @@ function requireOrgId(actorOrgId: string | null): string {
 
 const complaintStatusSchema = z.enum(SERVICE_STATUS_VALUES);
 const transitionActionSchema = z.enum(SERVICE_TRANSITION_ACTIONS);
-
-const complaintLineInputSchema = z.object({
-  productId: z.string().uuid(),
-  serialNumber: z.string().trim().min(2).optional(),
-  notes: z.string().max(1000).optional(),
-});
+const resolutionReasonSchema = z.enum([
+  "tested_ok",
+  "warranty_approved",
+  "warranty_rejected",
+  "telephonic_closure",
+  "cancelled",
+]);
+const happyCallingStatusSchema = z.enum(["pending", "completed", "skipped"]);
 
 const complaintLineSchema = z.object({
   id: z.string(),
-  batterySku: z.string().nullable(),
-  serialNumber: z.string().nullable(),
-  normalizedSerial: z.string().nullable(),
+  sku: z.string(),
+  serialNumber: z.string(),
+  normalizedSerial: z.string(),
   replacementSerialNumber: z.string().nullable(),
   normalizedReplacementSerial: z.string().nullable(),
   productId: z.string().nullable(),
@@ -48,12 +56,20 @@ const complaintListItemSchema = z.object({
   id: z.string(),
   complaintNumber: z.string(),
   status: complaintStatusSchema,
+  issueCategory: z.string(),
   title: z.string().nullable(),
   customerName: z.string().nullable(),
   customerPhone: z.string().nullable(),
-  outletId: z.string().nullable(),
-  outletName: z.string().nullable(),
-  raisedById: z.string(),
+  customerState: z.string().nullable(),
+  customerCity: z.string().nullable(),
+  alternatePhone: z.string().nullable(),
+  resolutionReason: resolutionReasonSchema.nullable(),
+  happyCallingStatus: happyCallingStatusSchema.nullable(),
+  raisedByUserId: z.string().nullable(),
+  raisedByServiceUserId: z.string().nullable(),
+  rsmUserId: z.string().nullable(),
+  assignedAsiName: z.string().nullable(),
+  assignedSeName: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   serials: z.array(z.string()),
@@ -61,10 +77,21 @@ const complaintListItemSchema = z.object({
 
 const complaintDetailSchema = complaintListItemSchema.extend({
   description: z.string().nullable(),
+  complainantType: z.enum(["self", "on_behalf_of"]),
+  thirdPartyName: z.string().nullable(),
+  thirdPartyPhone: z.string().nullable(),
+  customerPincode: z.string().nullable(),
+  customerAddress: z.string().nullable(),
+  rsmUserName: z.string().nullable(),
+  happyCallingNote: z.string().nullable(),
+  physicalReturnAt: z.string().nullable(),
+  physicalReturnNote: z.string().nullable(),
+  causeOfFailure: z.string().nullable(),
   telephonicReason: z.string().nullable(),
   resolutionNote: z.string().nullable(),
   closedAt: z.string().nullable(),
   cancelledAt: z.string().nullable(),
+  reopenedAt: z.string().nullable(),
   lines: z.array(complaintLineSchema),
   assignments: z.array(
     z.object({
@@ -73,6 +100,8 @@ const complaintDetailSchema = complaintListItemSchema.extend({
       note: z.string().nullable(),
       asiUserId: z.string().nullable(),
       seUserId: z.string().nullable(),
+      asiUserName: z.string().nullable(),
+      seUserName: z.string().nullable(),
       assignedById: z.string(),
       createdAt: z.string(),
     }),
@@ -82,8 +111,10 @@ const complaintDetailSchema = complaintListItemSchema.extend({
       id: z.string(),
       complaintLineId: z.string().nullable(),
       submittedById: z.string(),
+      submittedByName: z.string().nullable(),
       verdict: z.string(),
       summary: z.string().nullable(),
+      causeOfFailure: z.string().nullable(),
       structuredData: z.unknown().nullable(),
       createdAt: z.string(),
     }),
@@ -92,6 +123,7 @@ const complaintDetailSchema = complaintListItemSchema.extend({
     z.object({
       id: z.string(),
       actorId: z.string().nullable(),
+      actorName: z.string().nullable(),
       action: z.string(),
       fromStatus: complaintStatusSchema.nullable(),
       toStatus: complaintStatusSchema.nullable(),
@@ -105,10 +137,15 @@ const complaintDetailSchema = complaintListItemSchema.extend({
       id: z.string(),
       status: z.enum(["pending", "approved", "rejected"]),
       decidedById: z.string().nullable(),
+      fulfillmentRoute: z.enum(["warehouse", "outlet"]).nullable(),
       sourceWarehouseId: z.string().nullable(),
+      sourceOutletId: z.string().nullable(),
+      claimingOutletId: z.string().nullable(),
+      proRataPercent: z.number().int().nullable(),
       approvedReplacementSerial: z.string().nullable(),
       rejectionReason: z.string().nullable(),
       replacementOrderId: z.string().nullable(),
+      replacementInvoiceId: z.string().nullable(),
       decidedAt: z.string().nullable(),
       updatedAt: z.string(),
     })
@@ -119,37 +156,133 @@ function toComplaintListItem(row: {
   id: string;
   complaintNumber: string;
   status: (typeof SERVICE_STATUS_VALUES)[number];
+  issueCategory: string;
   title: string | null;
   customerName: string | null;
   customerPhone: string | null;
-  outletId: string | null;
-  raisedById: string;
+  customerState?: string | null;
+  customerCity?: string | null;
+  alternatePhone?: string | null;
+  resolutionReason?: z.infer<typeof resolutionReasonSchema> | null;
+  happyCallingStatus?: z.infer<typeof happyCallingStatusSchema> | null;
+  raisedByUserId: string | null;
+  raisedByServiceUserId: string | null;
+  rsmUserId?: string | null;
   createdAt: Date;
   updatedAt: Date;
-  outlet: { name: string } | null;
-  lines: Array<{ serialNumber: string | null }>;
+  lines: Array<{ serialNumber: string }>;
+  assignments?: Array<{
+    asiUser: { name: string } | null;
+    seUser: { name: string } | null;
+  }>;
 }) {
   return {
     id: row.id,
     complaintNumber: row.complaintNumber,
     status: row.status,
+    issueCategory: row.issueCategory,
     title: row.title,
     customerName: row.customerName,
     customerPhone: row.customerPhone,
-    outletId: row.outletId,
-    outletName: row.outlet?.name ?? null,
-    raisedById: row.raisedById,
+    customerState: row.customerState ?? null,
+    customerCity: row.customerCity ?? null,
+    alternatePhone: row.alternatePhone ?? null,
+    resolutionReason: row.resolutionReason ?? null,
+    happyCallingStatus: row.happyCallingStatus ?? null,
+    raisedByUserId: row.raisedByUserId,
+    raisedByServiceUserId: row.raisedByServiceUserId,
+    rsmUserId: row.rsmUserId ?? null,
+    assignedAsiName: row.assignments?.[0]?.asiUser?.name ?? null,
+    assignedSeName: row.assignments?.[0]?.seUser?.name ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-    serials: row.lines.flatMap((line) => (line.serialNumber ? [line.serialNumber] : [])),
+    serials: row.lines.map((line) => line.serialNumber),
+  };
+}
+
+
+function buildDetailResponse(row: DetailRow) {
+  return {
+    ...toComplaintListItem({
+      ...row,
+      assignments: row.assignments.slice(0, 1),
+    }),
+    description: row.description,
+    complainantType: row.complainantType,
+    thirdPartyName: row.thirdPartyName,
+    thirdPartyPhone: row.thirdPartyPhone,
+    customerPincode: row.customerPincode ?? null,
+    customerAddress: row.customerAddress ?? null,
+    rsmUserName: row.rsmUser?.name ?? null,
+    happyCallingNote: row.happyCallingNote ?? null,
+    physicalReturnAt: row.physicalReturnAt?.toISOString() ?? null,
+    physicalReturnNote: row.physicalReturnNote ?? null,
+    causeOfFailure: row.testReports[0]?.causeOfFailure ?? null,
+    telephonicReason: row.telephonicReason,
+    resolutionNote: row.resolutionNote,
+    closedAt: row.closedAt?.toISOString() ?? null,
+    cancelledAt: row.cancelledAt?.toISOString() ?? null,
+    reopenedAt: row.reopenedAt?.toISOString() ?? null,
+    lines: row.lines.map(toComplaintLine),
+    assignments: row.assignments.map((a) => ({
+      id: a.id,
+      action: a.action,
+      note: a.note,
+      asiUserId: a.asiUserId,
+      seUserId: a.seUserId,
+      asiUserName: a.asiUser?.name ?? null,
+      seUserName: a.seUser?.name ?? null,
+      assignedById: a.assignedById,
+      createdAt: a.createdAt.toISOString(),
+    })),
+    tests: row.testReports.map((t) => ({
+      id: t.id,
+      complaintLineId: t.complaintLineId,
+      submittedById: t.submittedById,
+      submittedByName: t.submittedBy?.name ?? null,
+      verdict: t.verdict,
+      summary: t.summary,
+      causeOfFailure: t.causeOfFailure,
+      structuredData: t.structuredData ?? null,
+      createdAt: t.createdAt.toISOString(),
+    })),
+    activities: row.activities.map((a) => ({
+      id: a.id,
+      actorId: a.actorId,
+      actorName: a.actor?.name ?? null,
+      action: a.action,
+      fromStatus: a.fromStatus,
+      toStatus: a.toStatus,
+      note: a.note,
+      meta: a.meta ?? null,
+      createdAt: a.createdAt.toISOString(),
+    })),
+    warrantyDecision: row.warrantyDecision
+      ? {
+          id: row.warrantyDecision.id,
+          status: row.warrantyDecision.status,
+          decidedById: row.warrantyDecision.decidedById,
+          fulfillmentRoute: row.warrantyDecision.fulfillmentRoute,
+          sourceWarehouseId: row.warrantyDecision.sourceWarehouseId,
+          sourceOutletId: row.warrantyDecision.sourceOutletId,
+          claimingOutletId: row.warrantyDecision.claimingOutletId,
+          proRataPercent: row.warrantyDecision.proRataPercent,
+          approvedReplacementSerial: row.warrantyDecision.approvedReplacementSerial,
+          rejectionReason: row.warrantyDecision.rejectionReason,
+          replacementOrderId: row.warrantyDecision.replacementOrderId,
+          replacementInvoiceId: row.warrantyDecision.replacementInvoiceId,
+          decidedAt: row.warrantyDecision.decidedAt?.toISOString() ?? null,
+          updatedAt: row.warrantyDecision.updatedAt.toISOString(),
+        }
+      : null,
   };
 }
 
 function toComplaintLine(line: {
   id: string;
-  batterySku: string | null;
-  serialNumber: string | null;
-  normalizedSerial: string | null;
+  sku: string;
+  serialNumber: string;
+  normalizedSerial: string;
   replacementSerialNumber: string | null;
   normalizedReplacementSerial: string | null;
   productId: string | null;
@@ -159,7 +292,7 @@ function toComplaintLine(line: {
 }) {
   return {
     id: line.id,
-    batterySku: line.batterySku,
+    sku: line.sku,
     serialNumber: line.serialNumber,
     normalizedSerial: line.normalizedSerial,
     replacementSerialNumber: line.replacementSerialNumber,
@@ -171,12 +304,40 @@ function toComplaintLine(line: {
   };
 }
 
+const DETAIL_INCLUDE = {
+  lines: true,
+  rsmUser: { select: { name: true } },
+  assignments: {
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: {
+      asiUser: { select: { name: true } },
+      seUser: { select: { name: true } },
+    },
+  },
+  testReports: {
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: { submittedBy: { select: { name: true } } },
+  },
+  activities: {
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    include: { actor: { select: { name: true } } },
+  },
+  warrantyDecision: true,
+} satisfies Prisma.ServiceComplaintInclude;
+
+type DetailRow = Prisma.ServiceComplaintGetPayload<{ include: typeof DETAIL_INCLUDE }>;
+
 export const serviceComplaintsRouter = createTRPCRouter({
-  list: perm(P.service.read)
+  list: internalPerm(P.service.read)
     .input(
       paginationInputSchema.extend({
         status: complaintStatusSchema.optional(),
         q: z.string().min(1).optional(),
+        customerState: z.string().trim().min(1).optional(),
+        outletId: z.string().uuid().optional(),
+        asiUserId: z.string().uuid().optional(),
+        rsmUserId: z.string().uuid().optional(),
+        happyCallingStatus: happyCallingStatusSchema.optional(),
       }),
     )
     .output(
@@ -198,50 +359,72 @@ export const serviceComplaintsRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       const orgId = requireOrgId(ctx.actor.orgId);
-      const offset = decodeCursor(input.cursor) ?? 0;
+      const cursor = decodeCursor(input.cursor);
+      const scopeFilter = await serviceComplaintAccessWhere(ctx, orgId);
+
+      // Resolve outlet → serials sold by that outlet so we can filter complaint lines.
+      let outletSerials: string[] | null = null;
+      if (input.outletId) {
+        const sold = await ctx.prisma.serviceSerialIndex.findMany({
+          where: { orgId, soldOutletId: input.outletId },
+          select: { normalizedSerial: true },
+        });
+        outletSerials = sold.map((s) => s.normalizedSerial);
+        // No serials → no matches; short-circuit with an impossible filter.
+        if (outletSerials.length === 0) outletSerials = ["__no_match__"];
+      }
 
       const baseFilter = {
-        orgId,
-        OR: input.q
-          ? [
-              { complaintNumber: { contains: input.q, mode: "insensitive" as const } },
-	              { title: { contains: input.q, mode: "insensitive" as const } },
-	              { description: { contains: input.q, mode: "insensitive" as const } },
-	              { customerName: { contains: input.q, mode: "insensitive" as const } },
-	              { customerPhone: { contains: input.q, mode: "insensitive" as const } },
-	              {
-	                lines: {
-	                  some: {
-	                    OR: [
-	                      { batterySku: { contains: input.q, mode: "insensitive" as const } },
-	                      { serialNumber: { contains: input.q, mode: "insensitive" as const } },
-	                      { replacementSerialNumber: { contains: input.q, mode: "insensitive" as const } },
-	                    ],
-                  },
-                },
-              },
-            ]
-          : undefined,
+        ...scopeFilter,
+        ...(input.customerState ? { customerState: input.customerState } : {}),
+        ...(input.rsmUserId ? { rsmUserId: input.rsmUserId } : {}),
+        ...(input.happyCallingStatus ? { happyCallingStatus: input.happyCallingStatus } : {}),
+        ...(input.asiUserId
+          ? { assignments: { some: { asiUserId: input.asiUserId } } }
+          : {}),
+        ...(outletSerials
+          ? { lines: { some: { normalizedSerial: { in: outletSerials } } } }
+          : {}),
+        AND: [
+          ...(input.q ? [{ OR: [
+            { complaintNumber: { contains: input.q, mode: "insensitive" as const } },
+            { title: { contains: input.q, mode: "insensitive" as const } },
+            { description: { contains: input.q, mode: "insensitive" as const } },
+            { customerName: { contains: input.q, mode: "insensitive" as const } },
+            { customerPhone: { contains: input.q, mode: "insensitive" as const } },
+            { lines: { some: { OR: [
+              { sku: { contains: input.q, mode: "insensitive" as const } },
+              { serialNumber: { contains: input.q, mode: "insensitive" as const } },
+              { replacementSerialNumber: { contains: input.q, mode: "insensitive" as const } },
+            ] } } },
+          ] }] : []),
+        ],
       };
 
-      const where = {
+      const pageWhere = {
         ...baseFilter,
+        AND: [
+          ...baseFilter.AND,
+          ...(cursor ? [{ OR: [{ createdAt: { lt: new Date(cursor.ts) } }, { createdAt: new Date(cursor.ts), id: { lt: cursor.id } }] }] : []),
+        ],
         status: input.status,
       };
 
       const [rows, allCounts, total] = await Promise.all([
         ctx.prisma.serviceComplaint.findMany({
-          where,
+          where: pageWhere,
           include: {
-            outlet: {
-              select: { name: true },
-            },
-            lines: {
-              select: { serialNumber: true },
+            lines: { select: { serialNumber: true } },
+            assignments: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              include: {
+                asiUser: { select: { name: true } },
+                seUser: { select: { name: true } },
+              },
             },
           },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          skip: offset,
           take: input.limit + 1,
         }),
         ctx.prisma.serviceComplaint.groupBy({
@@ -267,292 +450,96 @@ export const serviceComplaintsRouter = createTRPCRouter({
         cancelled: 0,
       };
       for (const bucket of allCounts) {
-        tabCounts[bucket.status] = bucket._count._all;
+        (tabCounts as Record<string, number>)[bucket.status] = bucket._count._all;
       }
 
       return {
         items: pageRows.map(toComplaintListItem),
-        nextCursor: hasMore ? encodeCursor(offset + input.limit) : null,
+        nextCursor: hasMore ? encodeCursor(pageRows[pageRows.length - 1]) : null,
         tabCounts,
       };
     }),
 
-  get: perm(P.service.read)
-    .input(z.object({ id: z.string().uuid() }))
-    .output(complaintListItemSchema)
-    .query(async ({ ctx, input }) => {
-      const orgId = requireOrgId(ctx.actor.orgId);
-      const row = await ctx.prisma.serviceComplaint.findFirst({
-        where: { id: input.id, orgId },
-        include: {
-          outlet: { select: { name: true } },
-          lines: { select: { serialNumber: true } },
-        },
-      });
-      if (!row) throw apiError("NOT_FOUND", "Complaint not found");
-      return toComplaintListItem(row);
-    }),
-
-  detail: perm(P.service.read)
+  detail: internalPerm(P.service.read)
     .input(z.object({ id: z.string().uuid() }))
     .output(complaintDetailSchema)
     .query(async ({ ctx, input }) => {
       const orgId = requireOrgId(ctx.actor.orgId);
+      const scopeFilter = await serviceComplaintAccessWhere(ctx, orgId);
       const row = await ctx.prisma.serviceComplaint.findFirst({
-        where: { id: input.id, orgId },
-        include: {
-          outlet: { select: { name: true } },
-          lines: true,
-          assignments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-          testReports: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-          activities: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-          warrantyDecision: true,
-        },
+        where: { AND: [scopeFilter, { id: input.id }] },
+        include: DETAIL_INCLUDE,
       });
       if (!row) throw apiError("NOT_FOUND", "Complaint not found");
-
-      return {
-        ...toComplaintListItem(row),
-	        description: row.description,
-	        customerName: row.customerName,
-	        customerPhone: row.customerPhone,
-	        telephonicReason: row.telephonicReason,
-	        resolutionNote: row.resolutionNote,
-	        closedAt: row.closedAt?.toISOString() ?? null,
-	        cancelledAt: row.cancelledAt?.toISOString() ?? null,
-	        lines: row.lines.map(toComplaintLine),
-        assignments: row.assignments.map((assignment) => ({
-          id: assignment.id,
-          action: assignment.action,
-          note: assignment.note,
-          asiUserId: assignment.asiUserId,
-          seUserId: assignment.seUserId,
-          assignedById: assignment.assignedById,
-          createdAt: assignment.createdAt.toISOString(),
-        })),
-        tests: row.testReports.map((test) => ({
-          id: test.id,
-          complaintLineId: test.complaintLineId,
-          submittedById: test.submittedById,
-          verdict: test.verdict,
-          summary: test.summary,
-          structuredData: test.structuredData ?? null,
-          createdAt: test.createdAt.toISOString(),
-        })),
-        activities: row.activities.map((activity) => ({
-          id: activity.id,
-          actorId: activity.actorId,
-          action: activity.action,
-          fromStatus: activity.fromStatus,
-          toStatus: activity.toStatus,
-          note: activity.note,
-          meta: activity.meta ?? null,
-          createdAt: activity.createdAt.toISOString(),
-        })),
-        warrantyDecision: row.warrantyDecision
-          ? {
-              id: row.warrantyDecision.id,
-              status: row.warrantyDecision.status,
-              decidedById: row.warrantyDecision.decidedById,
-              sourceWarehouseId: row.warrantyDecision.sourceWarehouseId,
-              approvedReplacementSerial: row.warrantyDecision.approvedReplacementSerial,
-              rejectionReason: row.warrantyDecision.rejectionReason,
-              replacementOrderId: row.warrantyDecision.replacementOrderId,
-              decidedAt: row.warrantyDecision.decidedAt?.toISOString() ?? null,
-              updatedAt: row.warrantyDecision.updatedAt.toISOString(),
-            }
-          : null,
-      };
+      return buildDetailResponse(row);
     }),
 
-  create: perm(P.service.write)
+
+  create: internalPerm(P.service.write)
     .input(
-	      z.object({
-	        title: z.string().max(200).optional(),
-	        description: z.string().max(4000).optional(),
-	        customerName: z.string().trim().min(1).max(200),
-	        customerPhone: z.string().trim().min(5).max(40),
-	        outletId: z.string().uuid().optional(),
-	        lines: z.array(complaintLineInputSchema).min(1).max(50),
-	      }),
+      serviceComplaintCreateFieldsSchema.extend({
+        // NA03: select existing service user or create inline
+        serviceUserId: z.string().uuid().optional(),
+        newServiceUser: z
+          .object({
+            name: z.string().trim().min(1).max(200),
+            phone: z.string().trim().min(5).max(40),
+            email: z.string().email(),
+          })
+          .optional(),
+      }),
     )
     .output(complaintDetailSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id!;
-
-      const actor = await ctx.prisma.user.findUnique({
-        where: { id: actorId },
-        select: { id: true, userType: true },
-      });
-      if (!actor || actor.userType !== "internal") {
-        throw apiError("FORBIDDEN", "Complaint creation is restricted to internal users");
-      }
-
-	      const orgId = requireOrgId(ctx.actor.orgId);
-	      const productIds = [...new Set(input.lines.map((line) => line.productId))];
-	      const products = await ctx.prisma.product.findMany({
-	        where: {
-	          id: { in: productIds },
-	          isActive: true,
-	        },
-	        select: {
-	          id: true,
-	          sku: true,
-	        },
-	      });
-	      if (products.length !== productIds.length) {
-	        throw apiError("BAD_REQUEST", "One or more selected SKUs are invalid or inactive");
-	      }
-	      const skuByProductId = new Map(products.map((product) => [product.id, product.sku]));
-	      const now = new Date();
-	      const createdId = await ctx.prisma.$transaction(async (tx) => {
-        const complaintNumber = await nextComplaintNumber(tx, now, orgId);
-
-        const created = await tx.serviceComplaint.create({
-          data: {
-            complaintNumber,
-            orgId,
-	            status: "raised",
-	            title: input.title ?? null,
-	            description: input.description ?? null,
-	            customerName: input.customerName,
-	            customerPhone: input.customerPhone,
-	            outletId: input.outletId ?? null,
-	            raisedById: actorId,
-	            lines: {
-		              create: input.lines.map((line) => {
-		                const serialNumber = line.serialNumber?.trim() || null;
-		                return {
-		                  batterySku: skuByProductId.get(line.productId) ?? null,
-		                  serialNumber,
-		                  normalizedSerial: serialNumber ? normalizeSerial(serialNumber) : null,
-		                  productId: line.productId,
-		                  notes: line.notes,
-		                };
-		              }),
-	            },
-	          },
-	        });
-
-        await recordComplaintActivity(tx, {
-          complaintId: created.id,
-          actorId,
-          action: "raised",
-          fromStatus: null,
-          toStatus: "raised",
-          note: input.description ?? null,
-        });
-
-        return created.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const createdId = await createServiceComplaint(ctx.prisma, {
+        ...input,
+        orgId,
+        activityActorId: actorId,
+        raisedByUserId: actorId,
+        serviceUserId: input.serviceUserId ?? null,
+        newServiceUser: input.newServiceUser ?? null,
       });
 
-	      const lines = await ctx.prisma.serviceComplaintLine.findMany({
-	        where: { complaintId: createdId },
-	      });
-	      await Promise.all(lines.flatMap((line) => (line.serialNumber ? [ensureSerialIndex(ctx, line.serialNumber)] : [])));
-
-      return await ctx.prisma.serviceComplaint
-        .findUniqueOrThrow({
-          where: { id: createdId },
-          include: {
-            outlet: { select: { name: true } },
-            lines: true,
-            assignments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-            testReports: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-            activities: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-            warrantyDecision: true,
-          },
-        })
-        .then((row) => ({
-	          ...toComplaintListItem(row),
-	          description: row.description,
-	          customerName: row.customerName,
-	          customerPhone: row.customerPhone,
-	          telephonicReason: row.telephonicReason,
-	          resolutionNote: row.resolutionNote,
-	          closedAt: row.closedAt?.toISOString() ?? null,
-	          cancelledAt: row.cancelledAt?.toISOString() ?? null,
-	          lines: row.lines.map(toComplaintLine),
-          assignments: row.assignments.map((assignment) => ({
-            id: assignment.id,
-            action: assignment.action,
-            note: assignment.note,
-            asiUserId: assignment.asiUserId,
-            seUserId: assignment.seUserId,
-            assignedById: assignment.assignedById,
-            createdAt: assignment.createdAt.toISOString(),
-          })),
-          tests: row.testReports.map((test) => ({
-            id: test.id,
-            complaintLineId: test.complaintLineId,
-            submittedById: test.submittedById,
-            verdict: test.verdict,
-            summary: test.summary,
-            structuredData: test.structuredData ?? null,
-            createdAt: test.createdAt.toISOString(),
-          })),
-          activities: row.activities.map((activity) => ({
-            id: activity.id,
-            actorId: activity.actorId,
-            action: activity.action,
-            fromStatus: activity.fromStatus,
-            toStatus: activity.toStatus,
-            note: activity.note,
-            meta: activity.meta ?? null,
-            createdAt: activity.createdAt.toISOString(),
-          })),
-          warrantyDecision: row.warrantyDecision
-            ? {
-                id: row.warrantyDecision.id,
-                status: row.warrantyDecision.status,
-                decidedById: row.warrantyDecision.decidedById,
-                sourceWarehouseId: row.warrantyDecision.sourceWarehouseId,
-                approvedReplacementSerial: row.warrantyDecision.approvedReplacementSerial,
-                rejectionReason: row.warrantyDecision.rejectionReason,
-                replacementOrderId: row.warrantyDecision.replacementOrderId,
-                decidedAt: row.warrantyDecision.decidedAt?.toISOString() ?? null,
-                updatedAt: row.warrantyDecision.updatedAt.toISOString(),
-              }
-            : null,
-        }));
+      const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+        where: { id: createdId },
+        include: DETAIL_INCLUDE,
+      });
+      return buildDetailResponse(row);
     }),
 
-	  update: perm(P.service.write)
-	    .input(
-	      z.object({
+  update: internalPerm(P.service.write)
+    .input(
+      z.object({
         id: z.string().uuid(),
         title: z.string().max(200).nullable().optional(),
         description: z.string().max(4000).nullable().optional(),
         resolutionNote: z.string().max(2000).nullable().optional(),
       }),
     )
-    .output(complaintListItemSchema)
+    .output(complaintDetailSchema)
     .mutation(async ({ ctx, input }) => {
       const actorId = ctx.actor.id;
-
       const orgId = requireOrgId(ctx.actor.orgId);
-      const row = await ctx.prisma.$transaction(async (tx) => {
+
+      await ctx.prisma.$transaction(async (tx) => {
         const existing = await tx.serviceComplaint.findFirst({
           where: { id: input.id, orgId },
-          select: { orgId: true, status: true, title: true, description: true, resolutionNote: true },
+          select: { status: true, title: true, description: true, resolutionNote: true },
         });
         if (!existing) throw apiError("NOT_FOUND", "Complaint not found");
 
-        const FINAL_STATUSES = new Set(["resolved", "telephonic_closure", "cancelled"]);
         if (FINAL_STATUSES.has(existing.status)) {
           throw apiError("CONFLICT", "Cannot update a closed complaint");
         }
 
-        const updated = await tx.serviceComplaint.update({
+        await tx.serviceComplaint.update({
           where: { id: input.id },
           data: {
             title: input.title,
             description: input.description,
             resolutionNote: input.resolutionNote,
-          },
-          include: {
-            outlet: { select: { name: true } },
-            lines: { select: { serialNumber: true } },
           },
         });
 
@@ -562,137 +549,70 @@ export const serviceComplaintsRouter = createTRPCRouter({
           action: "updated",
           note: "Complaint fields updated",
           meta: {
-            old: {
-              title: existing.title,
-              description: existing.description,
-              resolutionNote: existing.resolutionNote,
-            },
-            new: {
-              title: input.title,
-              description: input.description,
-              resolutionNote: input.resolutionNote,
-            },
+            old: { title: existing.title, description: existing.description, resolutionNote: existing.resolutionNote },
+            new: { title: input.title, description: input.description, resolutionNote: input.resolutionNote },
           },
+        });
+      });
+
+      const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+        where: { id: input.id },
+        include: DETAIL_INCLUDE,
+      });
+      return buildDetailResponse(row);
+    }),
+
+  updateLine: internalPermAny(P.service.workflow, P.service.write)
+    .input(
+      z.object({
+        complaintId: z.string().uuid(),
+        lineId: z.string().uuid(),
+        notes: z.string().max(1000).nullable().optional(),
+      }),
+    )
+    .output(complaintLineSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const scopeFilter = await serviceComplaintAccessWhere(ctx, orgId);
+
+      const result = await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.serviceComplaintLine.findFirst({
+          where: {
+            id: input.lineId,
+            complaintId: input.complaintId,
+            complaint: scopeFilter,
+          },
+          include: { complaint: { select: { id: true, status: true } } },
+        });
+        if (!existing) throw apiError("NOT_FOUND", "Complaint line not found");
+
+        if (FINAL_STATUSES.has(existing.complaint.status)) {
+          throw apiError("CONFLICT", "Cannot update lines on a closed complaint");
+        }
+
+        const updated = await tx.serviceComplaintLine.update({
+          where: { id: input.lineId },
+          data: { notes: input.notes },
+        });
+
+        await recordComplaintActivity(tx, {
+          complaintId: input.complaintId,
+          actorId,
+          action: "line_updated",
+          fromStatus: existing.complaint.status,
+          toStatus: existing.complaint.status,
+          note: "Complaint line notes updated",
+          meta: { lineId: input.lineId },
         });
 
         return updated;
       });
 
-	      return toComplaintListItem(row);
-	    }),
+      return toComplaintLine(result);
+    }),
 
-	  updateLine: permAny(P.service.workflow, P.service.write)
-	    .input(
-	      z.object({
-	        complaintId: z.string().uuid(),
-	        lineId: z.string().uuid(),
-	        productId: z.string().uuid().optional(),
-	        serialNumber: z.string().trim().min(2).nullable().optional(),
-	        notes: z.string().max(1000).nullable().optional(),
-	      }),
-	    )
-	    .output(complaintLineSchema)
-	    .mutation(async ({ ctx, input }) => {
-	      const actorId = ctx.actor.id;
-	      const orgId = requireOrgId(ctx.actor.orgId);
-	      const selectedProduct = input.productId
-	        ? await ctx.prisma.product.findFirst({
-	            where: {
-	              id: input.productId,
-	              isActive: true,
-	            },
-	            select: {
-	              id: true,
-	              sku: true,
-	            },
-	          })
-	        : null;
-	      if (input.productId && !selectedProduct) {
-	        throw apiError("BAD_REQUEST", "Selected SKU is invalid or inactive");
-	      }
-
-	      const result = await ctx.prisma.$transaction(async (tx) => {
-	        const existing = await tx.serviceComplaintLine.findFirst({
-	          where: {
-	            id: input.lineId,
-	            complaintId: input.complaintId,
-	            complaint: { orgId },
-	          },
-	          include: {
-	            complaint: {
-	              select: {
-	                id: true,
-	                status: true,
-	              },
-	            },
-	          },
-	        });
-	        if (!existing) throw apiError("NOT_FOUND", "Complaint line not found");
-
-	        const FINAL_STATUSES = new Set(["resolved", "telephonic_closure", "cancelled"]);
-	        if (FINAL_STATUSES.has(existing.complaint.status)) {
-	          throw apiError("CONFLICT", "Cannot update lines on a closed complaint");
-	        }
-
-	        const nextSerial =
-	          input.serialNumber === undefined
-	            ? existing.serialNumber
-	            : input.serialNumber?.trim() || null;
-	        if (existing.complaint.status === "test_result_submitted" && !nextSerial) {
-	          throw apiError("BAD_REQUEST", "Serial number cannot be removed after test report submission");
-	        }
-
-	        const updated = await tx.serviceComplaintLine.update({
-	          where: { id: input.lineId },
-	          data: {
-	            productId: input.productId,
-	            batterySku: input.productId === undefined ? undefined : selectedProduct!.sku,
-	            serialNumber: input.serialNumber === undefined ? undefined : nextSerial,
-	            normalizedSerial:
-	              input.serialNumber === undefined
-	                ? undefined
-	                : nextSerial
-	                  ? normalizeSerial(nextSerial)
-	                  : null,
-	            notes: input.notes,
-	          },
-	        });
-
-	        await recordComplaintActivity(tx, {
-	          complaintId: input.complaintId,
-	          actorId,
-	          action: "line_updated",
-	          fromStatus: existing.complaint.status,
-	          toStatus: existing.complaint.status,
-	          note: "Complaint line updated",
-	          meta: {
-	            lineId: input.lineId,
-	            old: {
-	              batterySku: existing.batterySku,
-	              productId: existing.productId,
-	              serialNumber: existing.serialNumber,
-	              notes: existing.notes,
-	            },
-	            new: {
-	              batterySku: updated.batterySku,
-	              productId: updated.productId,
-	              serialNumber: updated.serialNumber,
-	              notes: updated.notes,
-	            },
-	          },
-	        });
-
-	        return updated;
-	      });
-
-	      if (result.serialNumber) {
-	        await ensureSerialIndex(ctx, result.serialNumber);
-	      }
-
-	      return toComplaintLine(result);
-	    }),
-
-	  transition: permAny(P.service.workflow, P.service.manage)
+  transition: internalPermAny(P.service.workflow, P.service.manage)
     .input(
       z.object({
         id: z.string().uuid(),
@@ -700,10 +620,26 @@ export const serviceComplaintsRouter = createTRPCRouter({
         note: z.string().max(2000).nullable().optional(),
       }),
     )
-    .output(complaintListItemSchema)
+    .output(complaintDetailSchema)
     .mutation(async ({ ctx, input }) => {
-      if (input.action === "assign") {
-        throw apiError("BAD_REQUEST", "Use serviceAssignments.assign to appoint an ASI");
+      const orgId = requireOrgId(ctx.actor.orgId);
+      await assertServiceComplaintAccess(ctx, input.id, orgId);
+      if (input.action === "test_submitted") {
+        throw apiError("BAD_REQUEST", "Submit test results through serviceTests.submit");
+      }
+      const actorRole = await resolveServiceActorRole(ctx);
+      if (actorRole === "asi") {
+        throw apiError("FORBIDDEN", "ASI users can only request retests");
+      }
+      if (
+        actorRole === "service_engineer" &&
+        input.action !== "visit_logged" &&
+        input.action !== "tested_ok_close"
+      ) {
+        throw apiError(
+          "FORBIDDEN",
+          "Service Engineers can only log visits and close tested-ok work",
+        );
       }
       if (input.action === "retest_requested" && !ctx.permissions.includes(P.service.retest)) {
         throw apiError("FORBIDDEN", "Requires: service:retest");
@@ -722,17 +658,30 @@ export const serviceComplaintsRouter = createTRPCRouter({
       }
 
       const actorId = ctx.actor.id;
+      const scopeFilter = await serviceComplaintAccessWhere(ctx, orgId);
 
-      const orgId = requireOrgId(ctx.actor.orgId);
-      const updated = await ctx.prisma.$transaction(async (tx) => {
+      await ctx.prisma.$transaction(async (tx) => {
         const complaint = await tx.serviceComplaint.findFirst({
-          where: { id: input.id, orgId },
-          include: {
-            outlet: { select: { name: true } },
-            lines: { select: { serialNumber: true } },
+          where: { AND: [scopeFilter, { id: input.id }] },
+          select: {
+            status: true,
+            testReports: {
+              orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+              take: 1,
+              select: { verdict: true },
+            },
           },
         });
         if (!complaint) throw apiError("NOT_FOUND", "Complaint not found");
+        if (
+          input.action === "tested_ok_close" &&
+          complaint.testReports[0]?.verdict !== "tested_ok"
+        ) {
+          throw apiError(
+            "CONFLICT",
+            "Tested OK closure requires the latest test verdict to be tested_ok",
+          );
+        }
 
         const transition = resolveTransition(complaint.status, input.action);
 
@@ -742,6 +691,10 @@ export const serviceComplaintsRouter = createTRPCRouter({
           resolutionNote?: string | null;
           closedAt?: Date | null;
           cancelledAt?: Date | null;
+          visitAt?: Date | null;
+          testedAt?: Date | null;
+          resolutionReason?: z.infer<typeof resolutionReasonSchema>;
+          happyCallingStatus?: z.infer<typeof happyCallingStatusSchema>;
         } = {};
 
         if (transition.statusChanged) {
@@ -753,24 +706,31 @@ export const serviceComplaintsRouter = createTRPCRouter({
           }
           nextPatch.telephonicReason = input.note;
           nextPatch.closedAt = new Date();
+          nextPatch.resolutionReason = "telephonic_closure";
+          nextPatch.happyCallingStatus = "pending";
+        }
+        if (input.action === "visit_logged") {
+          nextPatch.visitAt = new Date();
+        }
+        if (input.action === "test_submitted") {
+          nextPatch.testedAt = new Date();
         }
         if (input.action === "tested_ok_close" || input.action === "warranty_reject") {
           nextPatch.resolutionNote = input.note ?? "Closed after service decision";
           nextPatch.closedAt = new Date();
+          nextPatch.resolutionReason =
+            input.action === "tested_ok_close" ? "tested_ok" : "warranty_rejected";
+          nextPatch.happyCallingStatus = "pending";
         }
         if (input.action === "cancel") {
           nextPatch.cancelledAt = new Date();
+          nextPatch.resolutionReason = "cancelled";
+          nextPatch.happyCallingStatus = "pending";
         }
 
-        const row = await tx.serviceComplaint.update({
+        await tx.serviceComplaint.update({
           where: { id: input.id },
-          data: {
-            ...nextPatch,
-          },
-          include: {
-            outlet: { select: { name: true } },
-            lines: { select: { serialNumber: true } },
-          },
+          data: nextPatch,
         });
 
         await recordComplaintActivity(tx, {
@@ -781,11 +741,382 @@ export const serviceComplaintsRouter = createTRPCRouter({
           toStatus: transition.nextStatus,
           note: input.note,
         });
-
-        return row;
       });
 
-      return toComplaintListItem(updated);
+      const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+        where: { id: input.id },
+        include: DETAIL_INCLUDE,
+      });
+      return buildDetailResponse(row);
+    }),
+
+  reopen: internalPerm(P.service.write)
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        reason: z.string().trim().min(2).max(2000),
+      }),
+    )
+    .output(complaintDetailSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+
+      await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.serviceComplaint.findFirst({
+          where: { id: input.id, orgId },
+          select: { status: true },
+        });
+        if (!existing) throw apiError("NOT_FOUND", "Complaint not found");
+
+        if (!FINAL_STATUSES.has(existing.status)) {
+          throw apiError("CONFLICT", `Cannot reopen a complaint with status '${existing.status}' — it is not closed`);
+        }
+        if (existing.status === "cancelled") {
+          throw apiError("CONFLICT", "Cancelled complaints cannot be reopened");
+        }
+
+        await tx.serviceComplaint.update({
+          where: { id: input.id },
+          data: {
+            status: "raised",
+            reopenedAt: new Date(),
+            closedAt: null,
+            resolutionNote: null,
+          },
+        });
+
+        await recordComplaintActivity(tx, {
+          complaintId: input.id,
+          actorId,
+          action: "reopen",
+          fromStatus: existing.status,
+          toStatus: "raised",
+          note: input.reason,
+        });
+      });
+
+      const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+        where: { id: input.id },
+        include: DETAIL_INCLUDE,
+      });
+      return buildDetailResponse(row);
+    }),
+
+  relink: internalPerm(P.service.manage)
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        raisedByUserId: z.string().uuid().nullable().optional(),
+        raisedByServiceUserId: z.string().uuid().nullable().optional(),
+        reason: z.string().trim().min(2).max(2000),
+      }),
+    )
+    .output(complaintDetailSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+
+      if (input.raisedByUserId === undefined && input.raisedByServiceUserId === undefined) {
+        throw apiError("BAD_REQUEST", "Provide raisedByUserId or raisedByServiceUserId");
+      }
+
+      await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.serviceComplaint.findFirst({
+          where: { id: input.id, orgId },
+          select: { status: true, raisedByUserId: true, raisedByServiceUserId: true },
+        });
+        if (!existing) throw apiError("NOT_FOUND", "Complaint not found");
+
+        await tx.serviceComplaint.update({
+          where: { id: input.id },
+          data: {
+            raisedByUserId: input.raisedByUserId !== undefined ? input.raisedByUserId : existing.raisedByUserId,
+            raisedByServiceUserId: input.raisedByServiceUserId !== undefined ? input.raisedByServiceUserId : existing.raisedByServiceUserId,
+          },
+        });
+
+        await recordComplaintActivity(tx, {
+          complaintId: input.id,
+          actorId,
+          action: "relink",
+          fromStatus: existing.status,
+          toStatus: existing.status,
+          note: input.reason,
+          meta: {
+            old: { raisedByUserId: existing.raisedByUserId, raisedByServiceUserId: existing.raisedByServiceUserId },
+            new: {
+              raisedByUserId:
+                input.raisedByUserId !== undefined
+                  ? input.raisedByUserId
+                  : existing.raisedByUserId,
+              raisedByServiceUserId:
+                input.raisedByServiceUserId !== undefined
+                  ? input.raisedByServiceUserId
+                  : existing.raisedByServiceUserId,
+            },
+          },
+        });
+      });
+
+      const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+        where: { id: input.id },
+        include: DETAIL_INCLUDE,
+      });
+      return buildDetailResponse(row);
+    }),
+
+  batchCreate: internalPerm(P.service.write)
+    .input(
+      serviceComplaintCreateFieldsSchema
+        .omit({ sku: true, serialNumber: true, notes: true })
+        .extend({
+          serviceUserId: z.string().uuid().optional(),
+          newServiceUser: z
+            .object({
+              name: z.string().trim().min(1).max(200),
+              phone: z.string().trim().min(5).max(40),
+              email: z.string().email(),
+            })
+            .optional(),
+          lines: z
+            .array(
+              z.object({
+                sku: z.string().trim().min(1).max(100),
+                serialNumber: z.string().trim().min(2).max(200),
+                notes: z.string().trim().max(1000).optional(),
+              }),
+            )
+            .min(1)
+            .max(20),
+        }),
+    )
+    .output(
+      z.object({
+        complaints: z.array(
+          z.object({
+            id: z.string(),
+            complaintNumber: z.string(),
+            serialNumber: z.string(),
+          }),
+        ),
+        failures: z.array(
+          z.object({
+            serialNumber: z.string(),
+            message: z.string(),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id!;
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const { lines, serviceUserId, newServiceUser, ...shared } = input;
+
+      const complaints: Array<{ id: string; complaintNumber: string; serialNumber: string }> = [];
+      const failures: Array<{ serialNumber: string; message: string }> = [];
+
+      for (const line of lines) {
+        try {
+          const createdId = await createServiceComplaint(ctx.prisma, {
+            ...shared,
+            sku: line.sku,
+            serialNumber: line.serialNumber,
+            notes: line.notes,
+            orgId,
+            activityActorId: actorId,
+            raisedByUserId: actorId,
+            serviceUserId: serviceUserId ?? null,
+            newServiceUser: newServiceUser ?? null,
+          });
+          const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+            where: { id: createdId },
+            select: { id: true, complaintNumber: true },
+          });
+          complaints.push({
+            id: row.id,
+            complaintNumber: row.complaintNumber,
+            serialNumber: line.serialNumber,
+          });
+        } catch (err) {
+          failures.push({
+            serialNumber: line.serialNumber,
+            message: err instanceof Error ? err.message : "Failed to create complaint",
+          });
+        }
+      }
+
+      if (complaints.length === 0) {
+        throw apiError("BAD_REQUEST", failures[0]?.message ?? "No complaints could be created");
+      }
+
+      return { complaints, failures };
+    }),
+
+  listHappyCalling: internalPerm(P.service["happy-calling"])
+    .input(
+      paginationInputSchema.extend({
+        status: happyCallingStatusSchema.default("pending"),
+        fromDate: z.coerce.date().optional(),
+        toDate: z.coerce.date().optional(),
+      }),
+    )
+    .output(
+      z.object({
+        items: z.array(complaintListItemSchema),
+        nextCursor: z.string().nullable(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const cursor = decodeCursor(input.cursor);
+      const where: Prisma.ServiceComplaintWhereInput = {
+        orgId,
+        happyCallingStatus: input.status,
+        ...(input.fromDate || input.toDate
+          ? {
+              closedAt: {
+                ...(input.fromDate ? { gte: input.fromDate } : {}),
+                ...(input.toDate ? { lte: input.toDate } : {}),
+              },
+            }
+          : {}),
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.ts) } },
+                { createdAt: new Date(cursor.ts), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      };
+
+      const rows = await ctx.prisma.serviceComplaint.findMany({
+        where,
+        include: {
+          lines: { select: { serialNumber: true } },
+          assignments: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            include: {
+              asiUser: { select: { name: true } },
+              seUser: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.limit + 1,
+      });
+
+      const hasMore = rows.length > input.limit;
+      const pageRows = hasMore ? rows.slice(0, input.limit) : rows;
+      return {
+        items: pageRows.map(toComplaintListItem),
+        nextCursor: hasMore ? encodeCursor(pageRows[pageRows.length - 1]) : null,
+      };
+    }),
+
+  updateHappyCalling: internalPerm(P.service["happy-calling"])
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        status: z.enum(["completed", "skipped"]),
+        note: z.string().trim().max(2000).nullable().optional(),
+        physicalReturn: z
+          .object({
+            returnedAt: z.coerce.date().optional(),
+            note: z.string().trim().max(2000).optional(),
+          })
+          .optional(),
+      }),
+    )
+    .output(complaintDetailSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actorId = ctx.actor.id;
+      const orgId = requireOrgId(ctx.actor.orgId);
+
+      await ctx.prisma.$transaction(async (tx) => {
+        const existing = await tx.serviceComplaint.findFirst({
+          where: { id: input.id, orgId },
+          select: { status: true, happyCallingStatus: true },
+        });
+        if (!existing) throw apiError("NOT_FOUND", "Complaint not found");
+        if (existing.happyCallingStatus == null) {
+          throw apiError("CONFLICT", "Complaint is not in the happy-calling queue");
+        }
+
+        await tx.serviceComplaint.update({
+          where: { id: input.id },
+          data: {
+            happyCallingStatus: input.status,
+            happyCallingNote: input.note ?? undefined,
+            ...(input.physicalReturn
+              ? {
+                  physicalReturnAt: input.physicalReturn.returnedAt ?? new Date(),
+                  physicalReturnNote: input.physicalReturn.note ?? null,
+                }
+              : {}),
+          },
+        });
+
+        await recordComplaintActivity(tx, {
+          complaintId: input.id,
+          actorId,
+          action: "happy_calling",
+          fromStatus: existing.status,
+          toStatus: existing.status,
+          note: input.note ?? null,
+          meta: {
+            happyCallingStatus: input.status,
+            physicalReturn: input.physicalReturn
+              ? {
+                  returnedAt: (input.physicalReturn.returnedAt ?? new Date()).toISOString(),
+                  note: input.physicalReturn.note ?? null,
+                }
+              : null,
+          },
+        });
+      });
+
+      const row = await ctx.prisma.serviceComplaint.findUniqueOrThrow({
+        where: { id: input.id },
+        include: DETAIL_INCLUDE,
+      });
+      return buildDetailResponse(row);
+    }),
+
+  tabCounts: internalPerm(P.service.read)
+    .output(
+      z.object({
+        all: z.number().int(),
+        raised: z.number().int(),
+        assigned: z.number().int(),
+        visit: z.number().int(),
+        test_result_submitted: z.number().int(),
+        retest_requested: z.number().int(),
+        resolved: z.number().int(),
+        telephonic_closure: z.number().int(),
+        cancelled: z.number().int(),
+      }),
+    )
+    .query(async ({ ctx }) => {
+      const orgId = requireOrgId(ctx.actor.orgId);
+      const scopeFilter = await serviceComplaintAccessWhere(ctx, orgId);
+      const groups = await ctx.prisma.serviceComplaint.groupBy({
+        by: ["status"],
+        where: scopeFilter,
+        _count: { _all: true },
+      });
+      const counts = {
+        all: 0, raised: 0, assigned: 0, visit: 0,
+        test_result_submitted: 0, retest_requested: 0,
+        resolved: 0, telephonic_closure: 0, cancelled: 0,
+      };
+      for (const g of groups) {
+        (counts as Record<string, number>)[g.status] = g._count._all;
+        counts.all += g._count._all;
+      }
+      return counts;
     }),
 
 });

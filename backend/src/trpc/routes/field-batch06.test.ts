@@ -3,6 +3,16 @@ import {
   isValidTimezone,
   buildDateRangeFilter
 } from "./field-helpers";
+import {
+  broadcastLocationUpdate,
+  getSseConnectionStats,
+  resetBroadcasts
+} from "../../infra/sse";
+import {
+  retentionCutoff,
+  runFieldLocationRetention
+} from "../../cron/field-location-retention";
+import { calculateAttendanceRate } from "./field-analytics";
 
 // ---------------------------------------------------------------------------
 // L-12: timezone validation
@@ -149,5 +159,88 @@ describe("Batch 06 M-03: auto-close skips disabled schedules", () => {
     ];
     const filtered = schedules.filter((s) => s.isEnabled);
     expect(filtered.map((s) => s.userId)).toEqual(["a1", "a3"]);
+  });
+});
+
+describe("Field P2: SSE stats", () => {
+  it("tracks broadcast count and last broadcast timestamp", () => {
+    resetBroadcasts();
+
+    const empty = getSseConnectionStats();
+    expect(empty.broadcastCount).toBe(0);
+    expect(empty.lastBroadcastAt).toBeNull();
+
+    broadcastLocationUpdate("org-1", {
+      agentId: "agent-1",
+      shiftId: "shift-1",
+      lat: 12,
+      lng: 77
+    });
+
+    const stats = getSseConnectionStats();
+    expect(stats.broadcastCount).toBe(1);
+    expect(typeof stats.lastBroadcastAt).toBe("string");
+  });
+});
+
+describe("Field P2: location retention", () => {
+  it("calculates the cutoff from the configured retention window", () => {
+    const cutoff = retentionCutoff(new Date("2026-05-30T00:00:00.000Z"), 90);
+    expect(cutoff.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+  });
+
+  it("deletes only records older than the cutoff", async () => {
+    const calls: any[] = [];
+    const result = await runFieldLocationRetention({
+      now: new Date("2026-05-30T00:00:00.000Z"),
+      retentionDays: 90,
+      prismaClient: {
+        fieldLocation: {
+          deleteMany: async (args: any) => {
+            calls.push(args);
+            return { count: 42 };
+          }
+        }
+      } as any
+    });
+
+    expect(result.deleted).toBe(42);
+    expect(result.disabled).toBe(false);
+    expect(calls[0]).toEqual({
+      where: { recordedAt: { lt: new Date("2026-03-01T00:00:00.000Z") } }
+    });
+  });
+
+  it("does not delete records when retention is disabled", async () => {
+    let called = false;
+    const result = await runFieldLocationRetention({
+      disabled: true,
+      prismaClient: {
+        fieldLocation: {
+          deleteMany: async () => {
+            called = true;
+            return { count: 1 };
+          }
+        }
+      } as any
+    });
+
+    expect(result.disabled).toBe(true);
+    expect(result.deleted).toBe(0);
+    expect(called).toBe(false);
+  });
+});
+
+describe("Field P2: analytics attendance rate", () => {
+  it("uses real attendance records instead of active-shift placeholders", () => {
+    expect(
+      calculateAttendanceRate([
+        { status: "present" },
+        { status: "half_day" },
+        { status: "absent" },
+        { status: "leave" }
+      ])
+    ).toBe(37.5);
+    expect(calculateAttendanceRate([])).toBe(0);
   });
 });
