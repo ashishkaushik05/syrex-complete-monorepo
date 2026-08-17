@@ -129,6 +129,61 @@ class FieldRepository {
         .toList();
   }
 
+  /// Offline-sync variant of logVisit. Used by [FieldSyncWorker] to flush
+  /// queued visit events with a stable [clientEventId] and a resolved
+  /// [shiftId].
+  Future<void> logVisitFromEvent({
+    required String clientEventId,
+    required String shiftId,
+    required double lat,
+    required double lng,
+    String? description,
+    String? recordedAt,
+  }) async {
+    await _dio.post(
+      '/fieldVisits.log',
+      data: jsonEncode({
+        'json': {
+          'clientEventId': clientEventId,
+          'shiftId': shiftId,
+          'lat': lat,
+          'lng': lng,
+          if (description != null) 'description': description,
+          if (recordedAt != null) 'recordedAt': recordedAt,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+  }
+
+  /// Offline-sync variant of startStop. Used by [FieldSyncWorker] to flush
+  /// queued stop events.
+  Future<void> reportStop({
+    required String clientEventId,
+    required String shiftId,
+    required double lat,
+    required double lng,
+    String? reason,
+    String? notes,
+    required String startedAt,
+  }) async {
+    await _dio.post(
+      '/fieldStops.start',
+      data: jsonEncode({
+        'json': {
+          'clientEventId': clientEventId,
+          'shiftId': shiftId,
+          'lat': lat,
+          'lng': lng,
+          if (reason != null) 'reason': reason,
+          if (notes != null) 'notes': notes,
+          'startedAt': startedAt,
+        }
+      }),
+      options: Options(headers: {'Content-Type': 'application/json'}),
+    );
+  }
+
   Future<FieldVisitModel> logVisit({
     required double lat,
     required double lng,

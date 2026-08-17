@@ -1,0 +1,193 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/auth/session_controller.dart';
+import '../../core/api/outlet_portal_client.dart';
+import '../../core/models/order.dart';
+import '../../shared/widgets/outlet_app_bar.dart';
+import '../../shared/widgets/filter_chip_row.dart';
+import '../../shared/widgets/order_list_tile.dart';
+import '../../shared/widgets/empty_state.dart';
+import '../../app/theme_provider.dart';
+
+final _ordersListProvider = FutureProvider.autoDispose.family<PagedOrders, String>(
+  (ref, outletId) => ref.read(outletPortalClientProvider).orderHistory(outletId, limit: 50),
+);
+
+class OrdersListScreen extends ConsumerStatefulWidget {
+  final String? initialFilter;
+  const OrdersListScreen({super.key, this.initialFilter});
+
+  @override
+  ConsumerState<OrdersListScreen> createState() => _OrdersListScreenState();
+}
+
+class _OrdersListScreenState extends ConsumerState<OrdersListScreen> {
+  late String _filter;
+  String _q = '';
+  final _searchCtrl = TextEditingController();
+
+  static const _chips = ['All', 'Pending', 'Approved', 'Dispatched', 'Cancelled'];
+  static const _statusMap = {
+    'Pending': 'pending_approval',
+    'Approved': 'approved',
+    'Dispatched': 'dispatched',
+    'Cancelled': 'cancelled',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _filter = widget.initialFilter ?? 'All';
+    _searchCtrl.addListener(() => setState(() => _q = _searchCtrl.text));
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<OrderDto> _filtered(List<OrderDto> all) {
+    return all.where((o) {
+      final mapped = _statusMap[_filter];
+      final okF = _filter == 'All' || o.status == mapped || o.displayStatus == _filter.toLowerCase();
+      final okQ = _q.isEmpty || o.orderNumber.toLowerCase().contains(_q.toLowerCase());
+      return okF && okQ;
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = ref.watch(themeModeProvider) == ThemeMode.dark;
+    final c = AppThemeColors(dark: dark);
+    final outletId = ref.watch(sessionControllerProvider).outletId;
+    final async = ref.watch(_ordersListProvider(outletId));
+
+    return Scaffold(
+      backgroundColor: c.bg,
+      body: Stack(
+        children: [
+          Column(
+            children: [
+              OutletAppBar(
+                title: 'Orders',
+                large: true,
+                c: c,
+                trailing: async.maybeWhen(
+                  data: (p) => Text('${p.items.length} total', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: c.textMute)),
+                  orElse: () => null,
+                ),
+              ),
+
+              // Search + chips
+              Container(
+                color: c.bg,
+                padding: const EdgeInsets.fromLTRB(18, 2, 18, 12),
+                child: Column(
+                  children: [
+                    _SearchBar(c: c, controller: _searchCtrl),
+                    const SizedBox(height: 12),
+                    FilterChipRow(chips: _chips, selected: _filter, onSelect: (v) => setState(() => _filter = v), c: c),
+                  ],
+                ),
+              ),
+
+              // List
+              Expanded(
+                child: async.when(
+                  data: (page) {
+                    final items = _filtered(page.items);
+                    if (items.isEmpty) return EmptyState(
+                      icon: Icons.assignment_outlined,
+                      title: 'No orders found',
+                      sub: _q.isNotEmpty ? 'Try a different search.' : 'No orders match this filter yet.',
+                      c: c,
+                    );
+                    return RefreshIndicator(
+                      color: c.accent,
+                      onRefresh: () async => ref.invalidate(_ordersListProvider(outletId)),
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(18, 6, 18, 120),
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 11),
+                        itemBuilder: (_, i) => OrderListTile(
+                          order: items[i],
+                          onTap: () => context.push('/orders/${items[i].id}'),
+                          c: c,
+                        ),
+                      ),
+                    );
+                  },
+                  loading: () => Center(child: CircularProgressIndicator(color: c.accent)),
+                  error: (e, _) => Center(child: Text('Error: $e')),
+                ),
+              ),
+            ],
+          ),
+
+          // FAB
+          Positioned(
+            right: 18, bottom: 104,
+            child: GestureDetector(
+              onTap: () => context.push('/orders/new'),
+              child: Container(
+                height: 56,
+                padding: const EdgeInsets.symmetric(horizontal: 22),
+                decoration: BoxDecoration(
+                  color: c.accent,
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: [
+                    BoxShadow(color: c.accent.withOpacity(0.6), blurRadius: 24, offset: const Offset(0, 10), spreadRadius: -6),
+                    c.shadow,
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.add, size: 22, color: Colors.white),
+                    const SizedBox(width: 8),
+                    const Text('New order', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SearchBar extends StatelessWidget {
+  final AppThemeColors c;
+  final TextEditingController controller;
+  const _SearchBar({required this.c, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: c.line),
+        boxShadow: [c.shadow],
+      ),
+      child: TextField(
+        controller: controller,
+        style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: c.text),
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.zero,
+          prefixIcon: Icon(Icons.search, size: 18, color: c.textFaint),
+          hintText: 'Search order number',
+          hintStyle: TextStyle(fontSize: 14.5, color: c.textFaint, fontWeight: FontWeight.w500),
+          suffixIcon: controller.text.isNotEmpty
+              ? IconButton(icon: Icon(Icons.close, size: 17, color: c.textFaint), onPressed: () => controller.clear())
+              : null,
+        ),
+      ),
+    );
+  }
+}

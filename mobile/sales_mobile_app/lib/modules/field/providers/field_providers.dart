@@ -1,8 +1,70 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+export '../../../core/permissions/field_permission_coordinator.dart'
+    show
+        fieldPermissionCoordinatorProvider,
+        FieldPermissionCoordinator,
+        FieldPermissionState;
+
 import '../../../core/auth/session_controller.dart';
+import '../../../core/local/field_local_store.dart';
+import '../../../core/location/background_location_service.dart';
+import '../../../core/location/field_sync_store.dart';
+import '../controllers/field_shift_controller.dart';
 import '../models/field_models.dart';
 import '../repository/field_repository.dart';
+import '../sync/field_sync_worker.dart';
+
+// ---------------------------------------------------------------------------
+// SQLite local store — opened once per app process (singleton inside the class).
+// ---------------------------------------------------------------------------
+
+final fieldLocalStoreProvider = Provider<FieldLocalStore>((ref) {
+  throw StateError(
+    'fieldLocalStoreProvider must be overridden with an async-initialized value. '
+    'Use ProviderScope overrides after awaiting FieldLocalStore.open().',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Shift controller — owns active shift state, start/end orchestration, and
+// queue depth. Backend sync is handled by FieldSyncWorker (P1-4).
+// ---------------------------------------------------------------------------
+
+final fieldShiftControllerProvider =
+    StateNotifierProvider<FieldShiftController, FieldShiftState>((ref) {
+  return FieldShiftController(
+    store: ref.watch(fieldLocalStoreProvider),
+    syncStore: ref.watch(fieldSyncStoreProvider),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// FieldSyncWorker — owns backend sync for the main isolate.
+// deviceId and platform are resolved at runtime; call worker.updateDeviceInfo
+// after login/session is available.
+// ---------------------------------------------------------------------------
+
+final fieldSyncWorkerProvider = Provider<FieldSyncWorker>((ref) {
+  return FieldSyncWorker(
+    store: ref.watch(fieldLocalStoreProvider),
+    repository: ref.watch(fieldRepositoryProvider),
+    deviceId: '',
+    platform: '',
+    workerName: 'main',
+    onShiftCompleted: () {
+      // The backend has acknowledged shift end and the queue is fully drained.
+      // Now it is safe to tear down the capture/upload background service and
+      // clear local shift state.
+      BackgroundLocationService.stop();
+      ref.read(fieldShiftControllerProvider.notifier).markCompleted();
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Existing providers (unchanged)
+// ---------------------------------------------------------------------------
 
 final activeShiftProvider =
     StreamProvider.autoDispose<ShiftModel?>((ref) async* {

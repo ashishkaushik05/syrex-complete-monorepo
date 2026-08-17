@@ -1,18 +1,26 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../../core/location/background_location_service.dart';
 import '../../../core/location/field_sync_store.dart';
-import '../../../core/permissions/field_permission_service.dart';
 import '../../../shared/widgets/rb_components.dart';
+import '../controllers/field_shift_controller.dart';
 import '../models/field_models.dart';
 import '../providers/field_providers.dart';
 import '../repository/field_repository.dart';
+
+bool shouldEndFieldShift({
+  required ShiftModel? serverShift,
+  required bool hasLocalActiveShift,
+}) =>
+    serverShift != null || hasLocalActiveShift;
 
 class FieldHomePage extends ConsumerStatefulWidget {
   const FieldHomePage({super.key});
@@ -27,78 +35,43 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
   Future<void> _toggleShift(ShiftModel? shift) async {
     setState(() => _pending = true);
     try {
-      final repository = ref.read(fieldRepositoryProvider);
-      final syncStore = ref.read(fieldSyncStoreProvider);
-      final deviceId = await syncStore.getOrCreateDeviceId();
-      if (shift != null) {
-        await BackgroundLocationService.stop();
-        final v2Shift = await _ensureV2ShiftForEnd(
-          repository: repository,
-          syncStore: syncStore,
-          shift: shift,
-          deviceId: deviceId,
-        );
-        await _flushPendingPoints(
-          repository: repository,
-          syncStore: syncStore,
-          deviceId: deviceId,
-          clientShiftId: v2Shift.clientShiftId,
-          serverShiftId: v2Shift.id,
-        );
-        await repository.syncEndShift(
-          clientShiftId: v2Shift.clientShiftId!,
-          endedAt: DateTime.now().toUtc(),
-          deviceId: deviceId,
-        );
-        await syncStore.clearActiveShift();
-        await repository.reportSyncStatus(
-          deviceId: deviceId,
-          clientShiftId: v2Shift.clientShiftId,
-          serverShiftId: v2Shift.id,
-          platform: _platformName,
-          lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
-          pendingQueueDepth: (await syncStore.readPendingPoints()).length,
-        );
+      final localShiftState = ref.read(fieldShiftControllerProvider);
+      if (shouldEndFieldShift(
+        serverShift: shift,
+        hasLocalActiveShift: localShiftState.hasActiveShift,
+      )) {
+        // Mark the shift ending locally, then let FieldSyncWorker drain the
+        // remaining queue, call syncEnd, and only then stop the background
+        // service (via onShiftCompleted). Stopping it here would strand any
+        // un-uploaded points and skip syncEnd. Ensure the worker is running in
+        // case this shift was resumed after an app relaunch.
+        final syncStore = ref.read(fieldSyncStoreProvider);
+        final deviceId = await syncStore.getOrCreateDeviceId();
+        await ref.read(fieldShiftControllerProvider.notifier).endShift();
+        ref.read(fieldSyncWorkerProvider)
+          ..updateDeviceInfo(deviceId: deviceId, platform: _platformName)
+          ..start();
       } else {
-        final perms = await FieldPermissionService.requestAll();
-        if (!perms.location) {
-          await _reportPermissionStatus(syncStore, repository, deviceId, perms);
+        final granted = await ref
+            .read(fieldPermissionCoordinatorProvider.notifier)
+            .requestForShiftStart();
+        if (!granted) {
           if (mounted) {
             RbToast.show(context, 'Location permission required');
           }
           setState(() => _pending = false);
           return;
         }
-        if (!perms.backgroundLocation) {
-          await _reportPermissionStatus(syncStore, repository, deviceId, perms);
-          if (mounted) {
-            RbToast.show(context, 'Background location permission required');
-          }
-          setState(() => _pending = false);
-          return;
-        }
-        final startedAt = DateTime.now().toUtc();
-        final clientShiftId = FieldSyncStore.newClientShiftId(deviceId);
-        final syncedShift = await repository.syncStartShift(
-          clientShiftId: clientShiftId,
-          startedAt: startedAt,
-          deviceId: deviceId,
-          platform: _platformName,
-        );
-        await syncStore.saveActiveShift(
-          clientShiftId: syncedShift.clientShiftId,
-          serverShiftId: syncedShift.serverShiftId,
-        );
-        await repository.reportSyncStatus(
-          deviceId: deviceId,
-          clientShiftId: syncedShift.clientShiftId,
-          serverShiftId: syncedShift.serverShiftId,
-          platform: _platformName,
-          lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
-          pendingQueueDepth: (await syncStore.readPendingPoints()).length,
-          permissionsSummary: _permissionSummary(perms),
-        );
+        final syncStore = ref.read(fieldSyncStoreProvider);
+        final deviceId = await syncStore.getOrCreateDeviceId();
+        final platform = _platformName;
+        await ref
+            .read(fieldShiftControllerProvider.notifier)
+            .startShift(deviceId, platform);
         await BackgroundLocationService.start();
+        ref.read(fieldSyncWorkerProvider)
+          ..updateDeviceInfo(deviceId: deviceId, platform: platform)
+          ..start();
       }
       ref.invalidate(activeShiftProvider);
     } catch (e) {
@@ -108,120 +81,15 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
     }
   }
 
-  Future<ShiftModel> _ensureV2ShiftForEnd({
-    required FieldRepository repository,
-    required FieldSyncStore syncStore,
-    required ShiftModel shift,
-    required String deviceId,
-  }) async {
-    if (shift.clientShiftId != null && shift.clientShiftId!.isNotEmpty) {
-      await syncStore.saveActiveShift(
-        clientShiftId: shift.clientShiftId!,
-        serverShiftId: shift.id,
-      );
-      return shift;
-    }
-
-    final stored = await syncStore.readActiveShift();
-    if (stored != null) {
-      final reconciled = await repository.syncStartShift(
-        clientShiftId: stored.clientShiftId,
-        startedAt: DateTime.tryParse(shift.startedAt)?.toUtc() ??
-            DateTime.now().toUtc(),
-        deviceId: deviceId,
-        platform: _platformName,
-      );
-      await syncStore.saveActiveShift(
-        clientShiftId: reconciled.clientShiftId,
-        serverShiftId: reconciled.serverShiftId,
-      );
-      return reconciled.shift;
-    }
-
-    final clientShiftId = FieldSyncStore.newClientShiftId(deviceId);
-    final reconciled = await repository.syncStartShift(
-      clientShiftId: clientShiftId,
-      startedAt:
-          DateTime.tryParse(shift.startedAt)?.toUtc() ?? DateTime.now().toUtc(),
-      deviceId: deviceId,
-      platform: _platformName,
-    );
-    await syncStore.saveActiveShift(
-      clientShiftId: reconciled.clientShiftId,
-      serverShiftId: reconciled.serverShiftId,
-    );
-    return reconciled.shift;
-  }
-
-  Future<void> _flushPendingPoints({
-    required FieldRepository repository,
-    required FieldSyncStore syncStore,
-    required String deviceId,
-    required String? clientShiftId,
-    required String serverShiftId,
-  }) async {
-    if (clientShiftId == null || clientShiftId.isEmpty) return;
-    var pending = await syncStore.readPendingPoints();
-    while (pending.isNotEmpty) {
-      final batchSize = pending.length < 500 ? pending.length : 500;
-      final batch = List<Map<String, dynamic>>.from(
-        pending.take(batchSize),
-      );
-      try {
-        final ack = await repository.ingestLocationsV2(
-          clientShiftId: clientShiftId,
-          serverShiftId: serverShiftId,
-          deviceId: deviceId,
-          points: batch,
-        );
-        if (ack.retryable) break;
-        final removable = ack.removablePointIds;
-        pending = pending
-            .where((point) => !removable.contains(point['clientPointId']))
-            .toList();
-        await syncStore.writePendingPoints(pending);
-      } catch (_) {
-        await repository.reportSyncStatus(
-          deviceId: deviceId,
-          clientShiftId: clientShiftId,
-          serverShiftId: serverShiftId,
-          platform: _platformName,
-          lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
-          lastSyncErrorCode: 'FINAL_FLUSH_FAILED',
-          pendingQueueDepth: pending.length,
-        );
-        break;
-      }
-    }
-  }
-
-  Future<void> _reportPermissionStatus(
-    FieldSyncStore syncStore,
-    FieldRepository repository,
-    String deviceId,
-    FieldPermissionStatus perms,
-  ) async {
-    await repository.reportSyncStatus(
-      deviceId: deviceId,
-      platform: _platformName,
-      lastSyncAttemptAt: DateTime.now().toUtc().toIso8601String(),
-      pendingQueueDepth: (await syncStore.readPendingPoints()).length,
-      permissionsSummary: _permissionSummary(perms),
-    );
-  }
-
-  Map<String, dynamic> _permissionSummary(FieldPermissionStatus perms) {
-    return {
-      'location': perms.location,
-      'backgroundLocation': perms.backgroundLocation,
-      'batteryOptimizationDisabled': perms.batteryOptimizationDisabled,
-    };
-  }
-
   String get _platformName {
     if (Platform.isIOS) return 'ios';
     if (Platform.isAndroid) return 'android';
     return 'unknown';
+  }
+
+  void _refreshTrail() {
+    final shift = ref.read(activeShiftProvider).valueOrNull;
+    if (shift != null) ref.invalidate(trailForShiftProvider(shift.id));
   }
 
   Future<void> _endStop() async {
@@ -239,6 +107,7 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
   Widget build(BuildContext context) {
     final shiftAsync = ref.watch(activeShiftProvider);
     final stopAsync = ref.watch(activeStopProvider);
+    final controllerState = ref.watch(fieldShiftControllerProvider);
     final c = rbColors(context);
 
     return Scaffold(
@@ -246,6 +115,7 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
       body: RefreshIndicator(
         color: RbColors.accent,
         onRefresh: () async {
+          _refreshTrail();
           ref.invalidate(activeShiftProvider);
           ref.invalidate(activeStopProvider);
         },
@@ -257,6 +127,10 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
                 title: 'Field Sense',
                 actions: [
                   RbIconBtn(
+                    icon: Icons.bug_report_outlined,
+                    onTap: () => context.push('/field-diagnostics'),
+                  ),
+                  RbIconBtn(
                     icon: Icons.history_outlined,
                     onTap: () => context.push('/field/shift-history'),
                   ),
@@ -267,6 +141,37 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  // Offline pending-sync banner
+                  if (controllerState.activeShift != null &&
+                      controllerState.activeShift!.serverShiftId == null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                              color: Colors.amber.shade400, width: 0.5),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.cloud_off,
+                                size: 16, color: Colors.amber.shade800),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Shift pending sync — will upload when connected',
+                                style: GoogleFonts.inter(
+                                    fontSize: 12, color: Colors.amber.shade800),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
                   // Big shift card
                   shiftAsync.when(
                     loading: () => const _ShiftCardSkeleton(),
@@ -276,6 +181,7 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
                     data: (shift) => _ShiftCard(
                       shift: shift,
                       pending: _pending,
+                      controllerState: controllerState,
                       onToggle: () => _toggleShift(shift),
                     ),
                   ),
@@ -382,37 +288,34 @@ class _FieldHomePageState extends ConsumerState<FieldHomePage> {
 // ─── Shift card ────────────────────────────────────────────────────────────────
 
 class _ShiftCard extends StatelessWidget {
-  const _ShiftCard(
-      {required this.shift, required this.pending, required this.onToggle});
+  const _ShiftCard({
+    required this.shift,
+    required this.pending,
+    required this.controllerState,
+    required this.onToggle,
+  });
   final ShiftModel? shift;
   final bool pending;
+  final FieldShiftState controllerState;
   final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
     final c = rbColors(context);
-    final isActive = shift != null;
+    final isActive = shift != null || controllerState.hasActiveShift;
+    final startedAt =
+        shift?.startedAt ?? controllerState.activeShift?.startedAt;
 
     return RbCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Map background
+          // Live trail map (falls back to grid when no shift/trail)
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
             child: SizedBox(
               height: 120,
-              child: Stack(
-                children: [
-                  const MapBackground(),
-                  Center(
-                    child: StatusDot(
-                        tone: isActive ? RbTone.success : RbTone.neutral,
-                        pulse: isActive,
-                        size: 12),
-                  ),
-                ],
-              ),
+              child: _ShiftMiniMap(shiftId: shift?.id, isActive: isActive),
             ),
           ),
           Padding(
@@ -423,7 +326,9 @@ class _ShiftCard extends StatelessWidget {
                 Row(
                   children: [
                     Text(
-                      isActive ? _shiftDuration(shift!.startedAt) : '00:00',
+                      isActive && startedAt != null
+                          ? _shiftDuration(startedAt)
+                          : '00:00',
                       style: GoogleFonts.inter(
                           fontSize: 32,
                           fontWeight: FontWeight.w700,
@@ -439,11 +344,39 @@ class _ShiftCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  isActive
-                      ? 'Since ${_fmtTime(shift!.startedAt)}'
+                  isActive && startedAt != null
+                      ? 'Since ${_fmtTime(startedAt)}'
                       : 'No active shift',
                   style: GoogleFonts.inter(fontSize: 12, color: c.muted),
                 ),
+                // Queue depth chip
+                if (controllerState.pendingPointCount > 0) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(20),
+                      border:
+                          Border.all(color: Colors.orange.shade300, width: 0.5),
+                    ),
+                    child: Text(
+                      '${controllerState.pendingPointCount} points queued',
+                      style: GoogleFonts.inter(
+                          fontSize: 11, color: Colors.orange.shade800),
+                    ),
+                  ),
+                ],
+                // Sync error note
+                if (controllerState.activeShift?.lastErrorCode != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Sync error: ${controllerState.activeShift!.lastErrorCode}',
+                    style: GoogleFonts.inter(
+                        fontSize: 11, color: Colors.red.shade600),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 RbBtn(
                   label: isActive ? 'End shift' : 'Start shift',
@@ -477,6 +410,87 @@ class _ShiftCard extends StatelessWidget {
     final m = dt.minute.toString().padLeft(2, '0');
     final ap = dt.hour >= 12 ? 'PM' : 'AM';
     return '$h:$m $ap';
+  }
+}
+
+// ─── Shift mini-map ──────────────────────────────────────────────────────────
+
+/// Compact, non-interactive map embedded in the shift card. Shows the active
+/// shift's trail polyline and a marker at the current (latest) location. Falls
+/// back to the decorative grid when there is no shift or no synced points yet.
+class _ShiftMiniMap extends ConsumerWidget {
+  const _ShiftMiniMap({required this.shiftId, required this.isActive});
+
+  final String? shiftId;
+  final bool isActive;
+
+  Widget _fallback() => Stack(
+        children: [
+          const MapBackground(),
+          Center(
+            child: StatusDot(
+                tone: isActive ? RbTone.success : RbTone.neutral,
+                pulse: isActive,
+                size: 12),
+          ),
+        ],
+      );
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final id = shiftId;
+    if (id == null) return _fallback();
+
+    final trailAsync = ref.watch(trailForShiftProvider(id));
+    return trailAsync.maybeWhen(
+      data: (trail) {
+        final points = trail.points.map((p) => LatLng(p.lat, p.lng)).toList();
+        if (points.isEmpty) return _fallback();
+        final current = points.last;
+
+        return FlutterMap(
+          options: MapOptions(
+            initialCenter: current,
+            initialZoom: 15,
+            // Embedded in a scroll view — keep the map static.
+            interactionOptions:
+                const InteractionOptions(flags: InteractiveFlag.none),
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.syrex.sales_mobile_app',
+            ),
+            if (points.length >= 2)
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: points,
+                    color: RbColors.accent,
+                    strokeWidth: 3.0,
+                  ),
+                ],
+              ),
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: current,
+                  width: 24,
+                  height: 24,
+                  child: Center(
+                    child: StatusDot(
+                        tone: isActive ? RbTone.success : RbTone.neutral,
+                        pulse: isActive,
+                        size: 14),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+      orElse: _fallback,
+    );
   }
 }
 

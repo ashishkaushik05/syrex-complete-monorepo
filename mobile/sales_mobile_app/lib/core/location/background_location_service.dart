@@ -1,29 +1,35 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:dio/dio.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../../modules/field/repository/field_repository.dart';
+import '../../modules/field/sync/field_sync_worker.dart';
 import '../config/app_env.dart';
+import '../local/field_local_store.dart';
+import '../network/authed_dio.dart';
+import '../storage/token_store.dart';
 import 'field_sync_store.dart';
+
+/// How often the background isolate drains the local queue to the backend.
+/// The main-isolate [FieldSyncWorker] runs every 5 s while the app is in the
+/// foreground; this is the safety net that keeps uploads flowing when the OS
+/// has frozen the main isolate (app backgrounded / phone in pocket).
+const _kBackgroundSyncInterval = Duration(seconds: 10);
 
 const _kStop = 'stopService';
 
-// Storage keys for alert state
-const _kServerUnreachableSince = 'server_unreachable_since';
+// Storage keys for visit-reminder position
 const _kLastVisitNotifLat = 'last_visit_notif_lat';
 const _kLastVisitNotifLng = 'last_visit_notif_lng';
 
 // Notification IDs (must not conflict with foreground service ID 8801)
-const _kNotifIdServerUnreachable = 8802;
 const _kNotifIdVisitReminder = 8803;
 
 const _kVisitReminderDistanceM = 50000.0; // 50 km
-const _kServerUnreachableThreshold = Duration(hours: 1);
 
 class BackgroundLocationService {
   static final _service = FlutterBackgroundService();
@@ -66,26 +72,22 @@ class BackgroundLocationService {
 @pragma('vm:entry-point')
 Future<bool> _onIosBackground(ServiceInstance service) async => true;
 
+// BackgroundLocationService captures GPS AND drives backend uploads from the
+// background isolate. This isolate is hosted by the Android foreground service,
+// so it keeps running when the OS freezes the main isolate (app backgrounded).
+// It is therefore the only component that can keep the live map near real time
+// while an agent's phone is in their pocket.
+//
+// The main-isolate FieldSyncWorker still runs while the app is foregrounded for
+// snappier 5 s updates. Both drain the same SQLite queue; concurrent draining
+// is safe because point claiming uses lease stamping (P0-2) and the backend
+// dedupes by clientPointId — at worst a point is uploaded twice and the second
+// upload is acked as a duplicate.
 @pragma('vm:entry-point')
 void _onStart(ServiceInstance service) async {
-  final config = AppConfig.fromDartDefine();
-  final headers = <String, dynamic>{'ngrok-skip-browser-warning': '1'};
-  if (config.orgId != null && config.orgId!.isNotEmpty) {
-    headers['x-org-id'] = config.orgId;
-  }
   const storage = FlutterSecureStorage();
-
   final notifier = _LocalNotifier();
   await notifier.init();
-
-  final dio = Dio(
-    BaseOptions(
-      baseUrl: config.baseUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 15),
-      headers: headers,
-    ),
-  );
 
   final permission = await Geolocator.checkPermission();
   if (permission == LocationPermission.denied ||
@@ -97,14 +99,44 @@ void _onStart(ServiceInstance service) async {
   final deviceId = await _getOrCreateDeviceId(storage);
   final clientShiftId =
       await storage.read(key: FieldSyncStore.activeClientShiftIdKey);
-  final serverShiftId =
-      await storage.read(key: FieldSyncStore.activeServerShiftIdKey);
-  if (clientShiftId == null ||
-      clientShiftId.isEmpty ||
-      serverShiftId == null ||
-      serverShiftId.isEmpty) {
+  if (clientShiftId == null || clientShiftId.isEmpty) {
     await service.stopSelf();
     return;
+  }
+
+  final store = await FieldLocalStore.open();
+  final activeShift = await store.getActiveShift();
+  final serverShiftId = activeShift?.serverShiftId;
+
+  // Build an authenticated sync worker for this isolate. AppConfig is compiled
+  // in via --dart-define so it is available without Riverpod; the token store
+  // is backed by the platform keystore and is safe to read across isolates.
+  final platform =
+      Platform.isIOS ? 'ios' : (Platform.isAndroid ? 'android' : 'unknown');
+  FieldSyncWorker? worker;
+  Timer? syncTimer;
+  try {
+    final dio = buildAuthedDio(
+      config: AppConfig.fromDartDefine(),
+      tokenStore: TokenStore(storage),
+    );
+    worker = FieldSyncWorker(
+      store: store,
+      repository: FieldRepository(dio),
+      deviceId: deviceId,
+      platform: platform,
+      workerName: 'background',
+    );
+    // Periodic safety-net drain. syncNow() honours its own backoff window so a
+    // dead network doesn't cause a tight retry loop.
+    syncTimer = Timer.periodic(
+      _kBackgroundSyncInterval,
+      (_) => worker?.syncNow(),
+    );
+    unawaited(worker.syncNow());
+  } catch (_) {
+    // Upload setup failed (e.g. no config) — keep capturing; points will be
+    // drained by the foreground worker when the app next opens.
   }
 
   var persistChain = Future<void>.value();
@@ -115,214 +147,38 @@ void _onStart(ServiceInstance service) async {
       distanceFilter: 10,
     ),
   ).listen((pos) {
-    final point = {
-      'clientPointId': FieldSyncStore.newClientPointId(deviceId),
-      'lat': pos.latitude,
-      'lng': pos.longitude,
-      'accuracy': pos.accuracy,
-      'recordedAt': pos.timestamp.toUtc().toIso8601String(),
-      'capturedAt': DateTime.now().toUtc().toIso8601String(),
-      'source': 'foreground_service',
-      'platform': Platform.isIOS ? 'ios' : 'android',
-    };
     persistChain = persistChain.then((_) async {
-      await _appendPendingPoint(storage, point);
+      final now = DateTime.now().toUtc().toIso8601String();
+      await store.insertPoint(LocalLocationPoint(
+        clientPointId: FieldSyncStore.newClientPointId(deviceId),
+        clientShiftId: clientShiftId,
+        serverShiftId: serverShiftId,
+        lat: pos.latitude,
+        lng: pos.longitude,
+        accuracy: pos.accuracy,
+        recordedAt: pos.timestamp.toUtc().toIso8601String(),
+        capturedAt: now,
+        source: 'background_service',
+        altitude: pos.altitude,
+        speed: pos.speed,
+        heading: pos.heading,
+        isMocked: pos.isMocked ? 1 : 0,
+        syncStatus: PointSyncStatus.pending,
+        createdAt: now,
+        updatedAt: now,
+      ));
       await _checkVisitReminder(storage, notifier, pos.latitude, pos.longitude);
+      // Push the freshly captured point as soon as possible. Guarded by the
+      // worker's in-flight + backoff state, so this is cheap when offline.
+      unawaited(worker?.syncNow() ?? Future<void>.value());
     });
   });
 
-  int consecutiveBadShift = 0;
-  final flushTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-    await persistChain;
-    final pending = await FieldSyncStore.readPendingPointsFrom(storage);
-    if (pending.isEmpty) return;
-
-    final token = await storage.read(key: 'access_token') ?? '';
-    if (token.isEmpty) return;
-    dio.options.headers['Authorization'] = 'Bearer $token';
-
-    const maxBatch = 500;
-    var queue = pending;
-    while (queue.isNotEmpty) {
-      final end = queue.length < maxBatch ? queue.length : maxBatch;
-      final batch = List<Map<String, dynamic>>.from(queue.sublist(0, end));
-
-      try {
-        final response = await dio.post(
-          '/fieldLocation.ingestV2',
-          data: jsonEncode({
-            'json': {
-              'clientShiftId': clientShiftId,
-              'shiftId': serverShiftId,
-              'deviceId': deviceId,
-              'points': batch,
-            }
-          }),
-          options: Options(headers: {'Content-Type': 'application/json'}),
-        );
-        // Successful response — server is reachable; clear unreachable marker.
-        await _clearServerUnreachable(storage);
-
-        final ack = _extractMap(response.data);
-        if (ack['retryable'] == true) {
-          consecutiveBadShift++;
-          if (consecutiveBadShift >= 3) {
-            await service.stopSelf();
-            return;
-          }
-          break;
-        }
-        final removable = _removablePointIds(ack);
-        queue = queue
-            .where((point) => !removable.contains(point['clientPointId']))
-            .toList();
-        await FieldSyncStore.writePendingPointsTo(storage, queue);
-        await _reportSyncStatus(
-          dio,
-          deviceId: deviceId,
-          clientShiftId: clientShiftId,
-          serverShiftId: serverShiftId,
-          pendingQueueDepth: queue.length,
-          lastCapturedAt: _newestCapturedAt(batch),
-        );
-        consecutiveBadShift = 0;
-      } on DioException catch (e) {
-        if (e.response?.statusCode == 401) {
-          await _reportSyncStatus(
-            dio,
-            deviceId: deviceId,
-            clientShiftId: clientShiftId,
-            serverShiftId: serverShiftId,
-            pendingQueueDepth: pending.length,
-            lastSyncErrorCode: 'UNAUTHORIZED',
-          );
-          await service.stopSelf();
-          return;
-        }
-        if (e.response?.statusCode == 400 || e.response?.statusCode == 404) {
-          consecutiveBadShift++;
-          if (consecutiveBadShift >= 3) {
-            await service.stopSelf();
-            return;
-          }
-        }
-        // Network error or 5xx: track unreachability and maybe notify.
-        final isNetworkError = e.response == null;
-        final is5xx = (e.response?.statusCode ?? 0) >= 500;
-        if (isNetworkError || is5xx) {
-          await _reportSyncStatus(
-            dio,
-            deviceId: deviceId,
-            clientShiftId: clientShiftId,
-            serverShiftId: serverShiftId,
-            pendingQueueDepth: pending.length,
-            lastSyncErrorCode:
-                isNetworkError ? 'NETWORK_ERROR' : 'SERVER_ERROR',
-          );
-          await _handleServerUnreachable(storage, notifier);
-        }
-        break;
-      } catch (_) {
-        await _reportSyncStatus(
-          dio,
-          deviceId: deviceId,
-          clientShiftId: clientShiftId,
-          serverShiftId: serverShiftId,
-          pendingQueueDepth: pending.length,
-          lastSyncErrorCode: 'SYNC_ERROR',
-        );
-        await _handleServerUnreachable(storage, notifier);
-        break;
-      }
-    }
-  });
-
   service.on(_kStop).listen((_) async {
-    flushTimer.cancel();
+    syncTimer?.cancel();
     await positionSubscription.cancel();
     await service.stopSelf();
   });
-}
-
-// ─── Server-unreachable tracking ─────────────────────────────────────────────
-
-Future<void> _handleServerUnreachable(
-  FlutterSecureStorage storage,
-  _LocalNotifier notifier,
-) async {
-  final raw = await storage.read(key: _kServerUnreachableSince);
-  if (raw == null) {
-    // First failure — record when connectivity dropped.
-    await storage.write(
-      key: _kServerUnreachableSince,
-      value: DateTime.now().toUtc().toIso8601String(),
-    );
-    return;
-  }
-
-  final since = DateTime.tryParse(raw);
-  if (since == null) return;
-  if (DateTime.now().toUtc().difference(since) >=
-      _kServerUnreachableThreshold) {
-    await notifier.show(
-      id: _kNotifIdServerUnreachable,
-      title: 'Field Sense: Server Unreachable',
-      body: 'Cannot reach the server for over 1 hour. '
-          'Check your connection — location data is queued locally.',
-    );
-    // Reset the clock so the next notification fires only after another hour.
-    await storage.write(
-      key: _kServerUnreachableSince,
-      value: DateTime.now().toUtc().toIso8601String(),
-    );
-  }
-}
-
-Future<void> _clearServerUnreachable(FlutterSecureStorage storage) async {
-  await storage.delete(key: _kServerUnreachableSince);
-}
-
-Future<void> _reportSyncStatus(
-  Dio dio, {
-  required String deviceId,
-  required String clientShiftId,
-  required String serverShiftId,
-  required int pendingQueueDepth,
-  String? lastCapturedAt,
-  String? lastSyncErrorCode,
-}) async {
-  try {
-    await dio.post(
-      '/fieldSyncStatus.upsert',
-      data: jsonEncode({
-        'json': {
-          'deviceId': deviceId,
-          'clientShiftId': clientShiftId,
-          'shiftId': serverShiftId,
-          'platform': Platform.isIOS ? 'ios' : 'android',
-          if (lastCapturedAt != null) 'lastCapturedAt': lastCapturedAt,
-          'lastSyncAttemptAt': DateTime.now().toUtc().toIso8601String(),
-          'lastSyncErrorCode': lastSyncErrorCode,
-          'pendingQueueDepth': pendingQueueDepth,
-        }
-      }),
-      options: Options(headers: {'Content-Type': 'application/json'}),
-    );
-  } catch (_) {
-    // Health reporting must not block location delivery.
-  }
-}
-
-String? _newestCapturedAt(List<Map<String, dynamic>> points) {
-  DateTime? newest;
-  for (final point in points) {
-    final raw = point['capturedAt'] ?? point['recordedAt'];
-    final parsed = raw is String ? DateTime.tryParse(raw) : null;
-    if (parsed != null && (newest == null || parsed.isAfter(newest))) {
-      newest = parsed;
-    }
-  }
-  return newest?.toUtc().toIso8601String();
 }
 
 // ─── 50 km visit-reminder tracking ───────────────────────────────────────────
@@ -419,38 +275,4 @@ Future<String> _getOrCreateDeviceId(FlutterSecureStorage storage) async {
   final generated = FieldSyncStore.newClientShiftId('device');
   await storage.write(key: FieldSyncStore.deviceIdKey, value: generated);
   return generated;
-}
-
-Future<void> _appendPendingPoint(
-  FlutterSecureStorage storage,
-  Map<String, dynamic> point,
-) async {
-  final existing = await FieldSyncStore.readPendingPointsFrom(storage);
-  await FieldSyncStore.writePendingPointsTo(storage, [...existing, point]);
-}
-
-Map<String, dynamic> _extractMap(dynamic raw) {
-  if (raw is List && raw.isNotEmpty) {
-    final first = raw.first;
-    if (first is Map<String, dynamic>) {
-      final data = first['result']?['data']?['json'];
-      if (data is Map<String, dynamic>) return data;
-    }
-  }
-  if (raw is Map<String, dynamic>) {
-    final data = raw['result']?['data']?['json'];
-    if (data is Map<String, dynamic>) return data;
-  }
-  return const <String, dynamic>{};
-}
-
-Set<String> _removablePointIds(Map<String, dynamic> ack) {
-  final accepted = (ack['accepted'] as List<dynamic>? ?? const [])
-      .map((value) => value.toString());
-  final duplicates = (ack['duplicates'] as List<dynamic>? ?? const [])
-      .map((value) => value.toString());
-  final rejected = (ack['rejected'] as List<dynamic>? ?? const [])
-      .whereType<Map>()
-      .map((entry) => entry['clientPointId'].toString());
-  return {...accepted, ...duplicates, ...rejected};
 }

@@ -116,7 +116,11 @@ class AuthRepository {
 
   Future<void> logout() async {
     try {
-      await dio.get('/auth.logout');
+      await dio.post(
+        '/auth.logout',
+        data: {'json': <String, dynamic>{}},
+        options: Options(headers: {'Content-Type': 'application/json'}),
+      );
     } finally {
       await tokenStore.clear();
     }

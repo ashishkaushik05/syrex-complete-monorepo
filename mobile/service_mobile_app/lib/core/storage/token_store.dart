@@ -12,7 +12,8 @@ class TokenStore {
   static const _kAccess = 'svc_access_token';
   static const _kRefresh = 'svc_refresh_token';
 
-  TokenStore(this._storage);
+  TokenStore([FlutterSecureStorage? storage])
+      : _storage = storage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _storage;
 
@@ -35,5 +36,5 @@ class TokenStore {
 }
 
 final tokenStoreProvider = Provider<TokenStore>((_) {
-  return TokenStore(const FlutterSecureStorage());
+  return TokenStore();
 });

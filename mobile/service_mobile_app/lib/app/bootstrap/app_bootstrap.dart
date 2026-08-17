@@ -19,6 +19,7 @@ class ServiceMobileApp extends ConsumerWidget {
       title: 'Service Mobile',
       theme: AppTheme.light,
       routerConfig: ref.watch(appRouterProvider),
+      debugShowCheckedModeBanner: false,
     );
   }
 }

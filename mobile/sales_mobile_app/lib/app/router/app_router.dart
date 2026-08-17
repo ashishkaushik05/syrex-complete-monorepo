@@ -12,6 +12,7 @@ import '../../modules/dashboard/dashboard_page.dart';
 import '../../modules/field/screens/agent_map_page.dart';
 import '../../modules/field/screens/attendance_page.dart';
 import '../../modules/field/screens/create_visit_page.dart';
+import '../../modules/field/screens/field_diagnostics_page.dart';
 import '../../modules/field/screens/field_home_page.dart';
 import '../../modules/field/screens/report_stop_page.dart';
 import '../../modules/field/screens/schedule_view_page.dart';
@@ -85,6 +86,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/dispatches/:dispatchId',
         builder: (_, state) =>
             DispatchDetailPage(dispatchId: state.pathParameters['dispatchId']!),
+      ),
+      // Field diagnostics (outside shell — pushed as full page)
+      GoRoute(
+        path: '/field-diagnostics',
+        builder: (_, __) => const FieldDiagnosticsPage(),
       ),
 
       // ── Shell ──────────────────────────────────────────────────────────────

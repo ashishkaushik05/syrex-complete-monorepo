@@ -51,6 +51,33 @@ class FieldPermissionService {
     );
   }
 
+  /// Reads current permission status without requesting anything.
+  static Future<FieldPermissionStatus> checkOnly() async {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return const FieldPermissionStatus(
+        location: true,
+        backgroundLocation: true,
+        batteryOptimizationDisabled: true,
+      );
+    }
+    final locationGranted = (await Permission.location.status).isGranted;
+    final bgGranted = (await Permission.locationAlways.status).isGranted;
+    // Read-only: do NOT call _batteryOptStatus() which invokes request().
+    final batteryDisabled = await _batteryOptStatusReadOnly();
+    return FieldPermissionStatus(
+      location: locationGranted,
+      backgroundLocation: bgGranted,
+      batteryOptimizationDisabled: batteryDisabled,
+    );
+  }
+
+  /// Status check only — never calls request().
+  static Future<bool> _batteryOptStatusReadOnly() async {
+    if (!Platform.isAndroid) return true;
+    return (await Permission.ignoreBatteryOptimizations.status).isGranted;
+  }
+
+  /// Status check that requests exemption if not already granted (Android only).
   static Future<bool> _batteryOptStatus() async {
     if (!Platform.isAndroid) return true;
     final status = await Permission.ignoreBatteryOptimizations.status;
