@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Deploy script — run on the VPS as user ashish.
-# Triggered by GitHub Webhook (push to master) via syrex-webhook.service.
+# Deploy script — run on the VPS, invoked with sudo (repo + syrex-api
+# service run as root on the current box).
+# NOTE (2026-08-21): the syrex-webhook.service / port-9001 auto-trigger
+# referenced below is gone from the VPS (port 9001 is now MinIO's console) —
+# deploys are currently manual: ssh in and run this script directly.
 # Never resets the database. Preserves backend/.env across git operations.
 set -euo pipefail
 
@@ -64,9 +67,11 @@ sudo systemctl restart syrex-api
 
 echo ""
 echo "▶ Health check (30 s window)..."
+API_PORT_LOCAL=$(grep -E '^PORT=' "$ENV_FILE" | tail -1 | cut -d= -f2-)
+API_PORT_LOCAL=${API_PORT_LOCAL:-3000}
 for i in $(seq 1 10); do
   sleep 3
-  if curl -sf http://localhost:3000/health 2>/dev/null | grep -q '"ok"'; then
+  if curl -sf "http://localhost:${API_PORT_LOCAL}/health" 2>/dev/null | grep -q '"ok"'; then
     echo "✓ Deploy successful at $(date -u '+%Y-%m-%d %H:%M UTC')"
     exit 0
   fi
