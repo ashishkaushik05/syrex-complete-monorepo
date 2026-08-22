@@ -11,6 +11,7 @@
     "test:ratio": "bun run scripts/test-ratio.ts",
     "seed:service-forms": "bun run scripts/seed-service-form-templates.ts",
     "seed:coa": "bun run scripts/seed-chart-of-accounts.ts",
+    "db:seed:minimal": "bun run scripts/assert-non-production.ts db:seed:minimal && bun run rbac:preflight && bun run scripts/minimal-seed.ts",
     "ledger:backfill": "bun run scripts/backfill-ledger.ts",
     "rbac:preflight": "bun run scripts/rbac-preflight.ts",
     "prisma:generate": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 bunx prisma generate --schema ../schema.prisma",
