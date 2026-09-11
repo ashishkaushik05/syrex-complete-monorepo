@@ -1,0 +1,13 @@
+1.  http://localhost:5173/dashboard/outlets/<outlet-id>  : 
+	a) The Outlet user management is a mess rightnow.what we need is we should be able to create 1 - 1 relationship users with outlets, outlets technically can have their own sign in, we should remove the outlet owner login. we could just link those creds to the outlet itself.
+	b) All of the things need to be seperated properly, Transit time should be in another section, billing details on the page need to be in another section credit management should be in another section. all of the stuff from the distribution needs to be moved into distribution and all the things needs to be properly seperated and put into proper collumns.
+	c) All this things need to be scoped properly. credit management should be with accounts, and all and all. we will need to finely have permisions set UI elements to be visible or not.
+2. http://localhost:5173/dashboard/sales/orders/<order-id> :
+	a) There is no option on the platform to set priority. We sould just remove the priority marker.
+
+
+--- My Learning (Confused)
+
+	- For the warehouse pages look into Billing profile section. 
+	- The biggest blocker is not understanding the GST billing system and all the challans and all of the bills which are issued at diffrent stages of the application.
+---
